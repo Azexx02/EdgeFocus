@@ -3,15 +3,13 @@
 
 namespace edgefocus {
 
-/// Settings/more page — mode selection, device status, review entry.
+/// Settings/more page — mode selection, device status, timeout config.
 class SettingsPage : public Page {
 public:
     void render(FrameBuffer& fb, const SystemSnapshot& snap) override;
     bool onTouch(int x, int y) override;
     const char* name() const override { return "SettingsPage"; }
 
-    /// Set callbacks for mode changes (UI doesn't write to SystemStateStore directly,
-    /// but can signal the UIManager which then delegates to ModeManager).
     using ModeChangeCallback = std::function<void(SystemMode)>;
     void setModeChangeCallback(ModeChangeCallback cb) { mode_cb_ = std::move(cb); }
 
@@ -21,6 +19,11 @@ public:
 private:
     ModeChangeCallback mode_cb_;
     PageChangeCallback page_cb_;
+
+    // Away timeout setting (in minutes, for display)
+    static constexpr int TIMEOUT_MIN_VAL = 5;
+    static constexpr int TIMEOUT_MAX_VAL = 120;
+    static constexpr int TIMEOUT_STEP = 5;
 };
 
 } // namespace edgefocus

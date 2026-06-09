@@ -66,6 +66,28 @@ void SystemStateStore::incrementReminder() {
     state_.session.reminder_count++;
 }
 
+// --- Session lifecycle ---
+
+void SystemStateStore::notifySessionChange() {
+    session_cv_.notify_all();
+}
+
+bool SystemStateStore::waitForSessionChange(std::unique_lock<std::mutex>& lock, int timeout_ms) {
+    session_cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms),
+                         [this]() { return state_.session.active; });
+    return state_.session.active;
+}
+
+void SystemStateStore::resetSession() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    state_.session = SessionInfo{};
+    state_.focus_state = FocusState::CALIBRATING;
+    state_.focus_reason.clear();
+    state_.reminder.level = CommandLevel::NONE;
+    state_.reminder.message.clear();
+    state_.reminder.since_ms = 0;
+}
+
 // --- Reader ---
 
 SystemSnapshot SystemStateStore::snapshot() const {

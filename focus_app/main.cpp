@@ -77,7 +77,6 @@ int main(int argc, char* argv[]) {
     SQLiteStore& sqlite_store = *sqlite_store_ptr;
 
     // Set initial state
-    store.updateFocusState(FocusState::CALIBRATING, 0, "Initializing...");
     DeviceStatus dev_status;
     dev_status.system_mode = SystemMode::NORMAL;
     dev_status.camera_ok = false;
@@ -91,8 +90,8 @@ int main(int argc, char* argv[]) {
 
     // Register modules in dependency order
     ctx.addModule(std::make_unique<HealthMonitor>(store));
-    ctx.addModule(std::make_unique<CameraPipeline>(camera_frame_queue));
-    ctx.addModule(std::make_unique<VisionEngine>(vision_result_queue, camera_frame_queue));
+    ctx.addModule(std::make_unique<CameraPipeline>(camera_frame_queue, store));
+    ctx.addModule(std::make_unique<VisionEngine>(vision_result_queue, camera_frame_queue, store));
     ctx.addModule(std::make_unique<BehaviorEngine>(vision_result_queue, store, sqlite_store));
     ctx.addModule(std::make_unique<ReminderPolicy>(store, sqlite_store));
     ctx.addModule(std::make_unique<DeviceManager>(store));

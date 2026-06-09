@@ -1,7 +1,9 @@
 #include "StatusPage.h"
+#include "app/Logger.h"
 #include <cstdio>
 #include <string>
 #include <cmath>
+#include <chrono>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -150,9 +152,9 @@ void StatusPage::render(FrameBuffer& fb, const SystemSnapshot& snap) {
 }
 
 bool StatusPage::onTouch(int x, int y) {
-    const int W = 240; // Assuming 240x320 scaled
+    const int W = 240;
     const int H = 320;
-    
+
     if (!store_) return false;
     SystemSnapshot snap = store_->snapshot();
 
@@ -167,29 +169,48 @@ bool StatusPage::onTouch(int x, int y) {
 
     if (internal_state_ == InternalState::READY) {
         if (y > 140 && y < 200 && x > 20 && x < W - 20) {
-            // Start Focus Session (Move to Calibration)
+            // START button tapped - begin session with calibration
             internal_state_ = InternalState::CALIBRATING;
+
+            SessionInfo s;
+            s.active = true;
+            s.calibrating = true;
+            s.calibration_completed = false;
+            s.start_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
+            s.elapsed_ms = 0;
+            s.distraction_count = 0;
+            s.reminder_count = 0;
+            s.away_since_ms = 0;
+            s.away_timeout_ms = snap.session.away_timeout_ms; // preserve user setting
+            store_->updateSession(s);
+            store_->notifySessionChange();
+
+            LOGI("StatusPage", "Session started (calibration phase)");
             return true;
         }
     } else if (internal_state_ == InternalState::CALIBRATING) {
         if (y > H - 90 && y < H - 30 && x > 20 && x < W - 20) {
-            // Start Focus Session
+            // GO button tapped - skip to focused monitoring
             internal_state_ = InternalState::FOCUSED;
-            SessionInfo s = snap.session;
-            s.active = true;
-            s.elapsed_ms = 0;
-            s.distraction_count = 0;
-            s.reminder_count = 0;
+
+            SessionInfo s = store_->snapshot().session;
+            s.calibrating = false;
+            s.calibration_completed = true;
             store_->updateSession(s);
             return true;
         }
     } else if (internal_state_ == InternalState::FOCUSED) {
         if (y > 250 && y < 300 && x > 20 && x < W - 20) {
-            // End Focus Session
+            // PAUSE button tapped - end session
             internal_state_ = InternalState::READY;
-            SessionInfo s = snap.session;
+
+            SessionInfo s = store_->snapshot().session;
             s.active = false;
             store_->updateSession(s);
+            store_->notifySessionChange();
+            store_->resetSession();
+
             if (switch_page_) switch_page_(3); // PAGE_REVIEW
             return true;
         }

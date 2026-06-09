@@ -1,5 +1,6 @@
 #pragma once
 #include <mutex>
+#include <condition_variable>
 #include <string>
 #include <cstdint>
 #include "behavior/FocusState.h"
@@ -21,10 +22,14 @@ namespace edgefocus {
 
 struct SessionInfo {
     bool        active = false;
+    bool        calibrating = false;           // true during calibration phase
+    bool        calibration_completed = false;  // true after FSM exits CALIBRATING
     int64_t     start_ms = 0;
     int64_t     elapsed_ms = 0;
     int         distraction_count = 0;
     int         reminder_count = 0;
+    int64_t     away_since_ms = 0;             // timestamp when AWAY state began (0 = not away)
+    int64_t     away_timeout_ms = 30 * 60 * 1000; // auto-terminate after away for this long
 };
 
 struct TodayStats {
@@ -112,12 +117,19 @@ public:
     void incrementDistraction();
     void incrementReminder();
 
+    // --- Session lifecycle ---
+    void notifySessionChange();
+    bool waitForSessionChange(std::unique_lock<std::mutex>& lock, int timeout_ms);
+    void resetSession();
+    std::mutex& mutexForCV() { return mutex_; }
+
     // --- Reader (called by UI) ---
 
     SystemSnapshot snapshot() const;
 
 private:
     mutable std::mutex mutex_;
+    std::condition_variable session_cv_;
     SystemSnapshot state_;
 };
 

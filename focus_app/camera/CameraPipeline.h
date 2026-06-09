@@ -1,6 +1,7 @@
 #pragma once
 #include "app/BoundedQueue.h"
 #include "app/Module.h"
+#include "app/SystemStateStore.h"
 #include "camera/CameraFrame.h"
 
 #include <cstdint>
@@ -12,11 +13,12 @@ namespace edgefocus {
 class AppContext;
 
 /// Camera capture module. Acquires frames and publishes them to a bounded queue.
+/// Session-aware: camera only opens when session.active is true.
 class CameraPipeline : public Module {
 public:
     using Queue = BoundedQueue<CameraFrame>;
 
-    explicit CameraPipeline(Queue& output_queue);
+    CameraPipeline(Queue& output_queue, SystemStateStore& store);
     ~CameraPipeline() override;
 
     bool init(AppContext& ctx) override;
@@ -28,12 +30,15 @@ public:
 
 private:
     bool openCamera();
+    void closeCamera();
     bool readFrame(CameraFrame* frame);
     std::vector<int> cameraCandidates() const;
 
     struct Impl;
     std::unique_ptr<Impl> impl_;
     Queue& output_queue_;
+    SystemStateStore& store_;
+    bool camera_opened_ = false;
     int64_t captured_frames_ = 0;
     int64_t dropped_frames_ = 0;
 };

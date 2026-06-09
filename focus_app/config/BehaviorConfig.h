@@ -27,6 +27,9 @@ struct BehaviorConfig {
     
     // 状态恢复迟滞时间 (3秒，避免来回抖动)
     int64_t state_hysteresis_ms = 3000;
+
+    // 离位自动终止时间 (30分钟)
+    int64_t away_timeout_ms = 30 * 60 * 1000;
 };
 
 } // namespace edgefocus

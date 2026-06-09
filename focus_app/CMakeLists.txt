@@ -13,7 +13,7 @@ option(EDGEFOCUS_WITH_OPENCV "Build camera capture and CPU/STAI preprocessing wi
 option(EDGEFOCUS_WITH_STAI_MPU "Build STAI_MPU pose model adapter" OFF)
 
 include(FetchContent)
-FetchContent_Declare(sqlite3 URL https://www.sqlite.org/2024/sqlite-amalgamation-3450100.zip)
+FetchContent_Declare(sqlite3 URL https://www.sqlite.org/2024/sqlite-amalgamation-3450100.zip DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
 FetchContent_MakeAvailable(sqlite3)
 if(NOT sqlite3_POPULATED)
   FetchContent_Populate(sqlite3)

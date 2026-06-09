@@ -15,16 +15,25 @@ bool ReminderPolicy::init(AppContext& /*ctx*/) {
 }
 
 void ReminderPolicy::runOnce(AppContext& /*ctx*/) {
-    // Placeholder: W06 will add real state-driven reminder logic.
-    // For now, clear any stale reminders periodically.
-    static auto last_clear = std::chrono::steady_clock::now();
-    auto now = std::chrono::steady_clock::now();
-    if (now - last_clear > std::chrono::seconds(30)) {
-        store_.clearReminder();
-        last_clear = now;
+    SystemSnapshot snap = store_.snapshot();
+
+    // Only process reminders when session is active AND calibration is done
+    if (!snap.session.active || !snap.session.calibration_completed) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        return;
     }
 
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    // Call processState with current focus state
+    auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+
+    auto cmd = processState(snap.focus_state, now_ms);
+    if (cmd.has_value()) {
+        LOGI("ReminderPolicy", "Issued reminder: level=%d msg=%s",
+             static_cast<int>(cmd->level), cmd->message.c_str());
+    }
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
 }
 
 void ReminderPolicy::shutdown(AppContext& /*ctx*/) {

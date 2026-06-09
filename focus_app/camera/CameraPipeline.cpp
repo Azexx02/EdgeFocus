@@ -49,17 +49,16 @@ struct CameraPipeline::Impl {
     int active_index = -1;
 };
 
-CameraPipeline::CameraPipeline(Queue& output_queue)
-    : Module("CameraPipeline"), impl_(new Impl()), output_queue_(output_queue) {}
+CameraPipeline::CameraPipeline(Queue& output_queue, SystemStateStore& store)
+    : Module("CameraPipeline"), impl_(new Impl()), output_queue_(output_queue), store_(store) {}
 
 CameraPipeline::~CameraPipeline() = default;
 
 bool CameraPipeline::init(AppContext& /*ctx*/) {
     captured_frames_ = 0;
     dropped_frames_ = 0;
-    if (!openCamera()) {
-        LOGW("CameraPipeline", "No camera opened; vision can still run in mock mode or wait for frames");
-    }
+    // Camera opens on-demand when session starts
+    LOGI("CameraPipeline", "Initialized (camera will open on session start)");
     return true;
 }
 
@@ -117,7 +116,32 @@ bool CameraPipeline::readFrame(CameraFrame* frame) {
 #endif
 }
 
-void CameraPipeline::runOnce(AppContext& /*ctx*/) {
+void CameraPipeline::runOnce(AppContext& ctx) {
+    SystemSnapshot snap = store_.snapshot();
+
+    // --- IDLE: session not active ---
+    if (!snap.session.active) {
+        if (camera_opened_) {
+            closeCamera();
+            camera_opened_ = false;
+            LOGI("CameraPipeline", "Session ended, camera released");
+        }
+        // Block until session becomes active (with timeout for shutdown check)
+        std::unique_lock<std::mutex> lock(store_.mutexForCV());
+        store_.waitForSessionChange(lock, 1000);
+        return;
+    }
+
+    // --- ACTIVE: session is running ---
+    if (!camera_opened_) {
+        if (!openCamera()) {
+            LOGW("CameraPipeline", "Cannot open camera, sleeping");
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            return;
+        }
+        camera_opened_ = true;
+    }
+
     CameraFrame frame;
     if (!readFrame(&frame)) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -133,12 +157,17 @@ void CameraPipeline::runOnce(AppContext& /*ctx*/) {
     }
 }
 
-void CameraPipeline::shutdown(AppContext& /*ctx*/) {
+void CameraPipeline::closeCamera() {
 #ifdef EDGEFOCUS_WITH_OPENCV
     if (impl_->capture.isOpened()) {
         impl_->capture.release();
     }
 #endif
+    impl_->active_index = -1;
+}
+
+void CameraPipeline::shutdown(AppContext& /*ctx*/) {
+    closeCamera();
     LOGI("CameraPipeline", "Shutdown captured=%lld dropped_old_frames=%lld",
          (long long)captured_frames_, (long long)dropped_frames_);
 }

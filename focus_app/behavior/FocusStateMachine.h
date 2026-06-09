@@ -13,6 +13,7 @@ public:
     FocusStateMachine();
 
     void processFrame(const VisionResult& frame);
+    void reset();
     FocusState getCurrentState() const { return current_state_; }
     
     void injectPhoneSignal(const PhoneUsageSignal& sig) {

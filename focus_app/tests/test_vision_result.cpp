@@ -2,6 +2,7 @@
 #include "vision/VisionEngine.h"
 #include "vision/InferenceScheduler.h"
 #include "app/BoundedQueue.h"
+#include "app/SystemStateStore.h"
 #include <iostream>
 #include <cassert>
 
@@ -59,8 +60,15 @@ void test_vision_result_helpers() {
 
 void test_mock_scenarios() {
     BoundedQueue<VisionResult> dummy_queue(1, false);
-    VisionEngine engine(dummy_queue);
-    
+    BoundedQueue<CameraFrame> dummy_frame_queue(1, true);
+    SystemStateStore store;
+    // Set session active so VisionEngine doesn't block on CV
+    SessionInfo s;
+    s.active = true;
+    store.updateSession(s);
+
+    VisionEngine engine(dummy_queue, dummy_frame_queue, store);
+
     // FOCUSED
     engine.setMockScenario(MockScenario::FOCUSED);
     engine.runOnce(*(AppContext*)nullptr);

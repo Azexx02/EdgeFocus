@@ -17,6 +17,7 @@ add_executable(test_vision_result
     ../vision/PoseModelAdapter.cpp
     ../vision/MockVisionSource.cpp
     ../app/AppContext.cpp
+    ../app/SystemStateStore.cpp
     ../app/Logger.cpp)
 target_include_directories(test_vision_result PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(test_vision_result PRIVATE Threads::Threads)

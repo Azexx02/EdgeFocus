@@ -56,4 +56,11 @@ void FocusStateMachine::processFrame(const VisionResult& frame) {
     }
 }
 
+void FocusStateMachine::reset() {
+    current_state_ = FocusState::CALIBRATING;
+    candidate_state_ = FocusState::CALIBRATING;
+    candidate_start_ms_ = 0;
+    win30s_ = SlidingWindow(30000);
+}
+
 } // namespace edgefocus
