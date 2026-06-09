@@ -1,0 +1,13 @@
+runtime: stai_mpu
+model_file: yolov8n_256_quant_pt_uf_pose_coco-st.nb
+source: 示例代码/atk_pose_keypoint_demo/atk_pose_keypoint_demo/models
+board: ATK-DLMP257B / STM32MP257
+threads: 2
+fallback: cpu_fallback_pose
+validation:
+  required_files:
+    - labels.json
+    - preprocess.json
+    - postprocess.json
+    - runtime.yaml
+  notes: Copy the .nb model beside focus_app as ./models/yolov8n_256_quant_pt_uf_pose_coco-st.nb or override EDGEFOCUS_MODEL_REGISTRY.
