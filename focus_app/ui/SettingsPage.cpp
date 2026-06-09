@@ -1,5 +1,6 @@
 #include "SettingsPage.h"
 #include <cstdio>
+#include <chrono>
 
 namespace edgefocus {
 
@@ -54,6 +55,23 @@ void SettingsPage::render(FrameBuffer& fb, const SystemSnapshot& snap) {
     // Plus button
     fb.fillRoundRect(Rect(20 + small_btn_w + value_w, timeout_panel_y, small_btn_w, 60), 8, Color::bgCard());
     fb.drawTextCentered(Rect(20 + small_btn_w + value_w, timeout_panel_y, small_btn_w, 60), "+", Color::textPrimary(), btn_font);
+
+    // --- Wristband (BLE) ---
+    const int BLE_Y = timeout_panel_y + 80;
+    fb.drawText(20, BLE_Y, "WRISTBAND", Color::textSecondary(), label_font);
+    int ble_panel_y = BLE_Y + 20;
+    bool ble_on = snap.device.ble_enabled;
+    bool ble_conn = snap.device.bracelet_connected;
+    const char* status_text = "Off";
+    Color status_color = Color::textSecondary();
+    if (ble_on && ble_conn) { status_text = "Connected"; status_color = Color::primary(); }
+    else if (ble_on) { status_text = "Connecting..."; status_color = Color::secondary(); }
+    fb.fillRoundRect(Rect(20, ble_panel_y, panel_w - btn_w, 60), 8, Color::bgCard());
+    fb.drawTextCentered(Rect(20, ble_panel_y, panel_w - btn_w, 60), status_text, status_color, label_font);
+    const char* btn_text = ble_on ? "Disconnect" : "Connect";
+    Color btn_color = ble_on ? Color::error() : Color::primary();
+    fb.fillRoundRect(Rect(20 + panel_w - btn_w, ble_panel_y, btn_w, 60), 8, btn_color);
+    fb.drawTextCentered(Rect(20 + panel_w - btn_w, ble_panel_y, btn_w, 60), btn_text, Color::bgDark(), label_font);
 }
 
 bool SettingsPage::onTouch(int x, int y) {
@@ -106,6 +124,18 @@ bool SettingsPage::onTouch(int x, int y) {
             store_->updateSession(s);
             return true;
         }
+    }
+
+    // BLE wristband toggle
+    int ble_panel_y = timeout_panel_y + 100;
+    int ble_btn_x = 20 + (W - 40) - btn_w;
+    if (y >= ble_panel_y && y <= ble_panel_y + 60 && x >= ble_btn_x && x <= W - 20) {
+        if (store_) {
+            DeviceStatus ds = store_->snapshot().device;
+            ds.ble_enabled = !ds.ble_enabled;
+            store_->updateDeviceStatus(ds);
+        }
+        return true;
     }
 
     return false;

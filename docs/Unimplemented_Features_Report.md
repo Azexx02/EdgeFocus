@@ -9,7 +9,8 @@
 
 ## 2. 物理外设与电源管理 (Physical Interaction & Power Management)
 - **硬件集成 (Hardware Integration)**: 手环与主机的可拆卸物理设计（如磁吸充电座）尚未定型。
-- **蓝牙守护进程按需激活 (BLE Daemon Activation Strategy)**: 目前 `ble_daemon.sh` 是在系统开机时直接随 `focus_app` 启动的。基于未来的物理设计，当手环吸附在主机上充电时，应当保持休眠；只有在手环被**物理取下**（可能通过霍尔传感器或者接触引脚检测）时，才按需拉起并激活蓝牙扫描连接。这个逻辑需要预留到后续的硬件整合计划中。
+- **蓝牙守护进程按需激活 (BLE Daemon Activation Strategy)**: 目前 BLE 连接通过 UI SettingsPage 的 Connect/Disconnect 按钮手动控制。基于未来的物理设计，当手环吸附在主机上充电时，应当保持休眠；只有在手环被**物理取下**（可能通过霍尔传感器或者接触引脚检测）时，才按需拉起并激活蓝牙扫描连接。届时需将 UI 上的 Connect/Disconnect 功能迁移到物理分离检测逻辑上，UI 上仅保留连接状态显示和一个 Connect 按钮（实际作用为强行扫描连接，用于调试或异常恢复）。此逻辑需要预留到后续的硬件整合计划中。
+- **BLE 连接稳定性问题 (Known Issue)**: 当前守护进程 `ble_daemon.sh` 通过 `bluetoothctl` 管理连接，存在手环连接后立刻断开（reason 1）的间歇性问题，导致 UI 可能短暂显示 "Connected" 后变为 "Connecting..."。根因可能是手环固件或 BLE 连接参数不兼容，待手环固件调试后解决。
 - **云台自动校准 (Gimbal Auto-Calibration)**: 在 `CALIBRATING` 阶段，系统应利用视觉 AI 检测用户在画面中的位置，自动发送 PTZ (云台平移-俯仰-变焦) 指令来调整云台角度，而非完全依赖用户手动调节。
 - **BLE 辅助连网与远程同步 (Auxiliary Remote Syncing)**: 最低优先级。通过手机端蓝牙（BLE）辅助开发板进行局域网配网，或者直接通过 BLE 代理网络请求，用于设备连接外网进行学习数据的云端同步以及远程监控画面查看。
 

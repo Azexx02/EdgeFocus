@@ -33,14 +33,6 @@ public:
         std::this_thread::sleep_for(std::chrono::seconds(10));
         if (ctx.running()) {
             LOGI("HealthMonitor", "focus_app is running - health OK");
-
-            // Update device status in SystemStateStore
-            DeviceStatus status;
-            status.system_mode = SystemMode::NORMAL;  // Will be updated by ModeManager
-            status.camera_ok = true;  // Will be updated by CameraPipeline
-            status.bracelet_connected = false;
-            status.battery_percent = -1;
-            store_.updateDeviceStatus(status);
         }
     }
 

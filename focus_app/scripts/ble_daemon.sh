@@ -1,93 +1,109 @@
 #!/bin/bash
 
-# ble_daemon.sh
-# A persistent background daemon that keeps the BLE connection to ESP32-Band alive
-# and listens for instant commands via a named pipe.
+# Usage: ble_daemon.sh <MAC>
+# Connects to the given MAC, selects GATT characteristic, listens on FIFO for commands.
 
-TARGET_NAME="ESP32-Band"
+MAC="$1"
 FIFO="/tmp/ble_cmd_fifo"
+STATUS_FILE="/tmp/ble_status"
 
-# Ensure Bluetooth is unblocked and up
-rfkill unblock bluetooth
-hciconfig hci0 up
+if [ -z "$MAC" ]; then
+    echo "Usage: ble_daemon.sh <MAC>"
+    exit 1
+fi
 
-# Clean up and create FIFO
-rm -f $FIFO
-mkfifo $FIFO
-chmod 0666 $FIFO
+rfkill unblock bluetooth 2>/dev/null
+hciconfig hci0 up 2>/dev/null
 
-# Start bluetoothctl in background
-coproc btc { stdbuf -i0 -o0 -e0 bluetoothctl; }
+set_status() { echo "$1" > "$STATUS_FILE"; }
+set_status "disconnected"
 
-# Initialize bluetooth properly
-echo "power on" >&${btc[1]}
-sleep 0.5
-echo "agent on" >&${btc[1]}
-sleep 0.5
+cleanup() {
+    set_status "disconnected"
+    echo "disconnect $MAC" >&7 2>/dev/null
+    echo "quit" >&7 2>/dev/null
+    exec 7>&- 2>/dev/null
+    kill $BTCTL_PID 2>/dev/null
+    rm -f "$BTCTL_FIFO"
+    exit 0
+}
+trap cleanup SIGTERM SIGINT
+
+# Helper: check if device is currently connected
+check_connected() {
+    echo "info $MAC" | timeout 3 bluetoothctl 2>/dev/null | grep -q "Connected: yes"
+}
+
+BTCTL_FIFO="/tmp/btctl_fifo"
+rm -f "$BTCTL_FIFO"
+mkfifo "$BTCTL_FIFO"
+stdbuf -i0 -o0 -e0 bluetoothctl < "$BTCTL_FIFO" &
+BTCTL_PID=$!
+exec 7>"$BTCTL_FIFO"
+
+echo "power on" >&7
+sleep 1
+echo "agent on" >&7
+sleep 1
+echo "connect $MAC" >&7
+sleep 5
+
+# Verify connection actually succeeded
+if ! check_connected; then
+    echo "Connection failed, device not connected"
+    set_status "disconnected"
+    echo "quit" >&7 2>/dev/null
+    exec 7>&- 2>/dev/null
+    kill $BTCTL_PID 2>/dev/null
+    rm -f "$BTCTL_FIFO"
+    exit 1
+fi
+
+echo "menu gatt" >&7
+sleep 1
+echo "select-attribute 00002a56-0000-1000-8000-00805f9b34fb" >&7
+sleep 1
+
+# Wait 3 seconds then verify connection is still alive
+# (wristband may disconnect immediately after GATT discovery)
+sleep 3
+if ! check_connected; then
+    echo "Connection dropped during setup, retrying"
+    set_status "disconnected"
+    echo "quit" >&7 2>/dev/null
+    exec 7>&- 2>/dev/null
+    kill $BTCTL_PID 2>/dev/null
+    rm -f "$BTCTL_FIFO"
+    exit 1
+fi
+
+set_status "connected $MAC"
+echo "Connected and ready"
+
+# Command loop with connection check every 3 seconds
+CHECK_COUNT=0
 while true; do
-    echo "Scanning for $TARGET_NAME..."
-    echo "devices" >&${btc[1]}
-    sleep 0.5
-    echo "scan on" >&${btc[1]}
-    MAC=""
-    start_time=$(date +%s)
-    
-    while IFS= read -r -t 1 -u ${btc[0]} line || true; do
-        if echo "$line" | grep -q "$TARGET_NAME"; then
-            MAC=$(echo "$line" | grep -oE "Device ([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}" | awk '{print $2}' | head -n 1)
-            if [ -n "$MAC" ]; then
-                break
-            fi
-        fi
-        
-        current_time=$(date +%s)
-        if [ $((current_time - start_time)) -ge 15 ]; then
+    if read -t 1 line <"$FIFO" 2>/dev/null; then
+        if [ "$line" == "buzz" ]; then
+            echo "write \"0x01\"" >&7
+        elif [ "$line" == "quit" ]; then
             break
         fi
-    done
-    
-    echo "scan off" >&${btc[1]}
-    sleep 1
-    
-    if [ -n "$MAC" ]; then
-        echo "Found ESP32-Band at MAC: $MAC"
-        echo "connect $MAC" >&${btc[1]}
-        sleep 3
-        echo "menu gatt" >&${btc[1]}
-        sleep 1
-        echo "select-attribute 00002a56-0000-1000-8000-00805f9b34fb" >&${btc[1]}
-        sleep 1
-        
-        echo "BLE Daemon ready. Listening on $FIFO..."
-        
-        # Persistent loop listening to the FIFO
-        quit_received=0
-        while true; do
-            if read line <$FIFO; then
-                if [ "$line" == "buzz" ]; then
-                    echo "write \"0x01\"" >&${btc[1]}
-                    echo "Buzz sent!"
-                elif [ "$line" == "quit" ]; then
-                    echo "Quit command received. Shutting down daemon."
-                    quit_received=1
-                    break
-                fi
-            fi
-        done
-        
-        echo "back" >&${btc[1]}
-        sleep 0.5
-        echo "disconnect $MAC" >&${btc[1]}
-        sleep 1
-        
-        if [ $quit_received -eq 1 ]; then
+    fi
+    CHECK_COUNT=$((CHECK_COUNT + 1))
+    if [ $CHECK_COUNT -ge 3 ]; then
+        CHECK_COUNT=0
+        if ! check_connected; then
+            echo "Device disconnected"
             break
         fi
-    else
-        echo "ESP32-Band not found. Retrying in 5 seconds..."
-        sleep 5
     fi
 done
 
-echo "quit" >&${btc[1]}
-rm -f $FIFO
+set_status "disconnected"
+echo "disconnect $MAC" >&7 2>/dev/null
+echo "quit" >&7 2>/dev/null
+exec 7>&- 2>/dev/null
+kill $BTCTL_PID 2>/dev/null
+rm -f "$BTCTL_FIFO"
+echo "Daemon exited"

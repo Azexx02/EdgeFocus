@@ -49,6 +49,7 @@ struct DeviceStatus {
     SystemMode  system_mode = SystemMode::NORMAL;
     bool        camera_ok = false;
     bool        bracelet_connected = false;
+    bool        ble_enabled = false;
     int         battery_percent = -1;  // -1 = unknown
 };
 
