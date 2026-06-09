@@ -4,6 +4,7 @@
 #include <cmath>
 #include <algorithm>
 #include <fstream>
+#include <cstdlib>
 
 
 #ifdef __linux__
@@ -27,6 +28,7 @@ namespace edgefocus {
 struct SpiLcdContext {
     int spi_fd = -1;
     GpioLine cs;
+    GpioLine pwr;
     GpioLine dc;
     GpioLine rst;
     GpioLine bl;
@@ -116,10 +118,21 @@ static int spi_open_config_fb(const char *path, int speed_hz, int spi_mode) {
     if (fd < 0) return -1;
     uint8_t mode = (uint8_t)spi_mode;
     uint8_t bits = 8;
-    ioctl(fd, SPI_IOC_WR_MODE, &mode);
-    ioctl(fd, SPI_IOC_WR_BITS_PER_WORD, &bits);
-    ioctl(fd, SPI_IOC_WR_MAX_SPEED_HZ, &speed_hz);
+    if (ioctl(fd, SPI_IOC_WR_MODE, &mode) < 0 ||
+        ioctl(fd, SPI_IOC_WR_BITS_PER_WORD, &bits) < 0 ||
+        ioctl(fd, SPI_IOC_WR_MAX_SPEED_HZ, &speed_hz) < 0) {
+        close(fd);
+        return -1;
+    }
     return fd;
+}
+
+static int env_int_fb(const char *name, int fallback) {
+    const char *value = std::getenv(name);
+    if (!value || !*value) return fallback;
+    char *end = nullptr;
+    long parsed = std::strtol(value, &end, 0);
+    return end && *end == '\0' ? (int)parsed : fallback;
 }
 
 static void spi_write_all_fb(int fd, const uint8_t *buf, size_t len) {
@@ -154,34 +167,9 @@ static void lcd_init_ili9341_fb(int spi_fd, GpioLine *cs, GpioLine *dc, GpioLine
     gpio_set_fb(rst, 1); msleep_fb(120);
 
     lcd_cmd_fb(spi_fd, cs, dc, 0x01); msleep_fb(120);
-    lcd_cmd_fb(spi_fd, cs, dc, 0xCF);
-    { uint8_t d[] = { 0x00, 0xC1, 0x30 }; lcd_data_fb(spi_fd, cs, dc, d, sizeof(d)); }
-    lcd_cmd_fb(spi_fd, cs, dc, 0xED);
-    { uint8_t d[] = { 0x64, 0x03, 0x12, 0x81 }; lcd_data_fb(spi_fd, cs, dc, d, sizeof(d)); }
-    lcd_cmd_fb(spi_fd, cs, dc, 0xE8);
-    { uint8_t d[] = { 0x85, 0x00, 0x78 }; lcd_data_fb(spi_fd, cs, dc, d, sizeof(d)); }
-    lcd_cmd_fb(spi_fd, cs, dc, 0xCB);
-    { uint8_t d[] = { 0x39, 0x2C, 0x00, 0x34, 0x02 }; lcd_data_fb(spi_fd, cs, dc, d, sizeof(d)); }
-    lcd_cmd_fb(spi_fd, cs, dc, 0xF7); lcd_data8_fb(spi_fd, cs, dc, 0x20);
-    lcd_cmd_fb(spi_fd, cs, dc, 0xEA);
-    { uint8_t d[] = { 0x00, 0x00 }; lcd_data_fb(spi_fd, cs, dc, d, sizeof(d)); }
-    lcd_cmd_fb(spi_fd, cs, dc, 0xC0); lcd_data8_fb(spi_fd, cs, dc, 0x23);
-    lcd_cmd_fb(spi_fd, cs, dc, 0xC1); lcd_data8_fb(spi_fd, cs, dc, 0x10);
-    lcd_cmd_fb(spi_fd, cs, dc, 0xC5);
-    { uint8_t d[] = { 0x3E, 0x28 }; lcd_data_fb(spi_fd, cs, dc, d, sizeof(d)); }
-    lcd_cmd_fb(spi_fd, cs, dc, 0xC7); lcd_data8_fb(spi_fd, cs, dc, 0x86);
     lcd_cmd_fb(spi_fd, cs, dc, 0x3A); lcd_data8_fb(spi_fd, cs, dc, 0x55);
-    lcd_cmd_fb(spi_fd, cs, dc, 0x36); lcd_data8_fb(spi_fd, cs, dc, 0x40); // MADCTL (0x40 = MX=1, BGR=0/RGB)
-    lcd_cmd_fb(spi_fd, cs, dc, 0xB1);
-    { uint8_t d[] = { 0x00, 0x18 }; lcd_data_fb(spi_fd, cs, dc, d, sizeof(d)); }
-    lcd_cmd_fb(spi_fd, cs, dc, 0xB6);
-    { uint8_t d[] = { 0x08, 0x82, 0x27 }; lcd_data_fb(spi_fd, cs, dc, d, sizeof(d)); }
-    lcd_cmd_fb(spi_fd, cs, dc, 0xF2); lcd_data8_fb(spi_fd, cs, dc, 0x00);
-    lcd_cmd_fb(spi_fd, cs, dc, 0x26); lcd_data8_fb(spi_fd, cs, dc, 0x01);
-    lcd_cmd_fb(spi_fd, cs, dc, 0xE0);
-    { uint8_t d[] = { 0x0F, 0x31, 0x2B, 0x0C, 0x0E, 0x08, 0x4E, 0xF1, 0x37, 0x07, 0x10, 0x03, 0x0E, 0x09, 0x00 }; lcd_data_fb(spi_fd, cs, dc, d, sizeof(d)); }
-    lcd_cmd_fb(spi_fd, cs, dc, 0xE1);
-    { uint8_t d[] = { 0x00, 0x0E, 0x14, 0x03, 0x11, 0x07, 0x31, 0xC1, 0x48, 0x08, 0x0F, 0x0C, 0x31, 0x36, 0x0F }; lcd_data_fb(spi_fd, cs, dc, d, sizeof(d)); }
+    lcd_cmd_fb(spi_fd, cs, dc, 0x36);
+    lcd_data8_fb(spi_fd, cs, dc, (uint8_t)env_int_fb("EDGEFOCUS_LCD_MADCTL", 0x48));
     lcd_cmd_fb(spi_fd, cs, dc, 0x11); msleep_fb(120);
     lcd_cmd_fb(spi_fd, cs, dc, 0x29); msleep_fb(20);
 }
@@ -209,6 +197,8 @@ struct SpiLcdContext {
 
 
 namespace edgefocus {
+
+static constexpr float kPi = 3.14159265358979323846f;
 
 // ---------------------------------------------------------------------------
 // Built-in 8x16 bitmap font (ISO 8859-1, covers ASCII printable range)
@@ -415,17 +405,36 @@ static const uint8_t FONT_8X16[][16] = {
 
 bool FrameBuffer::initSpiLcd() {
 #ifdef __linux__
-    int fd = spi_open_config_fb("/dev/spidev0.0", 12000000, 0); // 12MHz for stability with NPU
+    int spi_speed = env_int_fb("EDGEFOCUS_LCD_SPI_SPEED", 4000000);
+    int madctl = env_int_fb("EDGEFOCUS_LCD_MADCTL", 0x48);
+    int invert_bl = env_int_fb("EDGEFOCUS_LCD_INVERT_BL", 0);
+    int fd = spi_open_config_fb("/dev/spidev0.0", spi_speed, 0);
     if (fd < 0) return false;
 
     spi_ctx_ = new SpiLcdContext();
     spi_ctx_->spi_fd = fd;
     // PB0 is controlled by the SPI controller cs-gpios, so leave cs uninitialized
     spi_ctx_->cs.handle_fd = -1; 
+    spi_ctx_->pwr = gpio_open_line_fb("PB4", 1, 1);
     spi_ctx_->rst = gpio_open_line_fb("PB1", 1, 1);
     spi_ctx_->dc = gpio_open_line_fb("PF10", 1, 0);
-    spi_ctx_->bl = gpio_open_line_fb("PD8", 1, 1);
+    spi_ctx_->bl = gpio_open_line_fb("PD8", 1, invert_bl ? 0 : 1);
 
+    if (spi_ctx_->pwr.handle_fd < 0 || spi_ctx_->rst.handle_fd < 0 ||
+        spi_ctx_->dc.handle_fd < 0 || spi_ctx_->bl.handle_fd < 0) {
+        LOGW("FrameBuffer", "SPI LCD GPIOs unavailable (PB4/PB1/PF10/PD8), falling back");
+        ::close(spi_ctx_->spi_fd);
+        gpio_close_fb(&spi_ctx_->pwr);
+        gpio_close_fb(&spi_ctx_->rst);
+        gpio_close_fb(&spi_ctx_->dc);
+        gpio_close_fb(&spi_ctx_->bl);
+        delete spi_ctx_;
+        spi_ctx_ = nullptr;
+        return false;
+    }
+
+    LOGI("FrameBuffer", "SPI LCD config speed=%dHz madctl=0x%02X backlight=%s",
+         spi_speed, madctl & 0xFF, invert_bl ? "active-low" : "active-high");
     lcd_init_ili9341_fb(spi_ctx_->spi_fd, &spi_ctx_->cs, &spi_ctx_->dc, &spi_ctx_->rst);
     return true;
 #else
@@ -471,6 +480,20 @@ FrameBuffer::~FrameBuffer() {
 
 bool FrameBuffer::init(const char* device) {
 #ifdef __linux__
+    width_ = 240;
+    height_ = 320;
+    buffer_.assign(width_ * height_, 0);
+    real_fb_ = false;
+
+    if (initSpiLcd()) {
+        LOGI("FrameBuffer", "Initialized userspace SPI LCD driver: %dx%d on /dev/spidev0.0", width_, height_);
+        return true;
+    }
+
+    buffer_.clear();
+    width_ = 0;
+    height_ = 0;
+
     fb_fd_ = open(device, O_RDWR);
     if (fb_fd_ >= 0) {
         struct fb_var_screeninfo vinfo;
@@ -501,12 +524,6 @@ bool FrameBuffer::init(const char* device) {
     buffer_.resize(width_ * height_, 0);
     real_fb_ = false;
     LOGI("FrameBuffer", "Using offscreen buffer: %dx%d", width_, height_);
-    
-#ifdef __linux__
-    if (initSpiLcd()) {
-        LOGI("FrameBuffer", "Initialized userspace SPI LCD driver (240x320 screen downscaling)");
-    }
-#endif
     return true;
 }
 
@@ -526,6 +543,7 @@ void FrameBuffer::close() {
 #ifdef __linux__
         if (spi_ctx_->spi_fd >= 0) ::close(spi_ctx_->spi_fd);
         gpio_close_fb(&spi_ctx_->cs);
+        gpio_close_fb(&spi_ctx_->pwr);
         gpio_close_fb(&spi_ctx_->dc);
         gpio_close_fb(&spi_ctx_->rst);
         gpio_close_fb(&spi_ctx_->bl);
@@ -606,7 +624,7 @@ void FrameBuffer::fillCircle(int cx, int cy, int radius, const Color& color) {
 }
 
 void FrameBuffer::drawRing(int cx, int cy, int radius, int thickness, const Color& color) {
-    drawArc(cx, cy, radius, thickness, 0.0f, 2.0f * M_PI, color);
+    drawArc(cx, cy, radius, thickness, 0.0f, 2.0f * kPi, color);
 }
 
 void FrameBuffer::drawArc(int cx, int cy, int radius, int thickness, float start_angle, float end_angle, const Color& color) {
@@ -616,10 +634,10 @@ void FrameBuffer::drawArc(int cx, int cy, int radius, int thickness, float start
     int r_inner_sq = r_inner * r_inner;
 
     // Normalize angles to [0, 2PI]
-    while (start_angle < 0) start_angle += 2.0f * M_PI;
-    while (end_angle < 0) end_angle += 2.0f * M_PI;
-    while (start_angle > 2.0f * M_PI) start_angle -= 2.0f * M_PI;
-    while (end_angle > 2.0f * M_PI) end_angle -= 2.0f * M_PI;
+    while (start_angle < 0) start_angle += 2.0f * kPi;
+    while (end_angle < 0) end_angle += 2.0f * kPi;
+    while (start_angle > 2.0f * kPi) start_angle -= 2.0f * kPi;
+    while (end_angle > 2.0f * kPi) end_angle -= 2.0f * kPi;
     
     bool inverted = start_angle > end_angle;
 
@@ -629,7 +647,7 @@ void FrameBuffer::drawArc(int cx, int cy, int radius, int thickness, float start
             if (d_sq >= r_inner_sq && d_sq <= r_outer_sq) {
                 // Calculate angle of this pixel
                 float angle = std::atan2((float)y, (float)x);
-                if (angle < 0) angle += 2.0f * M_PI;
+                if (angle < 0) angle += 2.0f * kPi;
 
                 bool in_arc = false;
                 if (!inverted) {

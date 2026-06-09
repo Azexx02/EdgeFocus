@@ -4,6 +4,7 @@
 #include "device/GpioHelper.h"
 
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 
 #ifdef __linux__
@@ -44,7 +45,7 @@ bool UIManager::init(AppContext& /*ctx*/) {
         device::GpioHelper::closeLine(ctp_rst);
         LOGI("UIManager", "Touch controller reset sequence completed");
     } else {
-        LOGW("UIManager", "Could not reset touch controller (PB4 unavailable)");
+        LOGI("UIManager", "PB4 unavailable for touch reset; it may be held high by the LCD power/wake path");
     }
 
     // 1. Try direct I2C for FT6336
@@ -104,6 +105,14 @@ bool UIManager::init(AppContext& /*ctx*/) {
         page->setStore(&store_);
     }
 
+#ifdef __linux__
+    if (touch_fd_ >= 0 && use_i2c_touch_) {
+        touch_thread_running_ = true;
+        touch_thread_ = std::thread(&UIManager::touchWorkerLoop, this);
+        LOGI("UIManager", "Started FT6336 touch polling thread");
+    }
+#endif
+
     pages_[current_page_]->onEnter();
     LOGI("UIManager", "UI initialized with %zu pages", pages_.size());
     return true;
@@ -123,6 +132,10 @@ void UIManager::runOnce(AppContext& ctx) {
 void UIManager::shutdown(AppContext& /*ctx*/) {
     LOGI("UIManager", "Shutting down UI...");
 #ifdef __linux__
+    touch_thread_running_ = false;
+    if (touch_thread_.joinable()) {
+        touch_thread_.join();
+    }
     if (touch_fd_ >= 0) {
         close(touch_fd_);
         touch_fd_ = -1;
@@ -156,55 +169,143 @@ void UIManager::renderGlobalHeader(const SystemSnapshot& snap) {
     // Basic header logic...
 }
 
+void UIManager::queueTouchSwipe(int direction) {
+    std::lock_guard<std::mutex> lock(touch_event_mutex_);
+    pending_swipe_direction_ = direction;
+    pending_tap_ = false;
+}
+
+void UIManager::queueTouchTap(int x, int y) {
+    std::lock_guard<std::mutex> lock(touch_event_mutex_);
+    if (pending_swipe_direction_ != 0) return;
+    pending_tap_x_ = x;
+    pending_tap_y_ = y;
+    pending_tap_ = true;
+}
+
+void UIManager::touchWorkerLoop() {
+#ifdef __linux__
+    bool pending = false;
+    bool swipe_sent = false;
+    int start_x = 0;
+    int start_y = 0;
+    int last_x = 0;
+    int last_y = 0;
+
+    auto classifySwipe = [](int dx, int dy) -> int {
+        constexpr int kSwipeThresholdPx = 24;
+        constexpr int kSwipeMaxVerticalPx = 140;
+        if (std::abs(dx) < kSwipeThresholdPx) return 0;
+        if (std::abs(dy) > kSwipeMaxVerticalPx) return 0;
+        if (std::abs(dx) < std::abs(dy)) return 0;
+        return dx < 0 ? -1 : 1;
+    };
+
+    while (touch_thread_running_) {
+        uint8_t reg = 0x02;
+        uint8_t buf[6];
+        bool has_touch = false;
+        int x = 0;
+        int y = 0;
+
+        if (write(touch_fd_, &reg, 1) == 1 &&
+            read(touch_fd_, buf, sizeof(buf)) == static_cast<ssize_t>(sizeof(buf)) &&
+            (buf[0] & 0x0F) > 0) {
+            has_touch = true;
+            x = ((buf[1] & 0x0F) << 8) | buf[2];
+            y = ((buf[3] & 0x0F) << 8) | buf[4];
+        }
+
+        if (has_touch) {
+            if (!pending) {
+                start_x = x;
+                start_y = y;
+                swipe_sent = false;
+                pending = true;
+            }
+            last_x = x;
+            last_y = y;
+
+            if (!swipe_sent) {
+                int direction = classifySwipe(last_x - start_x, last_y - start_y);
+                if (direction != 0) {
+                    queueTouchSwipe(direction);
+                    swipe_sent = true;
+                }
+            }
+        } else if (pending) {
+            if (!swipe_sent) {
+                int direction = classifySwipe(last_x - start_x, last_y - start_y);
+                if (direction != 0) {
+                    queueTouchSwipe(direction);
+                } else {
+                    queueTouchTap(start_x * fb_.width() / 240, start_y * fb_.height() / 320);
+                }
+            }
+            pending = false;
+            swipe_sent = false;
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    }
+#endif
+}
+
 void UIManager::handleTouch() {
 #ifdef __linux__
     if (touch_fd_ < 0) return;
-    
-    // I2C direct touch handling
-    if (use_i2c_touch_) {
-        uint8_t buf[7];
-        // Read TD_STATUS to check if touches > 0
-        buf[0] = 0x02;
-        if (write(touch_fd_, buf, 1) == 1) {
-            if (read(touch_fd_, buf, 1) == 1 && (buf[0] & 0x0F) > 0) {
-                // Read P1_XH to P1_YL (0x03 to 0x06)
-                buf[0] = 0x03;
-                if (write(touch_fd_, buf, 1) == 1 && read(touch_fd_, buf, 4) == 4) {
-                    int x = ((buf[0] & 0x0F) << 8) | buf[1];
-                    int y = ((buf[2] & 0x0F) << 8) | buf[3];
-                    
-                    if (!touch_pending_) {
-                        touch_start_x_ = x;
-                        touch_start_y_ = y;
-                        touch_pending_ = true;
-                    }
-                    touch_x_ = x;
-                    touch_y_ = y;
-                }
-            } else if (touch_pending_) {
-                touch_pending_ = false;
-                
-                int dx = touch_x_ - touch_start_x_;
-                int dy = touch_y_ - touch_start_y_;
-                
-                // Scale from touch to screen if necessary
-                int sx = touch_start_x_ * fb_.width() / 240;
-                int sy = touch_start_y_ * fb_.height() / 320;
-                
-                if (dx > 50 && abs(dy) < 150) {
-                    if (current_page_ == PAGE_STATS) switchPage(PAGE_STATUS);
-                    else if (current_page_ == PAGE_SETTINGS) switchPage(PAGE_STATS);
-                } else if (dx < -50 && abs(dy) < 150) {
-                    if (current_page_ == PAGE_STATUS) switchPage(PAGE_STATS);
-                    else if (current_page_ == PAGE_STATS) switchPage(PAGE_SETTINGS);
-                } else {
-                    pages_[current_page_]->onTouch(sx, sy);
-                }
-            }
-        }
+
+    int swipe_direction = 0;
+    bool has_tap = false;
+    int tap_x = 0;
+    int tap_y = 0;
+    {
+        std::lock_guard<std::mutex> lock(touch_event_mutex_);
+        swipe_direction = pending_swipe_direction_;
+        pending_swipe_direction_ = 0;
+        has_tap = pending_tap_;
+        tap_x = pending_tap_x_;
+        tap_y = pending_tap_y_;
+        pending_tap_ = false;
+    }
+
+    if (swipe_direction < 0) {
+        if (current_page_ == PAGE_STATUS) switchPage(PAGE_STATS);
+        else if (current_page_ == PAGE_STATS) switchPage(PAGE_SETTINGS);
+        return;
+    }
+    if (swipe_direction > 0) {
+        if (current_page_ == PAGE_STATS) switchPage(PAGE_STATUS);
+        else if (current_page_ == PAGE_SETTINGS) switchPage(PAGE_STATS);
+        return;
+    }
+    if (has_tap) {
+        pages_[current_page_]->onTouch(tap_x, tap_y);
         return;
     }
 
+    if (use_i2c_touch_) return;
+
+    auto handleSwipe = [this](int dx, int dy) -> bool {
+        constexpr int kSwipeThresholdPx = 32;
+        constexpr int kSwipeMaxVerticalPx = 120;
+
+        if (std::abs(dx) < kSwipeThresholdPx) return false;
+        if (std::abs(dy) > kSwipeMaxVerticalPx) return false;
+        if (std::abs(dx) < std::abs(dy)) return false;
+
+        if (dx > 0) {
+            if (current_page_ == PAGE_STATS) switchPage(PAGE_STATUS);
+            else if (current_page_ == PAGE_SETTINGS) switchPage(PAGE_STATS);
+            else return false;
+        } else {
+            if (current_page_ == PAGE_STATUS) switchPage(PAGE_STATS);
+            else if (current_page_ == PAGE_STATS) switchPage(PAGE_SETTINGS);
+            else return false;
+        }
+        return true;
+    };
+    
     struct input_event ev;
     while (read(touch_fd_, &ev, sizeof(ev)) == sizeof(ev)) {
         if (ev.type == EV_ABS) {
@@ -214,6 +315,7 @@ void UIManager::handleTouch() {
             if (ev.value == 1) {
                 touch_start_x_ = touch_x_;
                 touch_start_y_ = touch_y_;
+                touch_swipe_sent_ = false;
                 touch_pending_ = true;
             } else if (ev.value == 0 && touch_pending_) {
                 touch_pending_ = false;
@@ -222,18 +324,17 @@ void UIManager::handleTouch() {
                 
                 // Evdev usually gives 0-1024 or 0-240, scale appropriately
                 // Let's assume standard event is 0-240 and 0-320
-                if (dx > 50 && abs(dy) < 150) {
-                    if (current_page_ == PAGE_STATS) switchPage(PAGE_STATUS);
-                    else if (current_page_ == PAGE_SETTINGS) switchPage(PAGE_STATS);
-                } else if (dx < -50 && abs(dy) < 150) {
-                    if (current_page_ == PAGE_STATUS) switchPage(PAGE_STATS);
-                    else if (current_page_ == PAGE_STATS) switchPage(PAGE_SETTINGS);
-                } else {
+                if (!touch_swipe_sent_ && !handleSwipe(dx, dy)) {
                     pages_[current_page_]->onTouch(touch_x_ * fb_.width() / 240, touch_y_ * fb_.height() / 320);
                 }
+                touch_swipe_sent_ = false;
             }
         } else if (ev.type == EV_SYN && ev.code == SYN_REPORT && touch_pending_) {
-            // Drag handling (omitted for brevity)
+            if (!touch_swipe_sent_) {
+                int dx = touch_x_ - touch_start_x_;
+                int dy = touch_y_ - touch_start_y_;
+                touch_swipe_sent_ = handleSwipe(dx, dy);
+            }
         }
     }
 #endif

@@ -12,6 +12,7 @@
 #include <vector>
 #include <thread>
 #include <atomic>
+#include <mutex>
 
 namespace edgefocus {
 
@@ -45,6 +46,9 @@ private:
     void renderFrame();
     void renderGlobalHeader(const SystemSnapshot& snap);
     void handleTouch();
+    void touchWorkerLoop();
+    void queueTouchSwipe(int direction);
+    void queueTouchTap(int x, int y);
 
     // Components
     FrameBuffer fb_;
@@ -62,6 +66,14 @@ private:
     int touch_start_x_ = 0;
     int touch_start_y_ = 0;
     bool touch_pending_ = false;
+    bool touch_swipe_sent_ = false;
+    std::thread touch_thread_;
+    std::atomic<bool> touch_thread_running_{false};
+    std::mutex touch_event_mutex_;
+    int pending_swipe_direction_ = 0;
+    bool pending_tap_ = false;
+    int pending_tap_x_ = 0;
+    int pending_tap_y_ = 0;
 
     // Screenshot counter (for headless mode)
     int screenshot_count_ = 0;
