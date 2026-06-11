@@ -46,3 +46,4 @@ __pycache__/
 Debug/
 Release/
 STM32CubeIDE/
+stm32/picture/
