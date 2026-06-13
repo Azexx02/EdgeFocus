@@ -6,29 +6,36 @@
 
 | 日期 | 任务 | 状态 |
 |------|------|------|
-| 6月11日 | 驱动震动马达 (PA6) + OLED屏幕 (PB6/PB7) | 进行中 |
+| 6月11日 | 驱动震动马达 (PA6) + OLED屏幕 (PB6/PB7) | 已完成 |
+| 6月12日 | PWM马达驱动 + BLE协议响应测试 | 已完成 |
 | 待定 | E104-BT52 蓝牙模块通信 (PA9/PA10) | 未开始 |
 
 ## 文件结构
 
 ```
 stm32/
-├── Core/
-│   ├── Inc/
-│   │   └── main_app.h        # 应用层头文件
-│   └── Src/
-│       └── main_app.c        # 主程序（初始化 + 主循环）
-├── Drivers/
+├── driver/                    # 可复用底层驱动（正式开发用）
 │   ├── ssd1306.h             # OLED 驱动头文件
-│   ├── ssd1306.c             # OLED 驱动实现
-│   ├── motor.h               # 马达驱动头文件
-│   └── motor.c               # 马达驱动实现
-├── test/
-│   ├── test_motor_oled.h     # 硬件测试头文件
-│   └── test_motor_oled.c     # 硬件测试程序
-├── doc/
-│   └── 引脚对照表.md          # 硬件引脚定义
-└── README.md                 # 本文件
+│   ├── ssd1306.c             # OLED 驱动实现 (含倒计时大字显示)
+│   ├── motor.h               # 马达驱动头文件 (PWM)
+│   └── motor.c               # 马达驱动实现 (TIM16 PWM, 5kHz)
+├── STM32Band_test/
+│   ├── Core/
+│   │   ├── Inc/
+│   │   │   ├── main.h
+│   │   │   ├── ssd1306.h
+│   │   │   ├── motor.h
+│   │   │   ├── test_motor_oled.h
+│   │   │   └── test_ble_response.h
+│   │   └── Src/
+│   │       ├── main.c
+│   │       ├── ssd1306.c
+│   │       ├── motor.c
+│   │       ├── test_motor_oled.c
+│   │       └── test_ble_response.c  # BLE协议响应测试
+│   └── Drivers/               # STM32 HAL/CMSIS 库
+├── BLE_Signal_Protocol.md     # BLE 信号协议文档
+└── README.md                  # 本文件
 ```
 
 ## CubeMX 配置步骤
@@ -168,13 +175,47 @@ int main(void)
 
 测试完成后屏幕显示各模块状态，马达双短震表示全部通过。
 
-## 马达驱动说明
+## 马达驱动说明 (motor.c / motor.h)
 
-当前使用 GPIO 直驱（与 ESP32 版本一致）:
-- PA6 HIGH → 马达震动
-- PA6 LOW → 马达停止
+已升级为 PWM 驱动 (TIM16_CH1, PA6):
+- PWM 频率: 5kHz (HSI 16MHz / 3200)
+- 支持 0~100% 占空比调速
+- `motor_set_duty(percent)` 控制振动强度
+- `motor_vibrate(ms)` 阻塞式振动指定时长
+- 最低启动占空比: ~75%（MOSFET gate threshold + 电机启动电流）
 
-如需 PWM 调速，可后续启用 TIM16_CH1 (PA6) 进行 PWM 输出。
+### motor_init() 设计说明
+
+`motor_init()` 是**完全自包含**的，不依赖 CubeMX 的初始化顺序。内部会：
+1. 使能 GPIOA 时钟 (`RCC->IOPENR`)
+2. 配置 PA6 为 AF5 (TIM16_CH1)
+3. 使能 TIM16 时钟 (`RCC->APBENR2`)
+4. 重配定时器参数 (PSC=0, ARR=3199, PWM mode 1)
+5. 使能 MOE + 启动计数器
+
+这样无论是上电复位、debug reset、还是看门狗复位，调用 `motor_init()` 都能正常工作。
+
+### 踩坑记录
+
+| 问题 | 原因 | 解决 |
+|------|------|------|
+| `HAL_TIM_PWM_Start()` 重复调用后失效 | HAL 内部状态机 `READY→BUSY`，重复调用返回错误 | 改用寄存器直接操作 |
+| VS Code debug reset 后马达不振 | 调试器只做软复位，不清除 GPIO AF 配置 | `motor_init()` 强制重配所有寄存器 |
+| 25% duty 不振 | 低于 MOSFET/motor 启动阈值 | 使用 ≥75% duty |
+| 150ms 脉冲感知不到 | 马达启动需要时间 | 脉冲 ≥300ms |
+
+## BLE 协议响应测试
+
+`test_ble_response.c` 按照 `BLE_Signal_Protocol.md` 测试以下功能:
+
+1. **Alert (0x01)** — 三种震动模式
+   - 0x01: 连续缓慢短震 (3次, 间隔500ms)
+   - 0x02: 长振 (800ms)
+   - 0x03: 连续快速短振 (3次, 间隔100ms)
+2. **TimeSync (0x02)** — OLED 倒计时显示 (大字 MM:SS)
+3. **Text (0x03)** — OLED 文字显示
+
+当前未接入 BLE，通过直接调用处理函数模拟协议命令。
 
 ## 与 ESP32-Band 的兼容性
 

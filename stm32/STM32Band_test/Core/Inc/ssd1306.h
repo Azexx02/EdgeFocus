@@ -21,4 +21,8 @@ HAL_StatusTypeDef ssd1306_draw_pixel(uint8_t x, uint8_t y, bool on);
 HAL_StatusTypeDef ssd1306_draw_string(uint8_t page, uint8_t col, const char *str);
 HAL_StatusTypeDef ssd1306_update(void);
 
+// Protocol display helpers
+void ssd1306_show_countdown(uint16_t minutes);
+void ssd1306_show_alert(uint8_t level);
+
 #endif // SSD1306_H

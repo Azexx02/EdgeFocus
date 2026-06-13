@@ -49,6 +49,8 @@ extern "C" {
 
 /* USER CODE END EM */
 
+void HAL_TIM_MspPostInit(TIM_HandleTypeDef *htim);
+
 /* Exported functions prototypes ---------------------------------------------*/
 void Error_Handler(void);
 
@@ -57,6 +59,25 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
+#define battery_voltage_Pin GPIO_PIN_4
+#define battery_voltage_GPIO_Port GPIOA
+#define Bluetooth_connection_status_Pin GPIO_PIN_0
+#define Bluetooth_connection_status_GPIO_Port GPIOB
+#define Charging_status_Pin GPIO_PIN_1
+#define Charging_status_GPIO_Port GPIOB
+#define Bluetooth_wake_up_Pin GPIO_PIN_2
+#define Bluetooth_wake_up_GPIO_Port GPIOB
+#define Bluetooth_reset_Pin GPIO_PIN_10
+#define Bluetooth_reset_GPIO_Port GPIOB
+#define External_power_validity_Pin GPIO_PIN_11
+#define External_power_validity_GPIO_Port GPIOB
+#define buttom_wake_Pin GPIO_PIN_12
+#define buttom_wake_GPIO_Port GPIOB
+#define buttom_wake_EXTI_IRQn EXTI4_15_IRQn
+#define Bluetooth_UART_TX_Pin GPIO_PIN_9
+#define Bluetooth_UART_TX_GPIO_Port GPIOA
+#define Bluetooth_UART_RX_Pin GPIO_PIN_10
+#define Bluetooth_UART_RX_GPIO_Port GPIOA
 
 /* USER CODE BEGIN Private defines */
 
