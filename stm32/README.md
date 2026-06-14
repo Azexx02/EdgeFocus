@@ -35,7 +35,8 @@ stm32/
 │   │       └── test_ble_response.c  # BLE协议响应测试
 │   └── Drivers/               # STM32 HAL/CMSIS 库
 ├── BLE_Signal_Protocol.md     # BLE 信号协议文档
-└── README.md                  # 本文件
+├── README.md                  # 本文件
+└── doc/                       #引脚定义及相关文档
 ```
 
 ## CubeMX 配置步骤

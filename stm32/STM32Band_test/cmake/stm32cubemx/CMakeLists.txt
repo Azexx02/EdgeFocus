@@ -28,6 +28,10 @@ set(MX_Application_Src
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/ssd1306.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/motor.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/test_motor_oled.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/test_hardware.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/battery.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/button.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/power.c
 )
 
 # STM32 HAL/LL Drivers
