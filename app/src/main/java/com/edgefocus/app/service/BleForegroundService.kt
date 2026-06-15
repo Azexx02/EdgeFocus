@@ -10,6 +10,7 @@ import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import androidx.core.app.NotificationCompat
+import com.edgefocus.app.R
 import com.edgefocus.app.data.remote.BleManager
 import com.edgefocus.app.data.remote.ConnectionState
 import com.edgefocus.app.data.remote.PhoneUsage
@@ -126,7 +127,7 @@ class BleForegroundService : Service() {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("EdgeFocus")
             .setContentText(text)
-            .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
+            .setSmallIcon(R.drawable.ic_notification)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setOngoing(true)
             .build()
