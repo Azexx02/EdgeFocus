@@ -194,6 +194,31 @@ class HomeViewModel @Inject constructor(
         }
     }
 
+    // 获取当前会话的目标时长（分钟）
+    fun getTargetDurationMinutes(): Int {
+        return workDurationMinutes
+    }
+
+    // 获取当前会话的剩余时间（毫秒）
+    fun getRemainingTimeMillis(): Long {
+        return _uiState.value.timeRemaining
+    }
+
+    // 获取当前会话的总时长（毫秒）
+    fun getTotalTimeMillis(): Long {
+        return _uiState.value.totalTime
+    }
+
+    // 获取当前会话状态
+    fun getCurrentTimerState(): TimerState {
+        return _uiState.value.timerState
+    }
+
+    // 获取当前会话类型
+    fun getCurrentSessionType(): SessionType {
+        return _uiState.value.sessionType
+    }
+
     override fun onCleared() {
         super.onCleared()
         countdownJob?.cancel()

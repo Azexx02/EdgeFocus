@@ -128,8 +128,8 @@ fun HomeScreen(
                             scope.launch {
                                 // 只有在连接状态下才发送BLE命令
                                 if (isConnected) {
-                                    val durationMin = (uiState.totalTime / 60000).toInt()
-                                    bleViewModel.sendSessionCommand("start", durationMin)
+                                    val targetDurationMin = viewModel.getTargetDurationMinutes()
+                                    bleViewModel.sendSessionCommand("start", targetDurationMin)
                                 }
                                 viewModel.startTimer()
                             }

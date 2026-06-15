@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import org.json.JSONObject
 import javax.inject.Inject
 
 enum class SystemMode {
@@ -35,19 +36,33 @@ data class ControlPanelUiState(
     val reminderSensitivity: Float = 0.5f,
     val nfcStatus: NfcStatus = NfcStatus.CHECKING,
     val completedSessions: Int = 0,
-    val totalFocusMinutes: Int = 0
+    val totalFocusMinutes: Int = 0,
+    // 板端数据
+    val batteryPercent: Int = -1,
+    val focusStateStr: String = "",
+    val distractionCount: Int = 0,
+    val reminderCount: Int = 0,
+    val calibrationCompleted: Boolean = false,
+    val braceletConnected: Boolean = false,
+    val cameraOk: Boolean = false,
+    val todayTotalSeconds: Int = 0,
+    val todayFocusSeconds: Int = 0,
+    val todaySessions: Int = 0,
+    val todayEvents: Int = 0
 )
 
 @HiltViewModel
 class ControlPanelViewModel @Inject constructor(
     private val application: Application,
-    private val settingsRepository: ISettingsRepository
+    private val settingsRepository: ISettingsRepository,
+    private val bleViewModel: BleViewModel
 ) : AndroidViewModel(application) {
 
     private val _uiState = MutableStateFlow(ControlPanelUiState())
     val uiState: StateFlow<ControlPanelUiState> = _uiState.asStateFlow()
 
     private var countdownJob: Job? = null
+    private var consoleDataPollingJob: Job? = null
 
     init {
         viewModelScope.launch {
@@ -67,6 +82,7 @@ class ControlPanelViewModel @Inject constructor(
             }
         }
         checkNfcStatus()
+        startConsoleDataPolling()
     }
 
     fun updateSelectedDuration(minutes: Int) {
@@ -133,6 +149,102 @@ class ControlPanelViewModel @Inject constructor(
         }
     }
 
+    private fun startConsoleDataPolling() {
+        consoleDataPollingJob?.cancel()
+        consoleDataPollingJob = viewModelScope.launch {
+            while (true) {
+                if (bleViewModel.isConnected()) {
+                    fetchConsoleData()
+                }
+                delay(2000) // 每2秒轮询一次
+            }
+        }
+    }
+
+    private suspend fun fetchConsoleData() {
+        try {
+            val data = bleViewModel.getConsoleData()
+            data?.let { parseConsoleData(it) }
+        } catch (e: Exception) {
+            // 忽略错误，继续轮询
+        }
+    }
+
+    private fun parseConsoleData(jsonString: String) {
+        try {
+            val json = JSONObject(jsonString)
+            val data = json.getJSONObject("data")
+
+            // 解析session数据
+            val session = data.optJSONObject("session")
+            session?.let {
+                val focusState = it.optInt("focus_state", 0)
+                val focusStateStr = it.optString("focus_state_str", "")
+                val elapsedMs = it.optLong("elapsed_ms", 0)
+                val targetDurationMs = it.optLong("target_duration_ms", 0)
+                val remainingMs = it.optLong("remaining_ms", 0)
+                val distractionCount = it.optInt("distraction_count", 0)
+                val reminderCount = it.optInt("reminder_count", 0)
+                val calibrationCompleted = it.optBoolean("calibration_completed", false)
+                val isActive = it.optBoolean("active", false)
+
+                _uiState.update { state ->
+                    state.copy(
+                        focusStateStr = focusStateStr,
+                        distractionCount = distractionCount,
+                        reminderCount = reminderCount,
+                        calibrationCompleted = calibrationCompleted,
+                        timeRemaining = if (isActive && remainingMs > 0) remainingMs else state.timeRemaining,
+                        totalTime = if (targetDurationMs > 0) targetDurationMs else state.totalTime
+                    )
+                }
+            }
+
+            // 解析device数据
+            val device = data.optJSONObject("device")
+            device?.let {
+                val batteryPercent = it.optInt("battery_percent", -1)
+                val systemMode = it.optInt("system_mode", 0)
+                val cameraOk = it.optBoolean("camera_ok", false)
+                val braceletConnected = it.optBoolean("bracelet_connected", false)
+
+                _uiState.update { state ->
+                    state.copy(
+                        batteryPercent = batteryPercent,
+                        systemMode = when (systemMode) {
+                            0 -> SystemMode.NORMAL
+                            1 -> SystemMode.SILENT
+                            2 -> SystemMode.HOME
+                            else -> SystemMode.NORMAL
+                        },
+                        cameraOk = cameraOk,
+                        braceletConnected = braceletConnected
+                    )
+                }
+            }
+
+            // 解析today数据
+            val today = data.optJSONObject("today")
+            today?.let {
+                val totalSeconds = it.optInt("total_seconds", 0)
+                val focusSeconds = it.optInt("focus_seconds", 0)
+                val sessions = it.optInt("sessions", 0)
+                val events = it.optInt("events", 0)
+
+                _uiState.update { state ->
+                    state.copy(
+                        todayTotalSeconds = totalSeconds,
+                        todayFocusSeconds = focusSeconds,
+                        todaySessions = sessions,
+                        todayEvents = events
+                    )
+                }
+            }
+        } catch (e: Exception) {
+            // JSON解析错误，忽略
+        }
+    }
+
     private fun startCountdown() {
         countdownJob?.cancel()
         countdownJob = viewModelScope.launch {
@@ -173,5 +285,6 @@ class ControlPanelViewModel @Inject constructor(
     override fun onCleared() {
         super.onCleared()
         countdownJob?.cancel()
+        consoleDataPollingJob?.cancel()
     }
 }

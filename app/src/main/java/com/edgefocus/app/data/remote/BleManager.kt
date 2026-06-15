@@ -302,7 +302,7 @@ class BleManager @Inject constructor(
     }
 
     @SuppressLint("MissingPermission")
-    override suspend fun sessionControl(action: String, duration: Int?): Result<ByteArray> {
+    override suspend fun sessionControl(action: String, targetDurationMin: Int?): Result<ByteArray> {
         val actionByte = when (action) {
             "start" -> 0x01.toByte()
             "pause" -> 0x02.toByte()
@@ -310,7 +310,7 @@ class BleManager @Inject constructor(
             "stop" -> 0x04.toByte()
             else -> 0x00.toByte()
         }
-        val durationBytes = duration?.let {
+        val durationBytes = targetDurationMin?.let {
             byteArrayOf((it shr 8).toByte(), it.toByte())
         } ?: byteArrayOf()
         return sendDataAndAwait(byteArrayOf(0x05, actionByte) + durationBytes)
@@ -330,15 +330,26 @@ class BleManager @Inject constructor(
 
     @SuppressLint("MissingPermission")
     override suspend fun phoneSync(usage: PhoneUsage): Result<ByteArray> {
-        val screenTime = usage.screenTimeMinutes
-        val unlocks = usage.unlockCount
-        return sendDataAndAwait(byteArrayOf(
-            0x08,
-            (screenTime shr 8).toByte(),
-            screenTime.toByte(),
-            (unlocks shr 8).toByte(),
-            unlocks.toByte()
-        ))
+        // 构建JSON格式的phone_sync数据
+        val json = buildString {
+            append("{")
+            append("\"cmd\":\"phone_sync\",")
+            append("\"data\":{")
+            append("\"is_in_use\":${usage.isInUse},")
+            usage.appCategory?.let { append("\"app_category\":\"$it\",") }
+            append("\"distraction_level\":${usage.distractionLevel},")
+            usage.appName?.let { append("\"app_name\":\"$it\",") }
+            usage.durationSec?.let { append("\"duration_sec\":$it") }
+            // 移除末尾的逗号
+            if (endsWith(",")) deleteCharAt(length - 1)
+            append("}}")
+        }
+        return sendDataAndAwait(json.toByteArray())
+    }
+
+    @SuppressLint("MissingPermission")
+    override suspend fun getConsoleData(): Result<ByteArray> {
+        return sendDataAndAwait(byteArrayOf(0x09))
     }
 
     private fun handleNotification(data: ByteArray) {
@@ -357,6 +368,34 @@ class BleManager @Inject constructor(
                 val summary = String(data, 1, data.size - 1)
                 pushEventHandler?.onPushSessionEnd(summary)
             }
+            0x04.toByte() -> {
+                // push_timer_complete
+                val timerComplete = parseTimerComplete(data)
+                pushEventHandler?.onPushTimerComplete(timerComplete)
+            }
+        }
+    }
+
+    private fun parseTimerComplete(data: ByteArray): TimerComplete {
+        // 解析 timer_complete 数据
+        // 格式: [0x04, elapsed_ms(4bytes), target_duration_ms(4bytes), distraction_count(2bytes), reminder_count(2bytes)]
+        return if (data.size >= 11) {
+            val elapsedMs = ((data[1].toInt() and 0xFF) shl 24) or
+                    ((data[2].toInt() and 0xFF) shl 16) or
+                    ((data[3].toInt() and 0xFF) shl 8) or
+                    (data[4].toInt() and 0xFF)
+            val targetDurationMs = ((data[5].toInt() and 0xFF) shl 24) or
+                    ((data[6].toInt() and 0xFF) shl 16) or
+                    ((data[7].toInt() and 0xFF) shl 8) or
+                    (data[8].toInt() and 0xFF)
+            val distractionCount = ((data[9].toInt() and 0xFF) shl 8) or
+                    (data[10].toInt() and 0xFF)
+            val reminderCount = if (data.size >= 13) {
+                ((data[11].toInt() and 0xFF) shl 8) or (data[12].toInt() and 0xFF)
+            } else 0
+            TimerComplete(elapsedMs.toLong(), targetDurationMs.toLong(), distractionCount, reminderCount)
+        } else {
+            TimerComplete(0, 0, 0, 0)
         }
     }
 
