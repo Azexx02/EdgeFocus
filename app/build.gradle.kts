@@ -73,9 +73,9 @@ dependencies {
     implementation("androidx.hilt:hilt-navigation-compose:1.1.0")
 
     // Room
-    implementation("androidx.room:room-runtime:2.6.1")
-    ksp("androidx.room:room-compiler:2.6.1")
-    implementation("androidx.room:room-ktx:2.6.1")
+    implementation("androidx.room:room-runtime:2.6.0")
+    ksp("androidx.room:room-compiler:2.6.0")
+    implementation("androidx.room:room-ktx:2.6.0")
 
     // BLE
     implementation("androidx.bluetooth:bluetooth:1.0.0-alpha02")
