@@ -38,16 +38,25 @@ class HomeViewModel @Inject constructor() : ViewModel() {
         const val SESSIONS_BEFORE_LONG_BREAK = 4
     }
 
+    private var stateBeforePause: TimerState? = null
+
     fun startTimer() {
         val currentState = _uiState.value.timerState
-        if (currentState == TimerState.IDLE || currentState == TimerState.PAUSED) {
+        if (currentState == TimerState.IDLE) {
             _uiState.update { it.copy(timerState = TimerState.RUNNING) }
+            startCountdown()
+        } else if (currentState == TimerState.PAUSED) {
+            val resumeState = stateBeforePause ?: TimerState.RUNNING
+            _uiState.update { it.copy(timerState = resumeState) }
+            stateBeforePause = null
             startCountdown()
         }
     }
 
     fun pauseTimer() {
-        if (_uiState.value.timerState == TimerState.RUNNING) {
+        val state = _uiState.value.timerState
+        if (state == TimerState.RUNNING || state == TimerState.BREAK) {
+            stateBeforePause = state
             countdownJob?.cancel()
             _uiState.update { it.copy(timerState = TimerState.PAUSED) }
         }
@@ -122,6 +131,7 @@ class HomeViewModel @Inject constructor() : ViewModel() {
     }
 
     private fun resetToIdle() {
+        stateBeforePause = null
         val workDuration = TimeUtils.minutesToMillis(WORK_DURATION_MINUTES)
         _uiState.update {
             it.copy(
