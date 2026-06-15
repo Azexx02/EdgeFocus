@@ -139,7 +139,7 @@ class BleManager @Inject constructor(
                     gatt.setCharacteristicNotification(char, true)
                     val descriptor = char.getDescriptor(DESCRIPTOR_UUID)
                     descriptor?.let {
-                        it.value = BluetoothGattCharacteristic.ENABLE_NOTIFICATION_VALUE
+                        it.value = android.bluetooth.BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
                         gatt.writeDescriptor(it)
                     }
                 }

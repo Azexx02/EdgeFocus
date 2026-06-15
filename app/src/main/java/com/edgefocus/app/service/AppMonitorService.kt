@@ -113,7 +113,9 @@ class AppMonitorService : Service() {
     private fun stopMonitoring() {
         monitoringJob?.cancel()
         monitoringJob = null
-        recordCurrentAppUsage()
+        serviceScope.launch {
+            recordCurrentAppUsage()
+        }
         currentPackageName = null
         currentStartTime = 0L
     }

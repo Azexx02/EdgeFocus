@@ -1,5 +1,6 @@
 package com.edgefocus.app.presentation.ui.controlpanel
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -33,7 +34,7 @@ import com.edgefocus.app.presentation.viewmodel.ControlPanelViewModel
 import com.edgefocus.app.presentation.viewmodel.NfcStatus
 import com.edgefocus.app.util.TimeUtils
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun ControlPanelScreen(
     viewModel: ControlPanelViewModel = hiltViewModel()
