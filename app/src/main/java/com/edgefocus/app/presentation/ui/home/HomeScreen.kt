@@ -10,30 +10,21 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableLongStateOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
-import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import com.edgefocus.app.util.TimeUtils
+import androidx.hilt.navigation.compose.hiltViewModel
+import com.edgefocus.app.domain.model.SessionType
+import com.edgefocus.app.domain.model.TimerState
+import com.edgefocus.app.presentation.viewmodel.HomeViewModel
 
 @Composable
-fun HomeScreen() {
-    val focusDurationMillis = TimeUtils.minutesToMillis(25)
-    var timeRemaining by remember { mutableLongStateOf(focusDurationMillis) }
-    var isRunning by remember { mutableStateOf(false) }
-
-    LaunchedEffect(isRunning) {
-        while (isRunning && timeRemaining > 0) {
-            delay(1000)
-            timeRemaining -= 1000
-        }
-    }
+fun HomeScreen(
+    viewModel: HomeViewModel = hiltViewModel()
+) {
+    val uiState by viewModel.uiState.collectAsState()
 
     Column(
         modifier = Modifier
@@ -48,23 +39,59 @@ fun HomeScreen() {
             color = MaterialTheme.colorScheme.primary
         )
 
-        Spacer(modifier = Modifier.height(32.dp))
+        Spacer(modifier = Modifier.height(16.dp))
 
-        PomodoroTimer(
-            timeMillis = timeRemaining,
-            totalTimeMillis = focusDurationMillis
+        val sessionTypeText = when (uiState.sessionType) {
+            SessionType.WORK -> "Work Session"
+            SessionType.SHORT_BREAK -> "Short Break"
+            SessionType.LONG_BREAK -> "Long Break"
+        }
+        Text(
+            text = sessionTypeText,
+            style = MaterialTheme.typography.titleMedium,
+            color = MaterialTheme.colorScheme.secondary
         )
 
         Spacer(modifier = Modifier.height(32.dp))
 
-        Button(onClick = { isRunning = !isRunning }) {
-            Text(text = if (isRunning) "Pause" else "Start")
+        PomodoroTimer(
+            timeMillis = uiState.timeRemaining,
+            totalTimeMillis = uiState.totalTime
+        )
+
+        Spacer(modifier = Modifier.height(32.dp))
+
+        Button(
+            onClick = {
+                when (uiState.timerState) {
+                    TimerState.IDLE, TimerState.PAUSED -> viewModel.startTimer()
+                    TimerState.RUNNING -> viewModel.pauseTimer()
+                    TimerState.BREAK -> viewModel.pauseTimer()
+                    TimerState.FINISHED -> viewModel.stopTimer()
+                }
+            }
+        ) {
+            Text(
+                text = when (uiState.timerState) {
+                    TimerState.IDLE -> "Start"
+                    TimerState.RUNNING -> "Pause"
+                    TimerState.PAUSED -> "Resume"
+                    TimerState.BREAK -> "Pause Break"
+                    TimerState.FINISHED -> "Reset"
+                }
+            )
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Button(onClick = { viewModel.stopTimer() }) {
+            Text(text = "Stop")
         }
 
         Spacer(modifier = Modifier.height(16.dp))
 
         Text(
-            text = "Focus Time: 25 min",
+            text = "Completed: ${uiState.completedSessions} sessions",
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
