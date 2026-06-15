@@ -15,15 +15,16 @@ import com.edgefocus.app.domain.model.AlertInfo
 import com.edgefocus.app.domain.model.AlertType
 import com.edgefocus.app.domain.model.DeviceStatus
 import com.edgefocus.app.domain.model.FocusState
-import com.edgefocus.app.domain.model.SessionReport
-import com.edgefocus.app.domain.model.TodaySummary
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withTimeoutOrNull
 import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
+import kotlin.coroutines.resume
 
 enum class ConnectionState {
     DISCONNECTED,
@@ -40,6 +41,8 @@ class BleManager @Inject constructor(
 
     companion object {
         private const val TAG = "BleManager"
+        private const val WRITE_TIMEOUT_MS = 5000L
+        private val DEVICE_NAME_FILTERS = listOf("EdgeFocus", "ESP32")
 
         val SERVICE_UUID: UUID = UUID.fromString("0000fff0-0000-1000-8000-00805f9b34fb")
         val CHAR_WRITE_UUID: UUID = UUID.fromString("0000fff1-0000-1000-8000-00805f9b34fb")
@@ -50,9 +53,16 @@ class BleManager @Inject constructor(
     private val bluetoothManager: BluetoothManager? =
         context.getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
     private val bluetoothAdapter: BluetoothAdapter? = bluetoothManager?.adapter
+
+    @Volatile
     private var bluetoothGatt: BluetoothGatt? = null
+    @Volatile
     private var writeCharacteristic: BluetoothGattCharacteristic? = null
+    @Volatile
     private var notifyCharacteristic: BluetoothGattCharacteristic? = null
+
+    private val writeLock = Any()
+    private var pendingWriteCallback: ((Boolean) -> Unit)? = null
 
     private val _connectionState = MutableStateFlow(ConnectionState.DISCONNECTED)
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
@@ -69,7 +79,12 @@ class BleManager @Inject constructor(
     private val scanCallback = object : ScanCallback() {
         @SuppressLint("MissingPermission")
         override fun onScanResult(callbackType: Int, result: ScanResult) {
-            Log.d(TAG, "Found device: ${result.device.address}")
+            val deviceName = result.device.name ?: ""
+            if (DEVICE_NAME_FILTERS.none { deviceName.contains(it, ignoreCase = true) }) {
+                Log.d(TAG, "Ignoring device: ${result.device.address} (name: '$deviceName')")
+                return
+            }
+            Log.d(TAG, "Found target device: ${result.device.address} (name: '$deviceName')")
             bluetoothAdapter?.bluetoothLeScanner?.stopScan(this)
             _connectionState.value = ConnectionState.CONNECTING
             connectToDevice(result.device)
@@ -84,16 +99,30 @@ class BleManager @Inject constructor(
     private val gattCallback = object : BluetoothGattCallback() {
         @SuppressLint("MissingPermission")
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
-            when (newState) {
-                BluetoothGatt.STATE_CONNECTED -> {
-                    Log.d(TAG, "Connected to GATT server")
-                    _connectionState.value = ConnectionState.CONNECTED
-                    gatt.discoverServices()
+            if (newState == BluetoothGatt.STATE_CONNECTED) {
+                if (status != BluetoothGatt.GATT_SUCCESS) {
+                    Log.e(TAG, "Connection failed with GATT status: $status")
+                    _connectionState.value = ConnectionState.ERROR
+                    gatt.close()
+                    synchronized(writeLock) {
+                        bluetoothGatt = null
+                        writeCharacteristic = null
+                        notifyCharacteristic = null
+                    }
+                    return
                 }
-                BluetoothGatt.STATE_DISCONNECTED -> {
-                    Log.d(TAG, "Disconnected from GATT server")
-                    _connectionState.value = ConnectionState.DISCONNECTED
+                Log.d(TAG, "Connected to GATT server")
+                _connectionState.value = ConnectionState.CONNECTED
+                gatt.discoverServices()
+            } else if (newState == BluetoothGatt.STATE_DISCONNECTED) {
+                Log.d(TAG, "Disconnected from GATT server (status: $status)")
+                _connectionState.value = ConnectionState.DISCONNECTED
+                synchronized(writeLock) {
                     bluetoothGatt = null
+                    writeCharacteristic = null
+                    notifyCharacteristic = null
+                    pendingWriteCallback?.invoke(false)
+                    pendingWriteCallback = null
                 }
             }
         }
@@ -101,8 +130,10 @@ class BleManager @Inject constructor(
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
             if (status == BluetoothGatt.GATT_SUCCESS) {
                 val service = gatt.getService(SERVICE_UUID)
-                writeCharacteristic = service?.getCharacteristic(CHAR_WRITE_UUID)
-                notifyCharacteristic = service?.getCharacteristic(CHAR_NOTIFY_UUID)
+                synchronized(writeLock) {
+                    writeCharacteristic = service?.getCharacteristic(CHAR_WRITE_UUID)
+                    notifyCharacteristic = service?.getCharacteristic(CHAR_NOTIFY_UUID)
+                }
 
                 notifyCharacteristic?.let { char ->
                     gatt.setCharacteristicNotification(char, true)
@@ -113,6 +144,9 @@ class BleManager @Inject constructor(
                     }
                 }
                 Log.d(TAG, "Services discovered and configured")
+            } else {
+                Log.e(TAG, "Service discovery failed: $status")
+                _connectionState.value = ConnectionState.ERROR
             }
         }
 
@@ -130,10 +164,13 @@ class BleManager @Inject constructor(
             characteristic: BluetoothGattCharacteristic,
             status: Int
         ) {
-            if (status == BluetoothGatt.GATT_SUCCESS) {
-                Log.d(TAG, "Characteristic written successfully")
-            } else {
+            val success = status == BluetoothGatt.GATT_SUCCESS
+            if (!success) {
                 Log.e(TAG, "Characteristic write failed: $status")
+            }
+            synchronized(writeLock) {
+                pendingWriteCallback?.invoke(success)
+                pendingWriteCallback = null
             }
         }
     }
@@ -164,24 +201,123 @@ class BleManager @Inject constructor(
 
     @SuppressLint("MissingPermission")
     fun disconnect() {
-        bluetoothGatt?.disconnect()
-        bluetoothGatt?.close()
-        bluetoothGatt = null
+        synchronized(writeLock) {
+            bluetoothGatt?.disconnect()
+            bluetoothGatt?.close()
+            bluetoothGatt = null
+            writeCharacteristic = null
+            notifyCharacteristic = null
+            pendingWriteCallback?.invoke(false)
+            pendingWriteCallback = null
+        }
         _connectionState.value = ConnectionState.DISCONNECTED
     }
 
+    suspend fun sendData(data: ByteArray): Result<ByteArray> {
+        return sendDataAndAwait(data)
+    }
+
+    private suspend fun sendDataAndAwait(data: ByteArray): Result<ByteArray> {
+        return try {
+            val gatt: BluetoothGatt
+            val characteristic: BluetoothGattCharacteristic
+            synchronized(writeLock) {
+                gatt = bluetoothGatt ?: return Result.failure(IllegalStateException("Not connected"))
+                characteristic = writeCharacteristic
+                    ?: return Result.failure(IllegalStateException("Write characteristic not available"))
+            }
+
+            val writeResult = withTimeoutOrNull(WRITE_TIMEOUT_MS) {
+                suspendCancellableCoroutine<Boolean> { cont ->
+                    synchronized(writeLock) {
+                        pendingWriteCallback?.invoke(false)
+                        pendingWriteCallback = { success ->
+                            if (cont.isActive) cont.resume(success)
+                        }
+                    }
+                    cont.invokeOnCancellation {
+                        synchronized(writeLock) {
+                            pendingWriteCallback = null
+                        }
+                    }
+                    characteristic.value = data
+                    if (!gatt.writeCharacteristic(characteristic)) {
+                        synchronized(writeLock) {
+                            pendingWriteCallback = null
+                        }
+                        if (cont.isActive) cont.resume(false)
+                    }
+                }
+            }
+
+            when {
+                writeResult == null -> Result.failure(Exception("BLE write timed out"))
+                !writeResult -> Result.failure(Exception("BLE write failed"))
+                else -> Result.success(data)
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     @SuppressLint("MissingPermission")
-    fun sendData(data: ByteArray) {
-        val gatt = bluetoothGatt ?: run {
-            Log.e(TAG, "Not connected")
-            return
+    override suspend fun getDeviceStatus(): Result<ByteArray> {
+        return sendDataAndAwait(byteArrayOf(0x01))
+    }
+
+    @SuppressLint("MissingPermission")
+    override suspend fun getCurrentState(): Result<ByteArray> {
+        return sendDataAndAwait(byteArrayOf(0x02))
+    }
+
+    @SuppressLint("MissingPermission")
+    override suspend fun getTodaySummary(): Result<ByteArray> {
+        return sendDataAndAwait(byteArrayOf(0x03))
+    }
+
+    @SuppressLint("MissingPermission")
+    override suspend fun getLastReport(): Result<ByteArray> {
+        return sendDataAndAwait(byteArrayOf(0x04))
+    }
+
+    @SuppressLint("MissingPermission")
+    override suspend fun sessionControl(action: String, duration: Int?): Result<ByteArray> {
+        val actionByte = when (action) {
+            "start" -> 0x01.toByte()
+            "pause" -> 0x02.toByte()
+            "resume" -> 0x03.toByte()
+            "stop" -> 0x04.toByte()
+            else -> 0x00.toByte()
         }
-        val characteristic = writeCharacteristic ?: run {
-            Log.e(TAG, "Write characteristic not available")
-            return
-        }
-        characteristic.value = data
-        gatt.writeCharacteristic(characteristic)
+        val durationBytes = duration?.let {
+            byteArrayOf((it shr 8).toByte(), it.toByte())
+        } ?: byteArrayOf()
+        return sendDataAndAwait(byteArrayOf(0x05, actionByte) + durationBytes)
+    }
+
+    @SuppressLint("MissingPermission")
+    override suspend fun updatePreferences(key: String, value: String): Result<ByteArray> {
+        val keyBytes = key.toByteArray()
+        val valueBytes = value.toByteArray()
+        return sendDataAndAwait(byteArrayOf(0x06, keyBytes.size.toByte()) + keyBytes + valueBytes)
+    }
+
+    @SuppressLint("MissingPermission")
+    override suspend fun reminderAck(alertId: String): Result<ByteArray> {
+        return sendDataAndAwait(byteArrayOf(0x07) + alertId.toByteArray())
+    }
+
+    @SuppressLint("MissingPermission")
+    override suspend fun phoneSync(usage: PhoneUsage): Result<ByteArray> {
+        val screenTime = usage.screenTimeMinutes
+        val unlocks = usage.unlockCount
+        return sendDataAndAwait(byteArrayOf(
+            0x08,
+            (screenTime shr 8).toByte(),
+            screenTime.toByte(),
+            (unlocks shr 8).toByte(),
+            unlocks.toByte()
+        ))
     }
 
     private fun handleNotification(data: ByteArray) {
@@ -223,57 +359,5 @@ class BleManager @Inject constructor(
         }
         val message = if (data.size > 2) String(data, 2, data.size - 2) else "Alert"
         return AlertInfo(alertId = alertId, type = type, message = message)
-    }
-
-    override suspend fun getDeviceStatus(): ByteArray {
-        return byteArrayOf(0x01)
-    }
-
-    override suspend fun getCurrentState(): ByteArray {
-        return byteArrayOf(0x02)
-    }
-
-    override suspend fun getTodaySummary(): ByteArray {
-        return byteArrayOf(0x03)
-    }
-
-    override suspend fun getLastReport(): ByteArray {
-        return byteArrayOf(0x04)
-    }
-
-    override suspend fun sessionControl(action: String, duration: Int?): ByteArray {
-        val actionByte = when (action) {
-            "start" -> 0x01.toByte()
-            "pause" -> 0x02.toByte()
-            "resume" -> 0x03.toByte()
-            "stop" -> 0x04.toByte()
-            else -> 0x00.toByte()
-        }
-        val durationBytes = duration?.let {
-            byteArrayOf((it shr 8).toByte(), it.toByte())
-        } ?: byteArrayOf()
-        return byteArrayOf(0x05, actionByte) + durationBytes
-    }
-
-    override suspend fun updatePreferences(key: String, value: String): ByteArray {
-        val keyBytes = key.toByteArray()
-        val valueBytes = value.toByteArray()
-        return byteArrayOf(0x06, keyBytes.size.toByte()) + keyBytes + valueBytes
-    }
-
-    override suspend fun reminderAck(alertId: String): ByteArray {
-        return byteArrayOf(0x07) + alertId.toByteArray()
-    }
-
-    override suspend fun phoneSync(usage: PhoneUsage): ByteArray {
-        val screenTime = usage.screenTimeMinutes
-        val unlocks = usage.unlockCount
-        return byteArrayOf(
-            0x08,
-            (screenTime shr 8).toByte(),
-            screenTime.toByte(),
-            (unlocks shr 8).toByte(),
-            unlocks.toByte()
-        )
     }
 }

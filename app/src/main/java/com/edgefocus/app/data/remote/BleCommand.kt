@@ -7,12 +7,12 @@ data class PhoneUsage(
 )
 
 interface BleCommand {
-    suspend fun getDeviceStatus(): ByteArray
-    suspend fun getCurrentState(): ByteArray
-    suspend fun getTodaySummary(): ByteArray
-    suspend fun getLastReport(): ByteArray
-    suspend fun sessionControl(action: String, duration: Int? = null): ByteArray
-    suspend fun updatePreferences(key: String, value: String): ByteArray
-    suspend fun reminderAck(alertId: String): ByteArray
-    suspend fun phoneSync(usage: PhoneUsage): ByteArray
+    suspend fun getDeviceStatus(): Result<ByteArray>
+    suspend fun getCurrentState(): Result<ByteArray>
+    suspend fun getTodaySummary(): Result<ByteArray>
+    suspend fun getLastReport(): Result<ByteArray>
+    suspend fun sessionControl(action: String, duration: Int? = null): Result<ByteArray>
+    suspend fun updatePreferences(key: String, value: String): Result<ByteArray>
+    suspend fun reminderAck(alertId: String): Result<ByteArray>
+    suspend fun phoneSync(usage: PhoneUsage): Result<ByteArray>
 }

@@ -102,7 +102,9 @@ class BleForegroundService : Service() {
     private fun handleSendData(intent: Intent) {
         val data = intent.getByteArrayExtra(EXTRA_DATA) ?: return
         serviceScope.launch {
-            bleManager.sendData(data)
+            bleManager.sendData(data).onFailure { e ->
+                Log.e(TAG, "Failed to send data: ${e.message}")
+            }
         }
     }
 
