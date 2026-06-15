@@ -34,20 +34,24 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.edgefocus.app.data.remote.ConnectionState
 import com.edgefocus.app.domain.model.TimerState
+import com.edgefocus.app.presentation.viewmodel.BleViewModel
 import com.edgefocus.app.presentation.viewmodel.ControlPanelViewModel
-import com.edgefocus.app.presentation.viewmodel.NfcStatus
 import com.edgefocus.app.util.TimeUtils
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun ControlPanelScreen(
     viewModel: ControlPanelViewModel = hiltViewModel(),
+    bleViewModel: BleViewModel = hiltViewModel(),
     onBack: () -> Unit = {}
 ) {
     val uiState = viewModel.uiState.collectAsState().value
-    val pagerState = rememberPagerState(pageCount = { 3 })
+    val pagerState = rememberPagerState(pageCount = { 2 }) // 减少到2页
     val context = LocalContext.current
+    val connectionState by bleViewModel.connectionState.collectAsState()
+    val effectiveConnectionState = bleViewModel.getEffectiveConnectionState()
 
     Column(modifier = Modifier.fillMaxSize()) {
         TopAppBar(
@@ -70,19 +74,17 @@ fun ControlPanelScreen(
             when (page) {
                 0 -> TimerPage(viewModel = viewModel, uiState = uiState)
                 1 -> ConfigPage(viewModel = viewModel)
-                2 -> StatsPage(uiState = uiState, onEnableNfcRotation = {
-                    viewModel.enableNfcScreenRotation()
-                })
             }
         }
 
+        // 页面指示器
         Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(vertical = 12.dp),
             horizontalArrangement = Arrangement.Center
         ) {
-            repeat(3) { index ->
+            repeat(2) { index ->
                 Box(
                     modifier = Modifier
                         .padding(horizontal = 4.dp)
@@ -96,6 +98,40 @@ fun ControlPanelScreen(
                         )
                 )
             }
+        }
+
+        // BLE连接状态显示
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(8.dp)
+                    .clip(CircleShape)
+                    .background(
+                        when (effectiveConnectionState) {
+                            ConnectionState.CONNECTED -> MaterialTheme.colorScheme.primary
+                            ConnectionState.ERROR -> MaterialTheme.colorScheme.error
+                            else -> MaterialTheme.colorScheme.surfaceVariant
+                        }
+                    )
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = when (effectiveConnectionState) {
+                    ConnectionState.CONNECTED -> if (bleViewModel.isSimulatingBle()) "模拟连接" else "设备已连接"
+                    ConnectionState.SCANNING -> "扫描中..."
+                    ConnectionState.CONNECTING -> "连接中..."
+                    ConnectionState.ERROR -> "连接错误"
+                    ConnectionState.DISCONNECTED -> "未连接"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }
@@ -169,78 +205,6 @@ private fun TimerPage(
                 }
                 else -> {}
             }
-        }
-    }
-}
-
-@Composable
-private fun StatsPage(
-    uiState: com.edgefocus.app.presentation.viewmodel.ControlPanelUiState,
-    onEnableNfcRotation: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.Center
-    ) {
-        Text(
-            text = "连接状态",
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.primary
-        )
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        Row(
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(12.dp)
-                    .clip(CircleShape)
-                    .background(
-                        when (uiState.nfcStatus) {
-                            NfcStatus.AVAILABLE -> MaterialTheme.colorScheme.primary
-                            NfcStatus.UNAVAILABLE -> MaterialTheme.colorScheme.error
-                            NfcStatus.CHECKING -> MaterialTheme.colorScheme.surfaceVariant
-                        }
-                    )
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(
-                text = when (uiState.nfcStatus) {
-                    NfcStatus.AVAILABLE -> "NFC 已连接"
-                    NfcStatus.UNAVAILABLE -> "NFC 不可用"
-                    NfcStatus.CHECKING -> "检查 NFC..."
-                },
-                style = MaterialTheme.typography.bodyLarge
-            )
-        }
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        Text(
-            text = "会话统计",
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.primary
-        )
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        StatRow(label = "已完成会话", value = "${uiState.completedSessions}")
-        StatRow(label = "总专注时间", value = "${uiState.totalFocusMinutes} 分钟")
-        StatRow(label = "系统模式", value = when (uiState.systemMode) {
-            com.edgefocus.app.presentation.viewmodel.SystemMode.NORMAL -> "正常"
-            com.edgefocus.app.presentation.viewmodel.SystemMode.SILENT -> "静音"
-            com.edgefocus.app.presentation.viewmodel.SystemMode.HOME -> "家庭"
-        })
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        OutlinedButton(onClick = onEnableNfcRotation) {
-            Text("启用 NFC 屏幕旋转")
         }
     }
 }

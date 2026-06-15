@@ -99,22 +99,30 @@ class TestViewModel @Inject constructor(
     private fun loadInstalledApps() {
         viewModelScope.launch {
             val pm = getApplication<Application>().packageManager
-            val apps = pm.getInstalledApplications(PackageManager.GET_META_DATA)
-                .filter { app ->
-                    // 过滤掉系统应用，只显示用户安装的应用
-                    (app.flags and ApplicationInfo.FLAG_SYSTEM) == 0 ||
-                    pm.getLaunchIntentForPackage(app.packageName) != null
-                }
-                .map { app ->
+            val myPackageName = getApplication<Application>().packageName
+
+            // 获取所有有启动器入口的应用（排除自己）
+            val intent = android.content.Intent(android.content.Intent.ACTION_MAIN).apply {
+                addCategory(android.content.Intent.CATEGORY_LAUNCHER)
+            }
+            val resolveInfos = pm.queryIntentActivities(intent, 0)
+
+            val apps = resolveInfos
+                .map { resolveInfo ->
+                    val packageName = resolveInfo.activityInfo.packageName
+                    val appName = resolveInfo.loadLabel(pm).toString()
                     InstalledApp(
-                        packageName = app.packageName,
-                        appName = pm.getApplicationLabel(app).toString(),
+                        packageName = packageName,
+                        appName = appName,
                         isDistraction = false
                     )
                 }
+                .filter { it.packageName != myPackageName } // 排除自己
+                .distinctBy { it.packageName } // 去重
                 .sortedBy { it.appName.lowercase() }
 
             _uiState.value = _uiState.value.copy(installedApps = apps)
+            updateAppsDistractionStatus(_uiState.value.distractionApps)
         }
     }
 

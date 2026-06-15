@@ -1,10 +1,12 @@
 package com.edgefocus.app.presentation.viewmodel
 
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.edgefocus.app.domain.model.SessionType
 import com.edgefocus.app.domain.model.TimerState
 import com.edgefocus.app.domain.repository.ISettingsRepository
+import com.edgefocus.app.service.AppMonitorService
 import com.edgefocus.app.util.TimeUtils
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
@@ -26,8 +28,9 @@ data class TimerUiState(
 
 @HiltViewModel
 class HomeViewModel @Inject constructor(
+    application: Application,
     private val settingsRepository: ISettingsRepository
-) : ViewModel() {
+) : AndroidViewModel(application) {
 
     private val _uiState = MutableStateFlow(TimerUiState())
     val uiState: StateFlow<TimerUiState> = _uiState.asStateFlow()
@@ -40,6 +43,7 @@ class HomeViewModel @Inject constructor(
     private var sessionsBeforeLongBreak = 4
 
     private var stateBeforePause: TimerState? = null
+    private var currentSessionId: String? = null
 
     init {
         viewModelScope.launch {
@@ -60,6 +64,9 @@ class HomeViewModel @Inject constructor(
     fun startTimer() {
         val currentState = _uiState.value.timerState
         if (currentState == TimerState.IDLE) {
+            // 开始新会话
+            currentSessionId = "session_${System.currentTimeMillis()}"
+            startAppMonitor()
             _uiState.update { it.copy(timerState = TimerState.RUNNING) }
             startCountdown()
         } else if (currentState == TimerState.PAUSED) {
@@ -81,7 +88,24 @@ class HomeViewModel @Inject constructor(
 
     fun stopTimer() {
         countdownJob?.cancel()
+        stopAppMonitor()
         resetToIdle()
+    }
+
+    private fun startAppMonitor() {
+        try {
+            AppMonitorService.startService(getApplication(), currentSessionId)
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
+
+    private fun stopAppMonitor() {
+        try {
+            AppMonitorService.stopService(getApplication())
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
     }
 
     private fun startCountdown() {
@@ -149,6 +173,7 @@ class HomeViewModel @Inject constructor(
 
     private fun resetToIdle() {
         stateBeforePause = null
+        currentSessionId = null
         val workDuration = TimeUtils.minutesToMillis(workDurationMinutes)
         _uiState.update {
             it.copy(
@@ -163,5 +188,6 @@ class HomeViewModel @Inject constructor(
     override fun onCleared() {
         super.onCleared()
         countdownJob?.cancel()
+        stopAppMonitor()
     }
 }

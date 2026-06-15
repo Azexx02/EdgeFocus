@@ -94,7 +94,7 @@ fun SettingsScreen(
             Spacer(modifier = Modifier.height(16.dp))
 
             SettingSwitch(
-                label = "使用 EdgeFocus 开发板",
+                label = "使用EdgeFocus设备",
                 checked = settings.useEdgeFocusBoard,
                 onCheckedChange = { viewModel.updateUseEdgeFocusBoard(it) }
             )
