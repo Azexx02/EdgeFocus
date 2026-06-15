@@ -99,7 +99,8 @@ class ControlPanelViewModel @Inject constructor(
 
     fun startSession() {
         val duration = _uiState.value.selectedDuration
-        timerStateHolder.startSession(duration, true) // 使用板端
+        // 控制面板使用 EdgeFocus 模式
+        timerStateHolder.startEdgeFocusSession(duration)
     }
 
     fun pauseSession() {
