@@ -1,6 +1,8 @@
 package com.edgefocus.app.di
 
+import com.edgefocus.app.data.repository.SessionRepository
 import com.edgefocus.app.data.repository.SettingsRepository
+import com.edgefocus.app.domain.repository.ISessionRepository
 import com.edgefocus.app.domain.repository.ISettingsRepository
 import dagger.Binds
 import dagger.Module
@@ -16,4 +18,10 @@ abstract class RepositoryModule {
     abstract fun bindSettingsRepository(
         settingsRepository: SettingsRepository
     ): ISettingsRepository
+
+    @Binds
+    @Singleton
+    abstract fun bindSessionRepository(
+        sessionRepository: SessionRepository
+    ): ISessionRepository
 }
