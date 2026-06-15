@@ -12,6 +12,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -21,6 +22,7 @@ import com.edgefocus.app.domain.model.SessionType
 import com.edgefocus.app.domain.model.TimerState
 import com.edgefocus.app.presentation.viewmodel.BleViewModel
 import com.edgefocus.app.presentation.viewmodel.HomeViewModel
+import kotlinx.coroutines.launch
 
 @Composable
 fun HomeScreen(
@@ -29,6 +31,7 @@ fun HomeScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val connectionState by bleViewModel.connectionState.collectAsState()
+    val scope = rememberCoroutineScope()
 
     Column(
         modifier = Modifier
@@ -85,29 +88,41 @@ fun HomeScreen(
         Button(
             onClick = {
                 when (uiState.timerState) {
-                    TimerState.IDLE, TimerState.PAUSED -> {
-                        viewModel.startTimer()
-                        if (bleViewModel.isConnected()) {
+                    TimerState.IDLE -> {
+                        scope.launch {
                             val durationMin = (uiState.totalTime / 60000).toInt()
-                            bleViewModel.sendSessionCommand("start", durationMin)
+                            if (!bleViewModel.isConnected() ||
+                                bleViewModel.sendSessionCommand("start", durationMin)
+                            ) {
+                                viewModel.startTimer()
+                            }
+                        }
+                    }
+                    TimerState.PAUSED -> {
+                        scope.launch {
+                            if (!bleViewModel.isConnected() ||
+                                bleViewModel.sendSessionCommand("resume")
+                            ) {
+                                viewModel.startTimer()
+                            }
                         }
                     }
                     TimerState.RUNNING -> {
                         viewModel.pauseTimer()
                         if (bleViewModel.isConnected()) {
-                            bleViewModel.sendSessionCommand("pause")
+                            scope.launch { bleViewModel.sendSessionCommand("pause") }
                         }
                     }
                     TimerState.BREAK -> {
                         viewModel.pauseTimer()
                         if (bleViewModel.isConnected()) {
-                            bleViewModel.sendSessionCommand("pause")
+                            scope.launch { bleViewModel.sendSessionCommand("pause") }
                         }
                     }
                     TimerState.FINISHED -> {
                         viewModel.stopTimer()
                         if (bleViewModel.isConnected()) {
-                            bleViewModel.sendSessionCommand("stop")
+                            scope.launch { bleViewModel.sendSessionCommand("stop") }
                         }
                     }
                 }
@@ -129,7 +144,7 @@ fun HomeScreen(
         Button(onClick = {
             viewModel.stopTimer()
             if (bleViewModel.isConnected()) {
-                bleViewModel.sendSessionCommand("stop")
+                scope.launch { bleViewModel.sendSessionCommand("stop") }
             }
         }) {
             Text(text = "Stop")
