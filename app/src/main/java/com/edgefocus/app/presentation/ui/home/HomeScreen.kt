@@ -42,6 +42,8 @@ fun HomeScreen(
 
     // 获取有效的连接状态（考虑模拟模式）
     val effectiveConnectionState = bleViewModel.getEffectiveConnectionState()
+    val useBoard = settings.useEdgeFocusBoard
+    val isConnected = bleViewModel.isConnected()
 
     Column(
         modifier = Modifier
@@ -68,7 +70,7 @@ fun HomeScreen(
                     ConnectionState.SCANNING -> "扫描中..."
                     ConnectionState.CONNECTING -> "连接中..."
                     ConnectionState.ERROR -> "蓝牙错误"
-                    ConnectionState.DISCONNECTED -> "蓝牙未连接"
+                    ConnectionState.DISCONNECTED -> if (useBoard) "蓝牙未连接" else "独立模式"
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = if (effectiveConnectionState == ConnectionState.CONNECTED)
@@ -119,54 +121,49 @@ fun HomeScreen(
                 onClick = {
                     when (uiState.timerState) {
                         TimerState.IDLE -> {
-                            // 检查是否需要 BLE 连接
-                            val useBoard = settings?.useEdgeFocusBoard ?: true
-                            if (useBoard && !bleViewModel.isConnected()) {
-                                // 需要 BLE 但未连接，不启动
+                            // 如果需要BLE但未连接，不启动
+                            if (useBoard && !isConnected) {
                                 return@Button
                             }
                             scope.launch {
-                                val durationMin = (uiState.totalTime / 60000).toInt()
-                                if (!bleViewModel.isConnected() ||
+                                // 只有在连接状态下才发送BLE命令
+                                if (isConnected) {
+                                    val durationMin = (uiState.totalTime / 60000).toInt()
                                     bleViewModel.sendSessionCommand("start", durationMin)
-                                ) {
-                                    viewModel.startTimer()
                                 }
+                                viewModel.startTimer()
                             }
                         }
                         TimerState.PAUSED -> {
                             scope.launch {
-                                if (!bleViewModel.isConnected() ||
+                                if (isConnected) {
                                     bleViewModel.sendSessionCommand("resume")
-                                ) {
-                                    viewModel.startTimer()
                                 }
+                                viewModel.startTimer()
                             }
                         }
                         TimerState.RUNNING -> {
                             viewModel.pauseTimer()
-                            if (bleViewModel.isConnected()) {
+                            if (isConnected) {
                                 scope.launch { bleViewModel.sendSessionCommand("pause") }
                             }
                         }
                         TimerState.BREAK -> {
                             viewModel.pauseTimer()
-                            if (bleViewModel.isConnected()) {
+                            if (isConnected) {
                                 scope.launch { bleViewModel.sendSessionCommand("pause") }
                             }
                         }
                         TimerState.FINISHED -> {
                             viewModel.stopTimer()
-                            if (bleViewModel.isConnected()) {
+                            if (isConnected) {
                                 scope.launch { bleViewModel.sendSessionCommand("stop") }
                             }
                         }
                     }
                 },
                 modifier = Modifier.fillMaxWidth(),
-                enabled = !(settings?.useEdgeFocusBoard == true &&
-                        !bleViewModel.isConnected() &&
-                        uiState.timerState == TimerState.IDLE)
+                enabled = !(useBoard && !isConnected && uiState.timerState == TimerState.IDLE)
             ) {
                 Text(
                     text = when (uiState.timerState) {
@@ -188,7 +185,7 @@ fun HomeScreen(
                 OutlinedButton(
                     onClick = {
                         viewModel.stopTimer()
-                        if (bleViewModel.isConnected()) {
+                        if (isConnected) {
                             scope.launch { bleViewModel.sendSessionCommand("stop") }
                         }
                     },
@@ -208,7 +205,7 @@ fun HomeScreen(
             }
 
             // 如果使用 EdgeFocus Board 但未连接，显示提示
-            if (settings?.useEdgeFocusBoard == true && !bleViewModel.isConnected()) {
+            if (useBoard && !isConnected) {
                 Text(
                     text = "请先连接 EdgeFocus 设备",
                     style = MaterialTheme.typography.bodySmall,

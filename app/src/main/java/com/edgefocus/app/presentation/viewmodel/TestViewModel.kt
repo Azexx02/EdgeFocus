@@ -117,30 +117,56 @@ class TestViewModel @Inject constructor(
 
     private fun loadInstalledApps() {
         viewModelScope.launch {
-            val pm = getApplication<Application>().packageManager
-            val myPackageName = getApplication<Application>().packageName
+            try {
+                val pm = getApplication<Application>().packageManager
+                val myPackageName = getApplication<Application>().packageName
 
-            val intent = android.content.Intent(android.content.Intent.ACTION_MAIN).apply {
-                addCategory(android.content.Intent.CATEGORY_LAUNCHER)
-            }
-            val resolveInfos = pm.queryIntentActivities(intent, 0)
-
-            val apps = resolveInfos
-                .map { resolveInfo ->
-                    val packageName = resolveInfo.activityInfo.packageName
-                    val appName = resolveInfo.loadLabel(pm).toString()
-                    InstalledApp(
-                        packageName = packageName,
-                        appName = appName,
-                        distractionLevel = DistractionLevel.BACKGROUND
-                    )
+                // 方法1：通过launcher intent获取
+                val intent = android.content.Intent(android.content.Intent.ACTION_MAIN).apply {
+                    addCategory(android.content.Intent.CATEGORY_LAUNCHER)
                 }
-                .filter { it.packageName != myPackageName }
-                .distinctBy { it.packageName }
-                .sortedBy { it.appName.lowercase() }
+                val resolveInfos = pm.queryIntentActivities(intent, PackageManager.MATCH_ALL)
 
-            _uiState.value = _uiState.value.copy(installedApps = apps)
-            updateAppsDistractionLevels(_uiState.value.distractionLevels)
+                val apps = mutableMapOf<String, InstalledApp>()
+
+                resolveInfos.forEach { resolveInfo ->
+                    val packageName = resolveInfo.activityInfo.packageName
+                    if (packageName != myPackageName && !apps.containsKey(packageName)) {
+                        val appName = resolveInfo.loadLabel(pm).toString()
+                        apps[packageName] = InstalledApp(
+                            packageName = packageName,
+                            appName = appName,
+                            distractionLevel = DistractionLevel.BACKGROUND
+                        )
+                    }
+                }
+
+                // 方法2：如果launcher intent获取的应用太少，补充通过getInstalledApplications获取
+                if (apps.size < 20) {
+                    val installedApps = pm.getInstalledApplications(PackageManager.GET_META_DATA)
+                    installedApps.forEach { appInfo ->
+                        val packageName = appInfo.packageName
+                        if (packageName != myPackageName && !apps.containsKey(packageName)) {
+                            // 检查是否有启动器activity
+                            val launchIntent = pm.getLaunchIntentForPackage(packageName)
+                            if (launchIntent != null) {
+                                val appName = pm.getApplicationLabel(appInfo).toString()
+                                apps[packageName] = InstalledApp(
+                                    packageName = packageName,
+                                    appName = appName,
+                                    distractionLevel = DistractionLevel.BACKGROUND
+                                )
+                            }
+                        }
+                    }
+                }
+
+                val sortedApps = apps.values.sortedBy { it.appName.lowercase() }
+                _uiState.value = _uiState.value.copy(installedApps = sortedApps)
+                updateAppsDistractionLevels(_uiState.value.distractionLevels)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
         }
     }
 

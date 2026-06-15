@@ -148,9 +148,9 @@ private fun TimerPage(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .padding(16.dp),
+            .padding(horizontal = 16.dp, vertical = 8.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center
+        verticalArrangement = Arrangement.SpaceEvenly
     ) {
         Text(
             text = when (uiState.timerState) {
@@ -164,14 +164,10 @@ private fun TimerPage(
             color = MaterialTheme.colorScheme.primary
         )
 
-        Spacer(modifier = Modifier.height(24.dp))
-
         TimerDial(
             selectedMinutes = uiState.selectedDuration,
             onMinutesChanged = { viewModel.updateSelectedDuration(it) }
         )
-
-        Spacer(modifier = Modifier.height(8.dp))
 
         Text(
             text = TimeUtils.formatTime(uiState.timeRemaining),

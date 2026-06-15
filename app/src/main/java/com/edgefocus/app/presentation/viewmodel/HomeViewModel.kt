@@ -94,8 +94,17 @@ class HomeViewModel @Inject constructor(
 
     private fun startAppMonitor() {
         try {
-            AppMonitorService.startService(getApplication(), currentSessionId)
+            val context = getApplication<Application>()
+            // 检查是否有前台服务权限
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+                // Android 8.0+ 需要前台服务
+                AppMonitorService.startService(context, currentSessionId)
+            } else {
+                AppMonitorService.startService(context, currentSessionId)
+            }
         } catch (e: Exception) {
+            // 如果启动服务失败，记录错误但不阻止计时器运行
+            android.util.Log.e("HomeViewModel", "Failed to start AppMonitorService: ${e.message}")
             e.printStackTrace()
         }
     }

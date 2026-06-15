@@ -44,7 +44,7 @@ fun TimerDial(
         BoxWithConstraints(
             contentAlignment = Alignment.Center,
             modifier = Modifier
-                .fillMaxWidth(0.7f)
+                .fillMaxWidth(0.6f)
                 .aspectRatio(1f)
         ) {
             val size = constraints.maxWidth.toFloat()
