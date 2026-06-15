@@ -21,6 +21,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.unit.dp
 import kotlin.math.atan2
 
 @Composable
@@ -67,9 +68,9 @@ fun TimerDial(
                         }
                     }
             ) {
-                val strokeWidth = 12.dp.toPx()
-                val diameter = this.size.minDimension - strokeWidth
-                val topLeft = Offset(strokeWidth / 2f, strokeWidth / 2f)
+                val strokeWidthPx = 12.dp.toPx()
+                val diameter = this.size.minDimension - strokeWidthPx
+                val topLeft = Offset(strokeWidthPx / 2f, strokeWidthPx / 2f)
                 val arcSize = Size(diameter, diameter)
 
                 // 背景轨道
@@ -80,7 +81,7 @@ fun TimerDial(
                     useCenter = false,
                     topLeft = topLeft,
                     size = arcSize,
-                    style = Stroke(width = strokeWidth, cap = StrokeCap.Round)
+                    style = Stroke(width = strokeWidthPx, cap = StrokeCap.Round)
                 )
 
                 // 进度弧
@@ -92,7 +93,7 @@ fun TimerDial(
                     useCenter = false,
                     topLeft = topLeft,
                     size = arcSize,
-                    style = Stroke(width = strokeWidth, cap = StrokeCap.Round)
+                    style = Stroke(width = strokeWidthPx, cap = StrokeCap.Round)
                 )
 
                 // 指示器圆点
@@ -105,7 +106,7 @@ fun TimerDial(
 
                 drawCircle(
                     color = indicatorColor,
-                    radius = strokeWidth,
+                    radius = strokeWidthPx,
                     center = Offset(indicatorX, indicatorY)
                 )
             }
