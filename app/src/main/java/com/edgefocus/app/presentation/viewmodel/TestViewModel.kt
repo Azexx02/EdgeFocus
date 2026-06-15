@@ -1,12 +1,10 @@
 package com.edgefocus.app.presentation.viewmodel
 
 import android.app.Application
-import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.edgefocus.app.data.remote.BleManager
-import com.edgefocus.app.data.remote.ConnectionState
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -14,15 +12,28 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
+enum class DistractionLevel(val value: Int, val label: String, val description: String) {
+    LEARNING(0, "学习软件", "不提醒"),
+    LOW(1, "弱干扰源", "建议：日常社交媒体"),
+    HIGH(2, "强干扰源", "建议：短视频、游戏"),
+    BACKGROUND(3, "后台/未分类", "退出到后台时的状态");
+
+    companion object {
+        fun fromValue(value: Int): DistractionLevel {
+            return entries.find { it.value == value } ?: BACKGROUND
+        }
+    }
+}
+
 data class InstalledApp(
     val packageName: String,
     val appName: String,
-    val isDistraction: Boolean
+    val distractionLevel: DistractionLevel = DistractionLevel.BACKGROUND
 )
 
 data class BleLog(
     val timestamp: Long = System.currentTimeMillis(),
-    val direction: String = "UNKNOWN", // "SEND" or "RECEIVE"
+    val direction: String = "UNKNOWN",
     val content: String
 )
 
@@ -30,7 +41,7 @@ data class TestUiState(
     val simulateBleConnected: Boolean = false,
     val bleLogs: List<BleLog> = emptyList(),
     val installedApps: List<InstalledApp> = emptyList(),
-    val distractionApps: Set<String> = emptySet()
+    val distractionLevels: Map<String, Int> = emptyMap() // packageName -> level
 )
 
 @HiltViewModel
@@ -45,15 +56,13 @@ class TestViewModel @Inject constructor(
     private val prefs = application.getSharedPreferences("test_prefs", 0)
 
     init {
-        // 恢复模拟状态
         val simulateBle = prefs.getBoolean("simulate_ble", false)
         _uiState.value = _uiState.value.copy(simulateBleConnected = simulateBle)
 
         loadInstalledApps()
-        loadDistractionApps()
+        loadDistractionLevels()
         loadBleLogs()
 
-        // 连接 BLE 日志监听
         bleManager.setBleLogListener { direction, content ->
             addBleLog(direction, content)
         }
@@ -68,7 +77,7 @@ class TestViewModel @Inject constructor(
     fun addBleLog(direction: String, content: String) {
         val log = BleLog(direction = direction, content = content)
         val currentLogs = _uiState.value.bleLogs.toMutableList()
-        currentLogs.add(0, log) // 添加到开头
+        currentLogs.add(0, log)
         if (currentLogs.size > 100) {
             currentLogs.removeAt(currentLogs.size - 1)
         }
@@ -81,15 +90,25 @@ class TestViewModel @Inject constructor(
         prefs.edit().remove("ble_logs").apply()
     }
 
-    fun toggleDistractionApp(packageName: String) {
-        val current = _uiState.value.distractionApps.toMutableSet()
-        if (current.contains(packageName)) {
+    fun setDistractionLevel(packageName: String, level: DistractionLevel) {
+        val current = _uiState.value.distractionLevels.toMutableMap()
+        if (level == DistractionLevel.BACKGROUND) {
             current.remove(packageName)
         } else {
-            current.add(packageName)
+            current[packageName] = level.value
         }
-        _uiState.value = _uiState.value.copy(distractionApps = current)
-        saveDistractionApps(current)
+        _uiState.value = _uiState.value.copy(distractionLevels = current)
+        saveDistractionLevels(current)
+        updateAppsDistractionLevels(current)
+    }
+
+    fun getDistractionLevel(packageName: String): DistractionLevel {
+        val levelValue = _uiState.value.distractionLevels[packageName]
+        return if (levelValue != null) {
+            DistractionLevel.fromValue(levelValue)
+        } else {
+            DistractionLevel.BACKGROUND
+        }
     }
 
     fun isSimulatingBle(): Boolean {
@@ -101,7 +120,6 @@ class TestViewModel @Inject constructor(
             val pm = getApplication<Application>().packageManager
             val myPackageName = getApplication<Application>().packageName
 
-            // 获取所有有启动器入口的应用（排除自己）
             val intent = android.content.Intent(android.content.Intent.ACTION_MAIN).apply {
                 addCategory(android.content.Intent.CATEGORY_LAUNCHER)
             }
@@ -114,34 +132,50 @@ class TestViewModel @Inject constructor(
                     InstalledApp(
                         packageName = packageName,
                         appName = appName,
-                        isDistraction = false
+                        distractionLevel = DistractionLevel.BACKGROUND
                     )
                 }
-                .filter { it.packageName != myPackageName } // 排除自己
-                .distinctBy { it.packageName } // 去重
+                .filter { it.packageName != myPackageName }
+                .distinctBy { it.packageName }
                 .sortedBy { it.appName.lowercase() }
 
             _uiState.value = _uiState.value.copy(installedApps = apps)
-            updateAppsDistractionStatus(_uiState.value.distractionApps)
+            updateAppsDistractionLevels(_uiState.value.distractionLevels)
         }
     }
 
-    private fun loadDistractionApps() {
-        val saved = prefs.getStringSet("distraction_apps", emptySet()) ?: emptySet()
-        _uiState.value = _uiState.value.copy(distractionApps = saved)
+    private fun loadDistractionLevels() {
+        val saved = prefs.getString("distraction_levels", "") ?: ""
+        if (saved.isNotEmpty()) {
+            val levels = saved.split(";").filter { it.isNotEmpty() }.associate { entry ->
+                val parts = entry.split("=")
+                if (parts.size == 2) {
+                    parts[0] to parts[1].toIntOrNull() ?: 3
+                } else {
+                    "" to 3
+                }
+            }.filterKeys { it.isNotEmpty() }
 
-        // 更新 installedApps 的 isDistraction 状态
-        updateAppsDistractionStatus(saved)
+            _uiState.value = _uiState.value.copy(distractionLevels = levels)
+            updateAppsDistractionLevels(levels)
+        }
     }
 
-    private fun saveDistractionApps(apps: Set<String>) {
-        prefs.edit().putStringSet("distraction_apps", apps).apply()
-        updateAppsDistractionStatus(apps)
+    private fun saveDistractionLevels(levels: Map<String, Int>) {
+        val serialized = levels.entries.joinToString(";") { "${it.key}=${it.value}" }
+        prefs.edit().putString("distraction_levels", serialized).apply()
     }
 
-    private fun updateAppsDistractionStatus(distractionApps: Set<String>) {
+    private fun updateAppsDistractionLevels(levels: Map<String, Int>) {
         val updatedApps = _uiState.value.installedApps.map { app ->
-            app.copy(isDistraction = distractionApps.contains(app.packageName))
+            val levelValue = levels[app.packageName]
+            app.copy(
+                distractionLevel = if (levelValue != null) {
+                    DistractionLevel.fromValue(levelValue)
+                } else {
+                    DistractionLevel.BACKGROUND
+                }
+            )
         }
         _uiState.value = _uiState.value.copy(installedApps = updatedApps)
     }

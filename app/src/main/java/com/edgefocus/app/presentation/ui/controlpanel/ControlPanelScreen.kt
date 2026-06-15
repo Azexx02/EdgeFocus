@@ -19,6 +19,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -28,6 +30,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -48,9 +51,8 @@ fun ControlPanelScreen(
     onBack: () -> Unit = {}
 ) {
     val uiState = viewModel.uiState.collectAsState().value
-    val pagerState = rememberPagerState(pageCount = { 2 }) // 减少到2页
+    val pagerState = rememberPagerState(pageCount = { 3 })
     val context = LocalContext.current
-    val connectionState by bleViewModel.connectionState.collectAsState()
     val effectiveConnectionState = bleViewModel.getEffectiveConnectionState()
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -74,6 +76,7 @@ fun ControlPanelScreen(
             when (page) {
                 0 -> TimerPage(viewModel = viewModel, uiState = uiState)
                 1 -> ConfigPage(viewModel = viewModel)
+                2 -> SessionStatsPage(uiState = uiState)
             }
         }
 
@@ -84,7 +87,7 @@ fun ControlPanelScreen(
                 .padding(vertical = 12.dp),
             horizontalArrangement = Arrangement.Center
         ) {
-            repeat(2) { index ->
+            repeat(3) { index ->
                 Box(
                     modifier = Modifier
                         .padding(horizontal = 4.dp)
@@ -204,6 +207,111 @@ private fun TimerPage(
                     }
                 }
                 else -> {}
+            }
+        }
+    }
+}
+
+@Composable
+private fun SessionStatsPage(
+    uiState: com.edgefocus.app.presentation.viewmodel.ControlPanelUiState,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)
+    ) {
+        Text(
+            text = "本次会话统计",
+            style = MaterialTheme.typography.titleLarge,
+            color = MaterialTheme.colorScheme.primary
+        )
+
+        // 状态卡片
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.primaryContainer
+            )
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    text = "当前状态",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = when (uiState.timerState) {
+                        TimerState.IDLE -> "等待开始"
+                        TimerState.RUNNING -> "专注进行中"
+                        TimerState.PAUSED -> "已暂停"
+                        TimerState.FINISHED -> "已完成"
+                        else -> "未知"
+                    },
+                    style = MaterialTheme.typography.headlineSmall,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                )
+            }
+        }
+
+        // 时间统计
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant
+            )
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    text = "时间统计",
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+
+                StatRow(
+                    label = "计划专注时长",
+                    value = "${uiState.selectedDuration} 分钟"
+                )
+                StatRow(
+                    label = "剩余时间",
+                    value = TimeUtils.formatTime(uiState.timeRemaining)
+                )
+                StatRow(
+                    label = "已进行时间",
+                    value = TimeUtils.formatTime(uiState.selectedDuration * 60 * 1000L - uiState.timeRemaining)
+                )
+            }
+        }
+
+        // 连接信息
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceVariant
+            )
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text(
+                    text = "设备信息",
+                    style = MaterialTheme.typography.titleMedium
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+
+                StatRow(
+                    label = "系统模式",
+                    value = when (uiState.systemMode) {
+                        com.edgefocus.app.presentation.viewmodel.SystemMode.NORMAL -> "正常"
+                        com.edgefocus.app.presentation.viewmodel.SystemMode.SILENT -> "静音"
+                        com.edgefocus.app.presentation.viewmodel.SystemMode.HOME -> "家庭"
+                    }
+                )
+                StatRow(
+                    label = "离座超时",
+                    value = "${uiState.awayTimeout} 分钟"
+                )
             }
         }
     }

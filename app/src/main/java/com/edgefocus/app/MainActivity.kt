@@ -5,10 +5,10 @@ import android.app.AppOpsManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -16,28 +16,60 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
-import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.ProcessLifecycleOwner
 import com.edgefocus.app.presentation.navigation.NavigationGraph
 import com.edgefocus.app.presentation.ui.theme.EdgeFocusTheme
+import com.edgefocus.app.service.AppMonitorService
 import dagger.hilt.android.AndroidEntryPoint
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
+
+    companion object {
+        private const val TAG = "MainActivity"
+    }
+
+    private var wasInBackground = false
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
     ) { permissions ->
         val allGranted = permissions.entries.all { it.value }
         if (!allGranted) {
-            // 权限未全部授予，但不阻止应用运行
+            Log.w(TAG, "Some permissions were not granted")
         }
         checkUsageStatsPermission()
+    }
+
+    private val lifecycleObserver = LifecycleEventObserver { _, event ->
+        when (event) {
+            Lifecycle.Event.ON_STOP -> {
+                // 应用进入后台
+                Log.d(TAG, "App went to background")
+                wasInBackground = true
+                AppMonitorService.notifyAppToBackground(this)
+            }
+            Lifecycle.Event.ON_START -> {
+                // 应用回到前台
+                if (wasInBackground) {
+                    Log.d(TAG, "App returned to foreground")
+                    wasInBackground = false
+                    AppMonitorService.notifyAppToForeground(this)
+                }
+            }
+            else -> {}
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         requestPermissions()
+
+        // 注册生命周期观察者
+        ProcessLifecycleOwner.get().lifecycle.addObserver(lifecycleObserver)
 
         setContent {
             EdgeFocusTheme {
@@ -49,6 +81,11 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        ProcessLifecycleOwner.get().lifecycle.removeObserver(lifecycleObserver)
     }
 
     private fun requestPermissions() {
@@ -91,7 +128,6 @@ class MainActivity : ComponentActivity() {
             packageName
         )
         if (mode != AppOpsManager.MODE_ALLOWED) {
-            // 引导用户开启使用情况访问权限
             val intent = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
             startActivity(intent)
         }
