@@ -192,8 +192,8 @@ class AppMonitorService : Service() {
             return
         }
 
-        // 2. 无前台应用（锁屏）- 后台通知，每10秒
-        if (foregroundPackage == null) {
+        // 2. 无前台应用（锁屏）或桌面 - 后台通知，每10秒
+        if (foregroundPackage == null || isLauncherApp(foregroundPackage)) {
             if (now - lastBackgroundAlert >= BACKGROUND_INTERVAL) {
                 lastBackgroundAlert = now
                 showBackgroundNotification()
@@ -380,6 +380,14 @@ class AppMonitorService : Service() {
         } catch (e: Exception) {
             packageName
         }
+    }
+
+    private fun isLauncherApp(packageName: String): Boolean {
+        val intent = android.content.Intent(android.content.Intent.ACTION_MAIN).apply {
+            addCategory(android.content.Intent.CATEGORY_HOME)
+        }
+        val resolveInfo = packageManager.resolveActivity(intent, 0)
+        return resolveInfo?.activityInfo?.packageName == packageName
     }
 
     private suspend fun recordCurrentAppUsage() {
