@@ -71,9 +71,19 @@ class BleManager @Inject constructor(
     val deviceStatus: StateFlow<DeviceStatus?> = _deviceStatus.asStateFlow()
 
     private var pushEventHandler: PushEventHandler? = null
+    private var bleLogListener: ((String, String) -> Unit)? = null
 
     fun setPushEventHandler(handler: PushEventHandler) {
         this.pushEventHandler = handler
+    }
+
+    fun setBleLogListener(listener: (direction: String, content: String) -> Unit) {
+        this.bleLogListener = listener
+    }
+
+    private fun logBle(direction: String, content: String) {
+        Log.d(TAG, "BLE $direction: $content")
+        bleLogListener?.invoke(direction, content)
     }
 
     private val scanCallback = object : ScanCallback() {
@@ -155,7 +165,9 @@ class BleManager @Inject constructor(
             characteristic: BluetoothGattCharacteristic
         ) {
             if (characteristic.uuid == CHAR_NOTIFY_UUID) {
-                handleNotification(characteristic.value)
+                val data = characteristic.value
+                logBle("RECEIVE", dataToString(data))
+                handleNotification(data)
             }
         }
 
@@ -218,6 +230,7 @@ class BleManager @Inject constructor(
     }
 
     private suspend fun sendDataAndAwait(data: ByteArray): Result<ByteArray> {
+        logBle("SEND", dataToString(data))
         return try {
             val gatt: BluetoothGatt
             val characteristic: BluetoothGattCharacteristic
@@ -257,6 +270,14 @@ class BleManager @Inject constructor(
             }
         } catch (e: Exception) {
             Result.failure(e)
+        }
+    }
+
+    private fun dataToString(data: ByteArray): String {
+        return try {
+            String(data, Charsets.UTF_8)
+        } catch (e: Exception) {
+            data.joinToString(" ") { String.format("%02X", it) }
         }
     }
 

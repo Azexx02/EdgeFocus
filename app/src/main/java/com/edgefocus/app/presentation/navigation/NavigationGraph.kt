@@ -13,12 +13,16 @@ import com.edgefocus.app.ControlPanelActivity
 import com.edgefocus.app.presentation.ui.components.BottomNavigationBar
 import com.edgefocus.app.presentation.ui.dashboard.DashboardScreen
 import com.edgefocus.app.presentation.ui.home.HomeScreen
+import com.edgefocus.app.presentation.ui.settings.DistractionAppsScreen
 import com.edgefocus.app.presentation.ui.settings.SettingsScreen
+import com.edgefocus.app.presentation.ui.settings.TestScreen
 
 sealed class Screen(val route: String) {
     data object Home : Screen("home")
     data object Dashboard : Screen("dashboard")
     data object Settings : Screen("settings")
+    data object DistractionApps : Screen("distraction_apps")
+    data object Test : Screen("test")
 }
 
 @Composable
@@ -48,7 +52,24 @@ fun NavigationGraph() {
                 DashboardScreen()
             }
             composable(Screen.Settings.route) {
-                SettingsScreen()
+                SettingsScreen(
+                    onNavigateToDistractionApps = {
+                        navController.navigate(Screen.DistractionApps.route)
+                    },
+                    onNavigateToTest = {
+                        navController.navigate(Screen.Test.route)
+                    }
+                )
+            }
+            composable(Screen.DistractionApps.route) {
+                DistractionAppsScreen(
+                    onBack = { navController.popBackStack() }
+                )
+            }
+            composable(Screen.Test.route) {
+                TestScreen(
+                    onBack = { navController.popBackStack() }
+                )
             }
         }
     }

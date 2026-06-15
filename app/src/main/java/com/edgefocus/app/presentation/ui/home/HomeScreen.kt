@@ -1,8 +1,5 @@
 package com.edgefocus.app.presentation.ui.home
 
-import android.app.Activity
-import android.content.Intent
-import android.content.res.Configuration
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -11,9 +8,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -23,10 +18,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
-import com.edgefocus.app.ControlPanelActivity
 import com.edgefocus.app.data.remote.ConnectionState
 import com.edgefocus.app.domain.model.SessionType
 import com.edgefocus.app.domain.model.TimerState
@@ -46,7 +39,9 @@ fun HomeScreen(
     val connectionState by bleViewModel.connectionState.collectAsState()
     val settings by settingsViewModel.settings.collectAsState()
     val scope = rememberCoroutineScope()
-    val context = LocalContext.current
+
+    // 获取有效的连接状态（考虑模拟模式）
+    val effectiveConnectionState = bleViewModel.getEffectiveConnectionState()
 
     Column(
         modifier = Modifier
@@ -68,15 +63,15 @@ fun HomeScreen(
             Spacer(modifier = Modifier.height(8.dp))
 
             Text(
-                text = when (connectionState) {
-                    ConnectionState.CONNECTED -> "蓝牙已连接"
+                text = when (effectiveConnectionState) {
+                    ConnectionState.CONNECTED -> if (bleViewModel.isSimulatingBle()) "模拟连接" else "蓝牙已连接"
                     ConnectionState.SCANNING -> "扫描中..."
                     ConnectionState.CONNECTING -> "连接中..."
                     ConnectionState.ERROR -> "蓝牙错误"
                     ConnectionState.DISCONNECTED -> "蓝牙未连接"
                 },
                 style = MaterialTheme.typography.bodySmall,
-                color = if (connectionState == ConnectionState.CONNECTED)
+                color = if (effectiveConnectionState == ConnectionState.CONNECTED)
                     MaterialTheme.colorScheme.primary
                 else
                     MaterialTheme.colorScheme.onSurfaceVariant
@@ -126,7 +121,7 @@ fun HomeScreen(
                         TimerState.IDLE -> {
                             // 检查是否需要 BLE 连接
                             val useBoard = settings?.useEdgeFocusBoard ?: true
-                            if (useBoard && connectionState != ConnectionState.CONNECTED) {
+                            if (useBoard && !bleViewModel.isConnected()) {
                                 // 需要 BLE 但未连接，不启动
                                 return@Button
                             }
@@ -170,7 +165,7 @@ fun HomeScreen(
                 },
                 modifier = Modifier.fillMaxWidth(),
                 enabled = !(settings?.useEdgeFocusBoard == true &&
-                        connectionState != ConnectionState.CONNECTED &&
+                        !bleViewModel.isConnected() &&
                         uiState.timerState == TimerState.IDLE)
             ) {
                 Text(
@@ -213,7 +208,7 @@ fun HomeScreen(
             }
 
             // 如果使用 EdgeFocus Board 但未连接，显示提示
-            if (settings?.useEdgeFocusBoard == true && connectionState != ConnectionState.CONNECTED) {
+            if (settings?.useEdgeFocusBoard == true && !bleViewModel.isConnected()) {
                 Text(
                     text = "请先连接 EdgeFocus 设备",
                     style = MaterialTheme.typography.bodySmall,
