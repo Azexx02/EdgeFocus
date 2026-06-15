@@ -1,4 +1,4 @@
-package com.edgefocus.app.presentation.ui.navigation
+package com.edgefocus.app.presentation.navigation
 
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -18,7 +18,6 @@ sealed class Screen(val route: String) {
     data object Home : Screen("home")
     data object Dashboard : Screen("dashboard")
     data object Settings : Screen("settings")
-    data object ControlPanel : Screen("control_panel")
 }
 
 @Composable
@@ -46,11 +45,6 @@ fun NavigationGraph() {
             composable(Screen.Settings.route) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                     Text("Settings")
-                }
-            }
-            composable(Screen.ControlPanel.route) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("Control Panel")
                 }
             }
         }
