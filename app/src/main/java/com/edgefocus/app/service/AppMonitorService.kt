@@ -119,12 +119,10 @@ class AppMonitorService : Service() {
                 stopSelf()
             }
             ACTION_APP_TO_BACKGROUND -> {
-                // 只有在监控运行中才发送后台通知
-                if (monitoringJob?.isActive == true) {
-                    isAppInForeground = false
-                    lastBackgroundAlert = System.currentTimeMillis()
-                    showBackgroundNotification()
-                }
+                // 服务存在 = 监控运行中，直接处理
+                isAppInForeground = false
+                lastBackgroundAlert = System.currentTimeMillis()
+                showBackgroundNotification()
             }
             ACTION_APP_TO_FOREGROUND -> {
                 isAppInForeground = true
