@@ -192,8 +192,8 @@ class AppMonitorService : Service() {
             return
         }
 
-        // 2. 无前台应用（锁屏）或桌面 - 后台通知，每10秒
-        if (foregroundPackage == null || isLauncherApp(foregroundPackage)) {
+        // 2. 无前台应用（锁屏）- 后台通知，每10秒
+        if (foregroundPackage == null) {
             if (now - lastBackgroundAlert >= BACKGROUND_INTERVAL) {
                 lastBackgroundAlert = now
                 showBackgroundNotification()
@@ -201,7 +201,8 @@ class AppMonitorService : Service() {
             return
         }
 
-        // 3. 前台有应用 - 根据干扰等级提醒
+        // 3. 前台有应用 - 根据干扰等级提醒，禁用后台通知
+
         // 记录应用切换
         if (foregroundPackage != currentPackageName) {
             recordCurrentAppUsage()
@@ -209,9 +210,6 @@ class AppMonitorService : Service() {
             currentStartTime = now
             lowDistractionInitialAlertSent = false
         }
-
-        // 重置后台通知时间（前台有应用时不应该触发后台通知）
-        lastBackgroundAlert = now
 
         val level = distractionLevels[foregroundPackage] ?: 3 // 默认为未分类
         Log.d(TAG, "App: $foregroundPackage, Level: $level")
@@ -245,11 +243,11 @@ class AppMonitorService : Service() {
                 }
             }
             3 -> {
-                // 未分类应用：每10秒提醒（与后台频率一致）
+                // 未分类应用（包括桌面）：每10秒提醒
                 if (now - lastUnclassifiedAlert >= BACKGROUND_INTERVAL) {
                     lastUnclassifiedAlert = now
                     val appName = getAppName(foregroundPackage)
-                    showDistractionNotification("未分类应用", "您正在使用 $appName")
+                    showDistractionNotification("专注中", "请返回 EdgeFocus 继续专注")
                 }
             }
         }
