@@ -12,6 +12,9 @@
     <!-- NFC Permission -->
     <uses-permission android:name="android.permission.NFC" />
 
+    <!-- Wake Lock Permission -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
     <!-- Foreground Service Permission -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
@@ -62,12 +65,7 @@
         <!-- App Monitor Service -->
         <service
             android:name=".service.AppMonitorService"
-            android:permission="android.permission.BIND_USAGE_STATS"
-            android:exported="false">
-            <intent-filter>
-                <action android:name="android.accessibilityservice.AccessibilityService" />
-            </intent-filter>
-        </service>
+            android:exported="false" />
 
     </application>
 
