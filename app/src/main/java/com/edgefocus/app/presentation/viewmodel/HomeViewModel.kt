@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.edgefocus.app.domain.model.SessionType
 import com.edgefocus.app.domain.model.TimerState
+import com.edgefocus.app.domain.repository.ISettingsRepository
 import com.edgefocus.app.util.TimeUtils
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
@@ -24,21 +25,37 @@ data class TimerUiState(
 )
 
 @HiltViewModel
-class HomeViewModel @Inject constructor() : ViewModel() {
+class HomeViewModel @Inject constructor(
+    private val settingsRepository: ISettingsRepository
+) : ViewModel() {
 
     private val _uiState = MutableStateFlow(TimerUiState())
     val uiState: StateFlow<TimerUiState> = _uiState.asStateFlow()
 
     private var countdownJob: Job? = null
 
-    companion object {
-        const val WORK_DURATION_MINUTES = 25
-        const val SHORT_BREAK_MINUTES = 5
-        const val LONG_BREAK_MINUTES = 15
-        const val SESSIONS_BEFORE_LONG_BREAK = 4
-    }
+    private var workDurationMinutes = 25
+    private var shortBreakMinutes = 5
+    private var longBreakMinutes = 15
+    private var sessionsBeforeLongBreak = 4
 
     private var stateBeforePause: TimerState? = null
+
+    init {
+        viewModelScope.launch {
+            settingsRepository.getSettings().collect { settings ->
+                settings?.let {
+                    workDurationMinutes = it.pomodoroDuration
+                    shortBreakMinutes = it.shortBreakDuration
+                    longBreakMinutes = it.longBreakDuration
+                    sessionsBeforeLongBreak = it.sessionsBeforeLongBreak
+                    if (_uiState.value.timerState == TimerState.IDLE) {
+                        resetToIdle()
+                    }
+                }
+            }
+        }
+    }
 
     fun startTimer() {
         val currentState = _uiState.value.timerState
@@ -111,11 +128,11 @@ class HomeViewModel @Inject constructor() : ViewModel() {
     }
 
     private fun startBreak(completedSessions: Int) {
-        val isLongBreak = completedSessions % SESSIONS_BEFORE_LONG_BREAK == 0
+        val isLongBreak = completedSessions % sessionsBeforeLongBreak == 0
         val breakDuration = if (isLongBreak) {
-            TimeUtils.minutesToMillis(LONG_BREAK_MINUTES)
+            TimeUtils.minutesToMillis(longBreakMinutes)
         } else {
-            TimeUtils.minutesToMillis(SHORT_BREAK_MINUTES)
+            TimeUtils.minutesToMillis(shortBreakMinutes)
         }
         val breakType = if (isLongBreak) SessionType.LONG_BREAK else SessionType.SHORT_BREAK
 
@@ -132,7 +149,7 @@ class HomeViewModel @Inject constructor() : ViewModel() {
 
     private fun resetToIdle() {
         stateBeforePause = null
-        val workDuration = TimeUtils.minutesToMillis(WORK_DURATION_MINUTES)
+        val workDuration = TimeUtils.minutesToMillis(workDurationMinutes)
         _uiState.update {
             it.copy(
                 timerState = TimerState.IDLE,
