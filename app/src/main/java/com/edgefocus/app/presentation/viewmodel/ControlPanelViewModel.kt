@@ -5,8 +5,6 @@ import android.nfc.NfcAdapter
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.edgefocus.app.data.TimerStateHolder
-import com.edgefocus.app.data.remote.BleManager
-import com.edgefocus.app.domain.model.SessionType
 import com.edgefocus.app.domain.model.TimerState
 import com.edgefocus.app.domain.repository.ISettingsRepository
 import com.edgefocus.app.util.TimeUtils
@@ -18,7 +16,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import org.json.JSONObject
 import javax.inject.Inject
 
 enum class SystemMode {
@@ -39,53 +36,33 @@ data class ControlPanelUiState(
     val reminderSensitivity: Float = 0.5f,
     val nfcStatus: NfcStatus = NfcStatus.CHECKING,
     val completedSessions: Int = 0,
-    val totalFocusMinutes: Int = 0,
-    // 板端数据
-    val batteryPercent: Int = -1,
-    val focusStateStr: String = "",
-    val distractionCount: Int = 0,
-    val reminderCount: Int = 0,
-    val calibrationCompleted: Boolean = false,
-    val braceletConnected: Boolean = false,
-    val cameraOk: Boolean = false,
-    val todayTotalSeconds: Int = 0,
-    val todayFocusSeconds: Int = 0,
-    val todaySessions: Int = 0,
-    val todayEvents: Int = 0
+    val totalFocusMinutes: Int = 0
 )
 
 @HiltViewModel
 class ControlPanelViewModel @Inject constructor(
     private val application: Application,
     private val settingsRepository: ISettingsRepository,
-    private val bleManager: BleManager,
     private val timerStateHolder: TimerStateHolder
 ) : AndroidViewModel(application) {
 
     private val _uiState = MutableStateFlow(ControlPanelUiState())
     val uiState: StateFlow<ControlPanelUiState> = _uiState.asStateFlow()
 
-    private var consoleDataPollingJob: Job? = null
-
     init {
+        // 加载设置
         viewModelScope.launch {
             settingsRepository.getSettings().collect { settings ->
                 settings?.let {
-                    if (_uiState.value.timerState == TimerState.IDLE) {
-                        val duration = it.pomodoroDuration.coerceIn(5, 120)
-                        _uiState.update { state ->
-                            state.copy(
-                                selectedDuration = duration,
-                                timeRemaining = TimeUtils.minutesToMillis(duration),
-                                totalTime = TimeUtils.minutesToMillis(duration)
-                            )
-                        }
+                    val duration = it.pomodoroDuration.coerceIn(5, 120)
+                    _uiState.update { state ->
+                        state.copy(selectedDuration = duration)
                     }
                 }
             }
         }
 
-        // 从 TimerStateHolder 同步首页的计时器状态
+        // 从 TimerStateHolder 同步状态
         viewModelScope.launch {
             timerStateHolder.state.collect { sharedState ->
                 _uiState.update { state ->
@@ -101,18 +78,11 @@ class ControlPanelViewModel @Inject constructor(
         }
 
         checkNfcStatus()
-        startConsoleDataPolling()
     }
 
     fun updateSelectedDuration(minutes: Int) {
         val clamped = minutes.coerceIn(5, 120)
-        _uiState.update {
-            it.copy(
-                selectedDuration = clamped,
-                timeRemaining = TimeUtils.minutesToMillis(clamped),
-                totalTime = TimeUtils.minutesToMillis(clamped)
-            )
-        }
+        _uiState.update { it.copy(selectedDuration = clamped) }
     }
 
     fun updateSystemMode(mode: SystemMode) {
@@ -128,16 +98,16 @@ class ControlPanelViewModel @Inject constructor(
     }
 
     fun startSession() {
-        // 控制面板的开始会话功能应该通过 BLE 发送到板端
-        // 本地计时器由首页控制
+        val duration = _uiState.value.selectedDuration
+        timerStateHolder.startSession(duration, true) // 使用板端
     }
 
     fun pauseSession() {
-        // 控制面板的暂停功能应该通过 BLE 发送到板端
+        timerStateHolder.pauseSession()
     }
 
     fun stopSession() {
-        // 控制面板的停止功能应该通过 BLE 发送到板端
+        timerStateHolder.stopSession()
     }
 
     fun enableNfcScreenRotation() {
@@ -156,141 +126,5 @@ class ControlPanelViewModel @Inject constructor(
             val status = if (nfcAdapter?.isEnabled == true) NfcStatus.AVAILABLE else NfcStatus.UNAVAILABLE
             _uiState.update { it.copy(nfcStatus = status) }
         }
-    }
-
-    private fun startConsoleDataPolling() {
-        consoleDataPollingJob?.cancel()
-        consoleDataPollingJob = viewModelScope.launch {
-            while (true) {
-                if (bleManager.isConnected()) {
-                    fetchConsoleData()
-                }
-                delay(2000) // 每2秒轮询一次
-            }
-        }
-    }
-
-    private suspend fun fetchConsoleData() {
-        try {
-            val result = bleManager.getConsoleData()
-            result.onSuccess { data ->
-                parseConsoleData(String(data, Charsets.UTF_8))
-            }
-        } catch (e: Exception) {
-            // 忽略错误，继续轮询
-        }
-    }
-
-    private fun parseConsoleData(jsonString: String) {
-        try {
-            val json = JSONObject(jsonString)
-            val data = json.getJSONObject("data")
-
-            // 解析session数据
-            val session = data.optJSONObject("session")
-            session?.let {
-                val focusState = it.optInt("focus_state", 0)
-                val focusStateStr = it.optString("focus_state_str", "")
-                val elapsedMs = it.optLong("elapsed_ms", 0)
-                val targetDurationMs = it.optLong("target_duration_ms", 0)
-                val remainingMs = it.optLong("remaining_ms", 0)
-                val distractionCount = it.optInt("distraction_count", 0)
-                val reminderCount = it.optInt("reminder_count", 0)
-                val calibrationCompleted = it.optBoolean("calibration_completed", false)
-                val isActive = it.optBoolean("active", false)
-
-                _uiState.update { state ->
-                    state.copy(
-                        focusStateStr = focusStateStr,
-                        distractionCount = distractionCount,
-                        reminderCount = reminderCount,
-                        calibrationCompleted = calibrationCompleted,
-                        timeRemaining = if (isActive && remainingMs > 0) remainingMs else state.timeRemaining,
-                        totalTime = if (targetDurationMs > 0) targetDurationMs else state.totalTime
-                    )
-                }
-            }
-
-            // 解析device数据
-            val device = data.optJSONObject("device")
-            device?.let {
-                val batteryPercent = it.optInt("battery_percent", -1)
-                val systemMode = it.optInt("system_mode", 0)
-                val cameraOk = it.optBoolean("camera_ok", false)
-                val braceletConnected = it.optBoolean("bracelet_connected", false)
-
-                _uiState.update { state ->
-                    state.copy(
-                        batteryPercent = batteryPercent,
-                        systemMode = when (systemMode) {
-                            0 -> SystemMode.NORMAL
-                            1 -> SystemMode.SILENT
-                            2 -> SystemMode.HOME
-                            else -> SystemMode.NORMAL
-                        },
-                        cameraOk = cameraOk,
-                        braceletConnected = braceletConnected
-                    )
-                }
-            }
-
-            // 解析today数据
-            val today = data.optJSONObject("today")
-            today?.let {
-                val totalSeconds = it.optInt("total_seconds", 0)
-                val focusSeconds = it.optInt("focus_seconds", 0)
-                val sessions = it.optInt("sessions", 0)
-                val events = it.optInt("events", 0)
-
-                _uiState.update { state ->
-                    state.copy(
-                        todayTotalSeconds = totalSeconds,
-                        todayFocusSeconds = focusSeconds,
-                        todaySessions = sessions,
-                        todayEvents = events
-                    )
-                }
-            }
-        } catch (e: Exception) {
-            // JSON解析错误，忽略
-        }
-    }
-
-    override fun onCleared() {
-        super.onCleared()
-        consoleDataPollingJob?.cancel()
-    }
-}
-            }
-            onTimerFinished()
-        }
-    }
-
-    private fun onTimerFinished() {
-        val state = _uiState.value
-        val focusMinutes = state.selectedDuration
-        _uiState.update {
-            it.copy(
-                timerState = TimerState.FINISHED,
-                completedSessions = it.completedSessions + 1,
-                totalFocusMinutes = it.totalFocusMinutes + focusMinutes
-            )
-        }
-    }
-
-    private fun resetToIdle() {
-        val duration = _uiState.value.selectedDuration
-        _uiState.update {
-            it.copy(
-                timerState = TimerState.IDLE,
-                timeRemaining = TimeUtils.minutesToMillis(duration),
-                totalTime = TimeUtils.minutesToMillis(duration)
-            )
-        }
-    }
-
-    override fun onCleared() {
-        super.onCleared()
-        consoleDataPollingJob?.cancel()
     }
 }

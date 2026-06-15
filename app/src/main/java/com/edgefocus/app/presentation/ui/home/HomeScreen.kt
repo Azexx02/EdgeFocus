@@ -125,40 +125,19 @@ fun HomeScreen(
                             if (useBoard && !isConnected) {
                                 return@Button
                             }
-                            scope.launch {
-                                // 只有在连接状态下才发送BLE命令
-                                if (isConnected) {
-                                    val targetDurationMin = viewModel.getTargetDurationMinutes()
-                                    bleViewModel.sendSessionCommand("start", targetDurationMin)
-                                }
-                                viewModel.startTimer()
-                            }
+                            viewModel.startTimer(useBoard)
                         }
                         TimerState.PAUSED -> {
-                            scope.launch {
-                                if (isConnected) {
-                                    bleViewModel.sendSessionCommand("resume")
-                                }
-                                viewModel.startTimer()
-                            }
+                            viewModel.startTimer(useBoard)
                         }
                         TimerState.RUNNING -> {
                             viewModel.pauseTimer()
-                            if (isConnected) {
-                                scope.launch { bleViewModel.sendSessionCommand("pause") }
-                            }
                         }
                         TimerState.BREAK -> {
                             viewModel.pauseTimer()
-                            if (isConnected) {
-                                scope.launch { bleViewModel.sendSessionCommand("pause") }
-                            }
                         }
                         TimerState.FINISHED -> {
                             viewModel.stopTimer()
-                            if (isConnected) {
-                                scope.launch { bleViewModel.sendSessionCommand("stop") }
-                            }
                         }
                     }
                 },

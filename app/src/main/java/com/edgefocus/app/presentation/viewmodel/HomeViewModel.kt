@@ -10,8 +10,6 @@ import com.edgefocus.app.domain.repository.ISettingsRepository
 import com.edgefocus.app.service.AppMonitorService
 import com.edgefocus.app.util.TimeUtils
 import dagger.hilt.android.lifecycle.HiltViewModel
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -37,17 +35,15 @@ class HomeViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(TimerUiState())
     val uiState: StateFlow<TimerUiState> = _uiState.asStateFlow()
 
-    private var countdownJob: Job? = null
-
     private var workDurationMinutes = 25
     private var shortBreakMinutes = 5
     private var longBreakMinutes = 15
     private var sessionsBeforeLongBreak = 4
 
-    private var stateBeforePause: TimerState? = null
     private var currentSessionId: String? = null
 
     init {
+        // 加载设置
         viewModelScope.launch {
             settingsRepository.getSettings().collect { settings ->
                 settings?.let {
@@ -55,73 +51,142 @@ class HomeViewModel @Inject constructor(
                     shortBreakMinutes = it.shortBreakDuration
                     longBreakMinutes = it.longBreakDuration
                     sessionsBeforeLongBreak = it.sessionsBeforeLongBreak
+
+                    // 如果是空闲状态，更新显示时间
                     if (_uiState.value.timerState == TimerState.IDLE) {
-                        resetToIdle()
+                        val workDuration = TimeUtils.minutesToMillis(workDurationMinutes)
+                        _uiState.update { state ->
+                            state.copy(
+                                timeRemaining = workDuration,
+                                totalTime = workDuration
+                            )
+                        }
                     }
                 }
             }
         }
 
-        // 同步状态到 TimerStateHolder
+        // 从 TimerStateHolder 同步状态
         viewModelScope.launch {
-            _uiState.collect { state ->
-                timerStateHolder.updateFromTimerState(
-                    timerState = state.timerState,
-                    sessionType = state.sessionType,
-                    timeRemaining = state.timeRemaining,
-                    totalTime = state.totalTime,
-                    completedSessions = state.completedSessions,
-                    targetDurationMinutes = workDurationMinutes
-                )
+            timerStateHolder.state.collect { sharedState ->
+                _uiState.update { state ->
+                    state.copy(
+                        timerState = sharedState.timerState,
+                        sessionType = sharedState.sessionType,
+                        timeRemaining = sharedState.timeRemaining,
+                        totalTime = sharedState.totalTime,
+                        completedSessions = sharedState.completedSessions
+                    )
+                }
+
+                // 检查会话是否结束，启动休息
+                if (sharedState.timerState == TimerState.FINISHED) {
+                    handleSessionFinished()
+                }
             }
         }
     }
 
-    fun startTimer() {
+    fun startTimer(useBoard: Boolean = true) {
         val currentState = _uiState.value.timerState
-        if (currentState == TimerState.IDLE) {
+
+        if (currentState == TimerState.IDLE || currentState == TimerState.FINISHED) {
             // 开始新会话
             currentSessionId = "session_${System.currentTimeMillis()}"
             startAppMonitor()
-            _uiState.update { it.copy(timerState = TimerState.RUNNING) }
-            startCountdown()
+
+            // 通过 TimerStateHolder 启动会话
+            timerStateHolder.startSession(workDurationMinutes, useBoard)
+
+            // 如果连接板端，发送开始命令
+            if (useBoard && timerStateHolder.isBoardConnected()) {
+                viewModelScope.launch {
+                    timerStateHolder.sendStartToBoard(workDurationMinutes)
+                }
+            }
         } else if (currentState == TimerState.PAUSED) {
-            val resumeState = stateBeforePause ?: TimerState.RUNNING
-            _uiState.update { it.copy(timerState = resumeState) }
-            stateBeforePause = null
-            startCountdown()
+            // 恢复会话
+            timerStateHolder.resumeSession()
+
+            // 如果连接板端，发送恢复命令
+            if (timerStateHolder.isBoardSession()) {
+                viewModelScope.launch {
+                    timerStateHolder.sendResumeToBoard()
+                }
+            }
         }
     }
 
     fun pauseTimer() {
         val state = _uiState.value.timerState
         if (state == TimerState.RUNNING || state == TimerState.BREAK) {
-            stateBeforePause = state
-            countdownJob?.cancel()
-            _uiState.update { it.copy(timerState = TimerState.PAUSED) }
+            timerStateHolder.pauseSession()
+
+            // 如果连接板端，发送暂停命令
+            if (timerStateHolder.isBoardSession()) {
+                viewModelScope.launch {
+                    timerStateHolder.sendPauseToBoard()
+                }
+            }
         }
     }
 
     fun stopTimer() {
-        countdownJob?.cancel()
         stopAppMonitor()
-        resetToIdle()
+
+        // 如果连接板端，发送停止命令
+        if (timerStateHolder.isBoardSession()) {
+            viewModelScope.launch {
+                timerStateHolder.sendStopToBoard()
+            }
+        }
+
+        timerStateHolder.stopSession()
+    }
+
+    private fun handleSessionFinished() {
+        val completedSessions = timerStateHolder.getCompletedSessions()
+
+        // 启动休息
+        timerStateHolder.startBreak(
+            completedSessions = completedSessions,
+            shortBreakMinutes = shortBreakMinutes,
+            longBreakMinutes = longBreakMinutes,
+            sessionsBeforeLongBreak = sessionsBeforeLongBreak
+        )
+    }
+
+    // 获取当前会话的目标时长（分钟）
+    fun getTargetDurationMinutes(): Int {
+        return timerStateHolder.getTargetDurationMinutes()
+    }
+
+    // 获取当前会话的剩余时间（毫秒）
+    fun getRemainingTimeMillis(): Long {
+        return timerStateHolder.getRemainingTimeMillis()
+    }
+
+    // 获取当前会话的总时长（毫秒）
+    fun getTotalTimeMillis(): Long {
+        return timerStateHolder.getTotalTimeMillis()
+    }
+
+    // 获取当前会话状态
+    fun getCurrentTimerState(): TimerState {
+        return timerStateHolder.getCurrentTimerState()
+    }
+
+    // 获取当前会话类型
+    fun getCurrentSessionType(): SessionType {
+        return timerStateHolder.getCurrentSessionType()
     }
 
     private fun startAppMonitor() {
         try {
             val context = getApplication<Application>()
-            // 检查是否有前台服务权限
-            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                // Android 8.0+ 需要前台服务
-                AppMonitorService.startService(context, currentSessionId)
-            } else {
-                AppMonitorService.startService(context, currentSessionId)
-            }
+            AppMonitorService.startService(context, currentSessionId)
         } catch (e: Exception) {
-            // 如果启动服务失败，记录错误但不阻止计时器运行
             android.util.Log.e("HomeViewModel", "Failed to start AppMonitorService: ${e.message}")
-            e.printStackTrace()
         }
     }
 
@@ -133,111 +198,8 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    private fun startCountdown() {
-        countdownJob?.cancel()
-        countdownJob = viewModelScope.launch {
-            while (_uiState.value.timeRemaining > 0) {
-                delay(1000)
-                _uiState.update { currentState ->
-                    val newTime = currentState.timeRemaining - 1000
-                    if (newTime <= 0) {
-                        currentState.copy(timeRemaining = 0)
-                    } else {
-                        currentState.copy(timeRemaining = newTime)
-                    }
-                }
-            }
-            onTimerFinished()
-        }
-    }
-
-    private fun onTimerFinished() {
-        val currentState = _uiState.value
-        when (currentState.sessionType) {
-            SessionType.WORK -> {
-                val newCompletedSessions = currentState.completedSessions + 1
-                _uiState.update {
-                    it.copy(
-                        completedSessions = newCompletedSessions,
-                        timerState = TimerState.FINISHED
-                    )
-                }
-                startBreak(newCompletedSessions)
-            }
-            SessionType.SHORT_BREAK, SessionType.LONG_BREAK -> {
-                _uiState.update {
-                    it.copy(
-                        sessionType = SessionType.WORK,
-                        timerState = TimerState.FINISHED
-                    )
-                }
-                resetToIdle()
-            }
-        }
-    }
-
-    private fun startBreak(completedSessions: Int) {
-        val isLongBreak = completedSessions % sessionsBeforeLongBreak == 0
-        val breakDuration = if (isLongBreak) {
-            TimeUtils.minutesToMillis(longBreakMinutes)
-        } else {
-            TimeUtils.minutesToMillis(shortBreakMinutes)
-        }
-        val breakType = if (isLongBreak) SessionType.LONG_BREAK else SessionType.SHORT_BREAK
-
-        _uiState.update {
-            it.copy(
-                sessionType = breakType,
-                timerState = TimerState.BREAK,
-                timeRemaining = breakDuration,
-                totalTime = breakDuration
-            )
-        }
-        startCountdown()
-    }
-
-    private fun resetToIdle() {
-        stateBeforePause = null
-        currentSessionId = null
-        val workDuration = TimeUtils.minutesToMillis(workDurationMinutes)
-        _uiState.update {
-            it.copy(
-                timerState = TimerState.IDLE,
-                sessionType = SessionType.WORK,
-                timeRemaining = workDuration,
-                totalTime = workDuration
-            )
-        }
-    }
-
-    // 获取当前会话的目标时长（分钟）
-    fun getTargetDurationMinutes(): Int {
-        return workDurationMinutes
-    }
-
-    // 获取当前会话的剩余时间（毫秒）
-    fun getRemainingTimeMillis(): Long {
-        return _uiState.value.timeRemaining
-    }
-
-    // 获取当前会话的总时长（毫秒）
-    fun getTotalTimeMillis(): Long {
-        return _uiState.value.totalTime
-    }
-
-    // 获取当前会话状态
-    fun getCurrentTimerState(): TimerState {
-        return _uiState.value.timerState
-    }
-
-    // 获取当前会话类型
-    fun getCurrentSessionType(): SessionType {
-        return _uiState.value.sessionType
-    }
-
     override fun onCleared() {
         super.onCleared()
-        countdownJob?.cancel()
         stopAppMonitor()
     }
 }
