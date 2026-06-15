@@ -4,6 +4,8 @@ import android.app.Application
 import android.nfc.NfcAdapter
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.edgefocus.app.data.remote.BleManager
+import com.edgefocus.app.data.remote.ConnectionState
 import com.edgefocus.app.domain.model.TimerState
 import com.edgefocus.app.domain.repository.ISettingsRepository
 import com.edgefocus.app.util.TimeUtils
@@ -55,7 +57,7 @@ data class ControlPanelUiState(
 class ControlPanelViewModel @Inject constructor(
     private val application: Application,
     private val settingsRepository: ISettingsRepository,
-    private val bleViewModel: BleViewModel
+    private val bleManager: BleManager
 ) : AndroidViewModel(application) {
 
     private val _uiState = MutableStateFlow(ControlPanelUiState())
@@ -153,7 +155,7 @@ class ControlPanelViewModel @Inject constructor(
         consoleDataPollingJob?.cancel()
         consoleDataPollingJob = viewModelScope.launch {
             while (true) {
-                if (bleViewModel.isConnected()) {
+                if (bleManager.isConnected()) {
                     fetchConsoleData()
                 }
                 delay(2000) // 每2秒轮询一次
@@ -163,8 +165,10 @@ class ControlPanelViewModel @Inject constructor(
 
     private suspend fun fetchConsoleData() {
         try {
-            val data = bleViewModel.getConsoleData()
-            data?.let { parseConsoleData(it) }
+            val result = bleManager.getConsoleData()
+            result.onSuccess { data ->
+                parseConsoleData(String(data, Charsets.UTF_8))
+            }
         } catch (e: Exception) {
             // 忽略错误，继续轮询
         }

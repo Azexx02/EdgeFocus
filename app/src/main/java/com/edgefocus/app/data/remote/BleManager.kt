@@ -225,6 +225,10 @@ class BleManager @Inject constructor(
         _connectionState.value = ConnectionState.DISCONNECTED
     }
 
+    fun isConnected(): Boolean {
+        return _connectionState.value == ConnectionState.CONNECTED
+    }
+
     suspend fun sendData(data: ByteArray): Result<ByteArray> {
         return sendDataAndAwait(data)
     }
