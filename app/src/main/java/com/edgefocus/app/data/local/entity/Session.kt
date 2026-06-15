@@ -1,9 +1,10 @@
 package com.edgefocus.app.data.local.entity
 
 import androidx.room.Entity
+import androidx.room.Index
 import androidx.room.PrimaryKey
 
-@Entity(tableName = "sessions")
+@Entity(tableName = "sessions", indices = [Index("startTime")])
 data class Session(
     @PrimaryKey val id: String,
     val startTime: Long,
