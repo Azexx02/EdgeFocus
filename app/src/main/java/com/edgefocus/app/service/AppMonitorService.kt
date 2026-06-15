@@ -33,6 +33,7 @@ class AppMonitorService : Service() {
         private const val CHANNEL_ID = "app_monitor_channel"
         private const val ALERT_CHANNEL_ID = "app_alert_channel"
         private const val NOTIFICATION_ID = 1002
+        private const val ALERT_NOTIFICATION_ID = 2000
         private const val POLL_INTERVAL_MS = 3000L // 3秒检查一次
 
         const val ACTION_START_MONITORING = "com.edgefocus.app.ACTION_START_MONITORING"
