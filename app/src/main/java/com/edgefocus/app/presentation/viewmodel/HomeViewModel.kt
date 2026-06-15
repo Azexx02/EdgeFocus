@@ -3,6 +3,7 @@ package com.edgefocus.app.presentation.viewmodel
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.edgefocus.app.data.TimerStateHolder
 import com.edgefocus.app.domain.model.SessionType
 import com.edgefocus.app.domain.model.TimerState
 import com.edgefocus.app.domain.repository.ISettingsRepository
@@ -29,7 +30,8 @@ data class TimerUiState(
 @HiltViewModel
 class HomeViewModel @Inject constructor(
     application: Application,
-    private val settingsRepository: ISettingsRepository
+    private val settingsRepository: ISettingsRepository,
+    private val timerStateHolder: TimerStateHolder
 ) : AndroidViewModel(application) {
 
     private val _uiState = MutableStateFlow(TimerUiState())
@@ -57,6 +59,20 @@ class HomeViewModel @Inject constructor(
                         resetToIdle()
                     }
                 }
+            }
+        }
+
+        // 同步状态到 TimerStateHolder
+        viewModelScope.launch {
+            _uiState.collect { state ->
+                timerStateHolder.updateFromTimerState(
+                    timerState = state.timerState,
+                    sessionType = state.sessionType,
+                    timeRemaining = state.timeRemaining,
+                    totalTime = state.totalTime,
+                    completedSessions = state.completedSessions,
+                    targetDurationMinutes = workDurationMinutes
+                )
             }
         }
     }

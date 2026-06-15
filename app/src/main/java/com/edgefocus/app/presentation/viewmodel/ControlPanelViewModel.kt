@@ -4,8 +4,9 @@ import android.app.Application
 import android.nfc.NfcAdapter
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.edgefocus.app.data.TimerStateHolder
 import com.edgefocus.app.data.remote.BleManager
-import com.edgefocus.app.data.remote.ConnectionState
+import com.edgefocus.app.domain.model.SessionType
 import com.edgefocus.app.domain.model.TimerState
 import com.edgefocus.app.domain.repository.ISettingsRepository
 import com.edgefocus.app.util.TimeUtils
@@ -57,13 +58,13 @@ data class ControlPanelUiState(
 class ControlPanelViewModel @Inject constructor(
     private val application: Application,
     private val settingsRepository: ISettingsRepository,
-    private val bleManager: BleManager
+    private val bleManager: BleManager,
+    private val timerStateHolder: TimerStateHolder
 ) : AndroidViewModel(application) {
 
     private val _uiState = MutableStateFlow(ControlPanelUiState())
     val uiState: StateFlow<ControlPanelUiState> = _uiState.asStateFlow()
 
-    private var countdownJob: Job? = null
     private var consoleDataPollingJob: Job? = null
 
     init {
@@ -83,6 +84,22 @@ class ControlPanelViewModel @Inject constructor(
                 }
             }
         }
+
+        // 从 TimerStateHolder 同步首页的计时器状态
+        viewModelScope.launch {
+            timerStateHolder.state.collect { sharedState ->
+                _uiState.update { state ->
+                    state.copy(
+                        timerState = sharedState.timerState,
+                        timeRemaining = sharedState.timeRemaining,
+                        totalTime = sharedState.totalTime,
+                        completedSessions = sharedState.completedSessions,
+                        selectedDuration = sharedState.targetDurationMinutes
+                    )
+                }
+            }
+        }
+
         checkNfcStatus()
         startConsoleDataPolling()
     }
@@ -111,26 +128,16 @@ class ControlPanelViewModel @Inject constructor(
     }
 
     fun startSession() {
-        val state = _uiState.value
-        if (state.timerState == TimerState.IDLE) {
-            _uiState.update { it.copy(timerState = TimerState.RUNNING) }
-            startCountdown()
-        } else if (state.timerState == TimerState.PAUSED) {
-            _uiState.update { it.copy(timerState = TimerState.RUNNING) }
-            startCountdown()
-        }
+        // 控制面板的开始会话功能应该通过 BLE 发送到板端
+        // 本地计时器由首页控制
     }
 
     fun pauseSession() {
-        if (_uiState.value.timerState == TimerState.RUNNING) {
-            countdownJob?.cancel()
-            _uiState.update { it.copy(timerState = TimerState.PAUSED) }
-        }
+        // 控制面板的暂停功能应该通过 BLE 发送到板端
     }
 
     fun stopSession() {
-        countdownJob?.cancel()
-        resetToIdle()
+        // 控制面板的停止功能应该通过 BLE 发送到板端
     }
 
     fun enableNfcScreenRotation() {
@@ -249,15 +256,11 @@ class ControlPanelViewModel @Inject constructor(
         }
     }
 
-    private fun startCountdown() {
-        countdownJob?.cancel()
-        countdownJob = viewModelScope.launch {
-            while (_uiState.value.timeRemaining > 0) {
-                delay(1000)
-                _uiState.update { currentState ->
-                    val newTime = currentState.timeRemaining - 1000
-                    currentState.copy(timeRemaining = if (newTime <= 0) 0 else newTime)
-                }
+    override fun onCleared() {
+        super.onCleared()
+        consoleDataPollingJob?.cancel()
+    }
+}
             }
             onTimerFinished()
         }
@@ -288,7 +291,6 @@ class ControlPanelViewModel @Inject constructor(
 
     override fun onCleared() {
         super.onCleared()
-        countdownJob?.cancel()
         consoleDataPollingJob?.cancel()
     }
 }
