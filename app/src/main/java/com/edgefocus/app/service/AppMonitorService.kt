@@ -187,12 +187,12 @@ class AppMonitorService : Service() {
 
         val foregroundPackage = AppCategorizer.getForegroundApp(this)
 
-        // 1. 排除自己
+        // 1. 应用在前台 - 不通知
         if (foregroundPackage == packageName) {
             return
         }
 
-        // 2. 无前台应用（锁屏）- 后台通知，每10秒
+        // 2. 无前台应用（锁屏）- 后台通知
         if (foregroundPackage == null) {
             if (now - lastBackgroundAlert >= BACKGROUND_INTERVAL) {
                 lastBackgroundAlert = now
@@ -201,7 +201,7 @@ class AppMonitorService : Service() {
             return
         }
 
-        // 3. 前台有应用 - 根据干扰等级提醒，禁用后台通知
+        // 3. 前台有应用 - 根据干扰等级通知，禁用后台通知
 
         // 记录应用切换
         if (foregroundPackage != currentPackageName) {
