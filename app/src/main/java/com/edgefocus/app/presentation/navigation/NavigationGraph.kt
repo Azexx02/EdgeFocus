@@ -13,6 +13,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.edgefocus.app.presentation.ui.components.BottomNavigationBar
 import com.edgefocus.app.presentation.ui.home.HomeScreen
+import com.edgefocus.app.presentation.ui.settings.SettingsScreen
 
 sealed class Screen(val route: String) {
     data object Home : Screen("home")
@@ -43,9 +44,7 @@ fun NavigationGraph() {
                 }
             }
             composable(Screen.Settings.route) {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text("Settings")
-                }
+                SettingsScreen()
             }
         }
     }
