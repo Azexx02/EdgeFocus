@@ -90,6 +90,7 @@ class AppMonitorService : Service() {
     private var lastHighDistractionAlert = 0L
     private var lastLowDistractionAlert = 0L
     private var lastBackgroundAlert = 0L
+    private var lastUnclassifiedAlert = 0L
     private var lowDistractionInitialAlertSent = false
 
     // 通知计数器（用于生成不同ID）
@@ -181,16 +182,78 @@ class AppMonitorService : Service() {
     private suspend fun checkDistractionNotifications() {
         val now = System.currentTimeMillis()
 
-        // 每次检查时重新加载干扰等级（确保用户修改后立即生效）
+        // 每次检查时重新加载干扰等级
         loadDistractionLevels()
 
         val foregroundPackage = AppCategorizer.getForegroundApp(this)
 
-        // 排除自己
+        // 1. 排除自己
         if (foregroundPackage == packageName) {
-            isAppInForeground = true
             return
         }
+
+        // 2. 无前台应用（锁屏）- 后台通知，每10秒
+        if (foregroundPackage == null) {
+            if (now - lastBackgroundAlert >= BACKGROUND_INTERVAL) {
+                lastBackgroundAlert = now
+                showBackgroundNotification()
+            }
+            return
+        }
+
+        // 3. 前台有应用 - 根据干扰等级提醒
+        // 记录应用切换
+        if (foregroundPackage != currentPackageName) {
+            recordCurrentAppUsage()
+            currentPackageName = foregroundPackage
+            currentStartTime = now
+            lowDistractionInitialAlertSent = false
+        }
+
+        // 重置后台通知时间（前台有应用时不应该触发后台通知）
+        lastBackgroundAlert = now
+
+        val level = distractionLevels[foregroundPackage] ?: 3 // 默认为未分类
+        Log.d(TAG, "App: $foregroundPackage, Level: $level")
+
+        when (level) {
+            0 -> {
+                // 学习软件，不提醒
+            }
+            1 -> {
+                // 弱干扰源：3秒后首次提醒，之后每分钟
+                if (!lowDistractionInitialAlertSent) {
+                    val elapsed = now - currentStartTime
+                    if (elapsed >= LOW_DISTRACTION_INITIAL_DELAY) {
+                        lowDistractionInitialAlertSent = true
+                        lastLowDistractionAlert = now
+                        val appName = getAppName(foregroundPackage)
+                        showDistractionNotification("弱干扰应用", "您正在使用 $appName")
+                    }
+                } else if (now - lastLowDistractionAlert >= LOW_DISTRACTION_INTERVAL) {
+                    lastLowDistractionAlert = now
+                    val appName = getAppName(foregroundPackage)
+                    showDistractionNotification("弱干扰应用", "您已使用 $appName 超过一分钟")
+                }
+            }
+            2 -> {
+                // 强干扰源：每秒提醒
+                if (now - lastHighDistractionAlert >= HIGH_DISTRACTION_INTERVAL) {
+                    lastHighDistractionAlert = now
+                    val appName = getAppName(foregroundPackage)
+                    showDistractionNotification("⚠️ 强干扰应用", "请停止使用 $appName！")
+                }
+            }
+            3 -> {
+                // 未分类应用：每10秒提醒（与后台频率一致）
+                if (now - lastUnclassifiedAlert >= BACKGROUND_INTERVAL) {
+                    lastUnclassifiedAlert = now
+                    val appName = getAppName(foregroundPackage)
+                    showDistractionNotification("未分类应用", "您正在使用 $appName")
+                }
+            }
+        }
+    }
 
         // 无前台应用（锁屏）- 显示后台通知
         if (foregroundPackage == null) {
