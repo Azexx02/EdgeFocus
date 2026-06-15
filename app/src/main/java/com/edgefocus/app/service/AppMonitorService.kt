@@ -33,8 +33,7 @@ class AppMonitorService : Service() {
         private const val CHANNEL_ID = "app_monitor_channel"
         private const val ALERT_CHANNEL_ID = "app_alert_channel"
         private const val NOTIFICATION_ID = 1002
-        private const val ALERT_NOTIFICATION_ID = 1003
-        private const val POLL_INTERVAL_MS = 1000L // 1秒检查一次
+        private const val POLL_INTERVAL_MS = 3000L // 3秒检查一次
 
         const val ACTION_START_MONITORING = "com.edgefocus.app.ACTION_START_MONITORING"
         const val ACTION_STOP_MONITORING = "com.edgefocus.app.ACTION_STOP_MONITORING"
@@ -92,6 +91,9 @@ class AppMonitorService : Service() {
     private var lastBackgroundAlert = 0L
     private var lowDistractionInitialAlertSent = false
 
+    // 通知计数器（用于生成不同ID）
+    private var notificationCounter = 0
+
     // 通知间隔（毫秒）
     private val HIGH_DISTRACTION_INTERVAL = 1000L // 强干扰：每秒
     private val LOW_DISTRACTION_INTERVAL = 60000L // 弱干扰：每分钟
@@ -118,6 +120,8 @@ class AppMonitorService : Service() {
             ACTION_APP_TO_BACKGROUND -> {
                 isAppInForeground = false
                 lastBackgroundAlert = System.currentTimeMillis()
+                // 立即发送一条后台通知
+                showBackgroundNotification()
             }
             ACTION_APP_TO_FOREGROUND -> {
                 isAppInForeground = true
@@ -184,7 +188,7 @@ class AppMonitorService : Service() {
             // App 在后台，每10秒提醒
             if (now - lastBackgroundAlert >= BACKGROUND_INTERVAL) {
                 lastBackgroundAlert = now
-                showNotification("EdgeFocus 运行中", "您的专注会话正在进行，请返回应用", 3)
+                showBackgroundNotification()
             }
             return
         }
@@ -213,12 +217,12 @@ class AppMonitorService : Service() {
                         lowDistractionInitialAlertSent = true
                         lastLowDistractionAlert = now
                         val appName = getAppName(foregroundPackage)
-                        showNotification("弱干扰应用", "您正在使用 $appName", 1)
+                        showDistractionNotification("弱干扰应用", "您正在使用 $appName")
                     }
                 } else if (now - lastLowDistractionAlert >= LOW_DISTRACTION_INTERVAL) {
                     lastLowDistractionAlert = now
                     val appName = getAppName(foregroundPackage)
-                    showNotification("弱干扰应用", "您已使用 $appName 超过一分钟", 1)
+                    showDistractionNotification("弱干扰应用", "您已使用 $appName 超过一分钟")
                 }
             }
             2 -> {
@@ -226,13 +230,71 @@ class AppMonitorService : Service() {
                 if (now - lastHighDistractionAlert >= HIGH_DISTRACTION_INTERVAL) {
                     lastHighDistractionAlert = now
                     val appName = getAppName(foregroundPackage)
-                    showNotification("⚠️ 强干扰应用", "请停止使用 $appName！", 2)
+                    showDistractionNotification("⚠️ 强干扰应用", "请停止使用 $appName！")
                 }
             }
             3 -> {
-                // 未分类/后台级别
+                // 未分类应用（后台级别）
             }
         }
+    }
+
+    private fun showBackgroundNotification() {
+        notificationCounter++
+        val notificationId = ALERT_NOTIFICATION_ID + notificationCounter
+
+        val notificationManager = getSystemService(NotificationManager::class.java)
+
+        val intent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            this, notificationId, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val notification = NotificationCompat.Builder(this, ALERT_CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_dialog_alert)
+            .setContentTitle("📱 EdgeFocus 专注中")
+            .setContentText("您的专注会话正在进行，请返回应用继续专注")
+            .setStyle(NotificationCompat.BigTextStyle()
+                .bigText("您的专注会话正在进行中。为了保持专注效果，请返回 EdgeFocus 应用。放下手机，专注于当前任务。"))
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+            .setVibrate(longArrayOf(0, 500, 200, 500))
+            .build()
+
+        notificationManager.notify(notificationId, notification)
+        Log.d(TAG, "Background notification sent: $notificationId")
+    }
+
+    private fun showDistractionNotification(title: String, message: String) {
+        notificationCounter++
+        val notificationId = ALERT_NOTIFICATION_ID + notificationCounter
+
+        val notificationManager = getSystemService(NotificationManager::class.java)
+
+        val intent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+        }
+        val pendingIntent = PendingIntent.getActivity(
+            this, notificationId, intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val notification = NotificationCompat.Builder(this, ALERT_CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_dialog_alert)
+            .setContentTitle(title)
+            .setContentText(message)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setContentIntent(pendingIntent)
+            .setAutoCancel(true)
+            .setVibrate(longArrayOf(0, 500, 200, 500))
+            .build()
+
+        notificationManager.notify(notificationId, notification)
+        Log.d(TAG, "Distraction notification sent: $notificationId")
     }
 
     private fun getAppName(packageName: String): String {
@@ -242,42 +304,6 @@ class AppMonitorService : Service() {
         } catch (e: Exception) {
             packageName
         }
-    }
-
-    private fun showNotification(title: String, message: String, level: Int) {
-        val notificationManager = getSystemService(NotificationManager::class.java)
-
-        val intent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
-        }
-        val pendingIntent = PendingIntent.getActivity(
-            this, 0, intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
-
-        val priority = when (level) {
-            2 -> NotificationCompat.PRIORITY_HIGH
-            1 -> NotificationCompat.PRIORITY_DEFAULT
-            else -> NotificationCompat.PRIORITY_LOW
-        }
-
-        val vibrationPattern = when (level) {
-            2 -> longArrayOf(0, 500, 200, 500)
-            1 -> longArrayOf(0, 300)
-            else -> longArrayOf(0, 100)
-        }
-
-        val notification = NotificationCompat.Builder(this, ALERT_CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_dialog_alert)
-            .setContentTitle(title)
-            .setContentText(message)
-            .setPriority(priority)
-            .setContentIntent(pendingIntent)
-            .setAutoCancel(true)
-            .setVibrate(vibrationPattern)
-            .build()
-
-        notificationManager.notify(ALERT_NOTIFICATION_ID, notification)
     }
 
     private suspend fun recordCurrentAppUsage() {
@@ -324,12 +350,14 @@ class AppMonitorService : Service() {
 
             val alertChannel = NotificationChannel(
                 ALERT_CHANNEL_ID,
-                "干扰应用警报",
+                "专注提醒",
                 NotificationManager.IMPORTANCE_HIGH
             ).apply {
-                description = "检测到干扰应用时的警报通知"
+                description = "专注期间的干扰和后台提醒"
                 enableVibration(true)
                 vibrationPattern = longArrayOf(0, 500, 200, 500)
+                enableLights(true)
+                lightColor = android.graphics.Color.RED
             }
             notificationManager.createNotificationChannel(alertChannel)
         }
