@@ -19,7 +19,7 @@
 
 ### 3. `behavior/` (行为逻辑与状态机)
 - **`EventDetector`**: 事件检测规则集，将每一帧的原始 AI 数据翻译为具体事件（如：低头超过 10 秒 -> 触发 `is_sleepy`）。
-- **`FocusStateMachine`**: 维护一个 30 秒的滑动窗口，进行防抖与状态平滑。防止系统在“专注”与“分心”边界疯狂震荡闪烁。
+- **`FocusStateMachine`**: 维护一个 30 秒的滑动窗口，进行防抖与状态平滑。防止系统在"专注"与"分心"边界疯狂震荡闪烁。
 - **`BehaviorEngine`**: 主逻辑循环，驱动状态机更新 `SystemStateStore`。
 
 ### 4. `ui/` (用户界面与屏幕驱动)
@@ -37,7 +37,7 @@
 1. **防误判检测 (`LOW_CONFIDENCE`)**：当连续数帧模型置信度过低（如被遮挡）时，暂停逻辑判断。
 2. **离座 (`AWAY`)**：连续 5 秒未检测到人，触发离座。
 3. **疲劳/趴桌 (`SLEEPY_OR_SLUMPED`)**：连续 10 秒检测到头部状态为 `DOWN`（低头）触发。
-4. **玩手机 (`PHONE_IN_USE`)**：目前采用外部蓝牙嗅探/手机端广播的信号注入方式（详见 `EventDetector::injectPhoneSignal`），收到信号后 5 秒内触发玩手机警告。
+4. **玩手机 (`PHONE_IN_USE`)**：手机端通过 BLE 上报 `phone_sync` 命令，或视觉模型直接检测 `VisionResult::phone` 字段触发。
 
 ### 缺失/待补全的功能列表 (功能查找)
 以下是架构中已预留接口，但仍使用占位符或暂未真正接通底层的特性：
@@ -66,20 +66,17 @@
   * **Characteristic UUID**: `0x2A56` (Write)
 * **交互逻辑**: 开发板连接后，向 `0x2A56` 写入任意单字节数据（如 `0x01`），手环即可震动并蜂鸣 500ms。
 
-### 3. 手机端 App HTTP API (手机开发必读)
-开发板将默认在局域网内暴露 HTTP RESTFul 接口，手机 APP 可用作辅助看板，但开发板依旧保持独立运行能力（脱机仍可记录和提醒）。
+### 3. 手机端 App BLE API (手机开发必读)
+开发板运行 BLE GATT Server，手机 App 作为 Central 连接。详细接口契约见 `docs/Mobile_API_Contract_v2.md`。
 
-* **GET `/api/v1/session/current_state`**
-  轮询当前用户的专注状态枚举。
-  *返回结构*：`{"status":"success","data":{"focus_state_str":"FOCUSED", "current_focus_duration_sec": 1200}}`
+* **Service UUID**: `0000FF00-0000-1000-8000-00805F9B34FB`
+* **TX Characteristic** (`0xFF01`, Write): 手机端写入 JSON 命令
+* **RX Characteristic** (`0xFF02`, Read/Notify): 开发板响应和主动推送
 
-* **GET `/api/v1/reports/summary?type=daily`**
-  获取今日专注时长与分心次数的统计报告，用于渲染 APP 内的图表。
-
-* **PUT `/api/v1/device/preferences`**
-  供手机端调整开发板的提醒模式。
-  *请求参数*：`{"system_mode": 1, "reminder_preferences": {"enable_sound": false}}`
-  *模式对照*：`0=NORMAL` (正常), `1=SILENT` (静音), `2=HOME` (宽松)。
-
-* **POST `/api/v1/reminder/ack`**
-  手机端弹窗点击“已知晓”时，通过此接口通知开发板停止物理蜂鸣或闪光。
+* **主要命令**:
+  * `get_current_state` — 轮询专注状态
+  * `get_today_summary` — 获取今日统计
+  * `session_control` — 远程起停会话
+  * `update_preferences` — 修改模式
+  * `reminder_ack` — 消警
+  * `phone_sync` — 手机端上报使用状态

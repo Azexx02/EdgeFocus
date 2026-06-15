@@ -1,4 +1,7 @@
-# EdgeFocus 手机端通信接口定义 (Mobile API Contract)
+# [已废弃] EdgeFocus 手机端通信接口定义 (Mobile API Contract)
+
+> **本文档已废弃**，请使用 `docs/Mobile_API_Contract_v2.md` 作为唯一 API 契约。
+> 手机端和板端开发均以 v2 文档为准。
 
 本文档定义了开发板（EdgeFocus终端）与未来手机端 APP 之间的最小化通信 API 接口。
 

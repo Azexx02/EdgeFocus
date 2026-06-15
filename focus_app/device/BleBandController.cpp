@@ -33,7 +33,7 @@ void BleBandController::stopConnection() {
     system("echo quit > /tmp/ble_cmd_fifo 2>/dev/null");
     if (conn_thread_.joinable()) conn_thread_.join();
     // Cleanup
-    system("pkill -9 -f ble_daemon 2>/dev/null");
+    system("pkill -9 -f ble_connect 2>/dev/null");
     unlink(FIFO_PATH);
     unlink(STATUS_PATH);
     LOGI("BleBandController", "BLE connection stopped");
@@ -88,52 +88,46 @@ void BleBandController::connectionThreadFunc() {
         unlink(FIFO_PATH);
         mkfifo(FIFO_PATH, 0666);
 
-        // Start daemon with known MAC
-        std::string cmd = "nohup bash /root/scripts/ble_daemon.sh " + mac
-            + " > /tmp/ble_daemon.log 2>&1 &";
-        system(cmd.c_str());
+        // Start connect script via popen (coproc works in popen context)
+        std::string cmd = "bash /root/scripts/ble_connect.sh " + mac + " 2>&1";
+        FILE* pipe = popen(cmd.c_str(), "r");
+        if (!pipe) {
+            LOGE("BleBandController", "Failed to start connect script");
+            std::this_thread::sleep_for(std::chrono::seconds(3));
+            continue;
+        }
 
-        // Wait for daemon to connect (check status file)
-        LOGI("BleBandController", "Waiting for daemon to connect...");
-        bool daemon_connected = false;
-        for (int i = 0; i < 30 && !stop_requested_.load(); i++) {
-            std::this_thread::sleep_for(std::chrono::seconds(1));
-            std::ifstream f(STATUS_PATH);
-            if (f.is_open()) {
-                std::string status;
-                std::getline(f, status);
-                if (status.find("connected") == 0 && status.find("disconnected") == std::string::npos) {
-                    daemon_connected = true;
-                    break;
-                }
+        // Read output to monitor connection status
+        bool script_connected = false;
+        char line[256];
+        while (fgets(line, sizeof(line), pipe) && !stop_requested_.load()) {
+            std::string s(line);
+            // Trim newline
+            while (!s.empty() && (s.back() == '\n' || s.back() == '\r')) s.pop_back();
+            LOGI("BleBandController", "BLE: %s", s.c_str());
+
+            if (s.find("Connected") != std::string::npos && s.find("failed") == std::string::npos) {
+                script_connected = true;
+                connected_ = true;
+                LOGI("BleBandController", "Connected to %s (%s)", TARGET_NAME, mac.c_str());
+            }
+            if (s.find("Disconnected") != std::string::npos || s.find("Exited") != std::string::npos) {
+                break;
+            }
+            if (s.find("Connection failed") != std::string::npos) {
+                break;
             }
         }
 
-        if (daemon_connected && !stop_requested_.load()) {
-            connected_ = true;
-            LOGI("BleBandController", "Connected to %s (%s)", TARGET_NAME, mac.c_str());
-
-            // Keep alive - monitor connection status
-            while (!stop_requested_.load()) {
-                std::this_thread::sleep_for(std::chrono::seconds(3));
-                std::ifstream f(STATUS_PATH);
-                if (f.is_open()) {
-                    std::string status;
-                    std::getline(f, status);
-                    if (status.find("disconnected") == 0) {
-                        LOGW("BleBandController", "Connection lost");
-                        break;
-                    }
-                }
-            }
-        }
-
+        // Script exited - connection lost
+        pclose(pipe);
         connected_ = false;
-        // Stop daemon
-        system("echo quit > /tmp/ble_cmd_fifo 2>/dev/null");
-        system("pkill -9 -f ble_daemon 2>/dev/null");
         unlink(FIFO_PATH);
         unlink(STATUS_PATH);
+
+        if (script_connected) {
+            LOGW("BleBandController", "Connection lost");
+        }
 
         if (!stop_requested_.load()) {
             LOGI("BleBandController", "Reconnecting in 3s...");
