@@ -185,6 +185,9 @@ class AppMonitorService : Service() {
     private suspend fun checkDistractionNotifications() {
         val now = System.currentTimeMillis()
 
+        // 每次检查时重新加载干扰等级（确保用户修改后立即生效）
+        loadDistractionLevels()
+
         if (!isAppInForeground) {
             // App 在后台，每10秒提醒
             if (now - lastBackgroundAlert >= BACKGROUND_INTERVAL) {
