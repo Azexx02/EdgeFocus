@@ -147,14 +147,13 @@ class TestViewModel @Inject constructor(
     private fun loadDistractionLevels() {
         val saved = prefs.getString("distraction_levels", "") ?: ""
         if (saved.isNotEmpty()) {
-            val levels = saved.split(";").filter { it.isNotEmpty() }.associate { entry ->
+            val levels = mutableMapOf<String, Int>()
+            saved.split(";").filter { it.isNotEmpty() }.forEach { entry ->
                 val parts = entry.split("=")
-                if (parts.size == 2) {
-                    parts[0] to parts[1].toIntOrNull() ?: 3
-                } else {
-                    "" to 3
+                if (parts.size == 2 && parts[0].isNotEmpty()) {
+                    levels[parts[0]] = parts[1].toIntOrNull() ?: 3
                 }
-            }.filterKeys { it.isNotEmpty() }
+            }
 
             _uiState.value = _uiState.value.copy(distractionLevels = levels)
             updateAppsDistractionLevels(levels)
