@@ -1,12 +1,15 @@
 package com.edgefocus.app.util
 
+import android.app.AppOpsManager
 import android.app.usage.UsageStatsManager
 import android.content.Context
+import android.content.Intent
+import android.os.Process
+import android.provider.Settings
 
 object AppCategorizer {
 
     private val entertainmentApps = setOf(
-        "com.tencent.mm",
         "com.zhiliaoapp.musically",
         "com.smile.gifmaker",
         "com.youku.phone",
@@ -51,7 +54,24 @@ object AppCategorizer {
         }
     }
 
+    fun hasUsageStatsPermission(context: Context): Boolean {
+        val appOps = context.getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
+        val mode = appOps.checkOpNoThrow(
+            AppOpsManager.OPSTR_GET_USAGE_STATS,
+            Process.myUid(),
+            context.packageName
+        )
+        return mode == AppOpsManager.MODE_ALLOWED
+    }
+
+    fun getUsageAccessSettingsIntent(): Intent {
+        return Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
+    }
+
     fun getForegroundApp(context: Context): String? {
+        if (!hasUsageStatsPermission(context)) {
+            return null
+        }
         val usageStatsManager =
             context.getSystemService(Context.USAGE_STATS_SERVICE) as? UsageStatsManager
                 ?: return null
