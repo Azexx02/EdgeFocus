@@ -64,7 +64,8 @@ fun ControlPanelScreen(
                 }) {
                     Icon(Icons.Default.ArrowBack, contentDescription = "返回")
                 }
-            }
+            },
+            modifier = Modifier.height(48.dp)
         )
 
         HorizontalPager(
@@ -84,7 +85,7 @@ fun ControlPanelScreen(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(vertical = 12.dp),
+                .padding(vertical = 4.dp),
             horizontalArrangement = Arrangement.Center
         ) {
             repeat(3) { index ->
@@ -107,7 +108,7 @@ fun ControlPanelScreen(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 8.dp),
+                .padding(horizontal = 16.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.Center
         ) {
@@ -148,7 +149,7 @@ private fun TimerPage(
     Column(
         modifier = modifier
             .fillMaxSize()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
+            .padding(horizontal = 8.dp, vertical = 4.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.SpaceEvenly
     ) {
@@ -174,8 +175,6 @@ private fun TimerPage(
             style = MaterialTheme.typography.headlineMedium,
             color = MaterialTheme.colorScheme.onSurface
         )
-
-        Spacer(modifier = Modifier.height(32.dp))
 
         Row(
             horizontalArrangement = Arrangement.spacedBy(16.dp)

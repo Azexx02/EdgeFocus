@@ -44,7 +44,7 @@ fun TimerDial(
         BoxWithConstraints(
             contentAlignment = Alignment.Center,
             modifier = Modifier
-                .fillMaxWidth(0.6f)
+                .fillMaxWidth(0.4f)
                 .aspectRatio(1f)
         ) {
             val size = constraints.maxWidth.toFloat()
@@ -68,7 +68,7 @@ fun TimerDial(
                         }
                     }
             ) {
-                val strokeWidthPx = 12.dp.toPx()
+                val strokeWidthPx = 8.dp.toPx()
                 val diameter = this.size.minDimension - strokeWidthPx
                 val topLeft = Offset(strokeWidthPx / 2f, strokeWidthPx / 2f)
                 val arcSize = Size(diameter, diameter)
