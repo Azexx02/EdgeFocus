@@ -34,7 +34,7 @@ class AppMonitorService : Service() {
         private const val ALERT_CHANNEL_ID = "app_alert_channel"
         private const val NOTIFICATION_ID = 1002
         private const val ALERT_NOTIFICATION_ID = 2000
-        private const val POLL_INTERVAL_MS = 3000L // 3秒检查一次
+        private const val POLL_INTERVAL_MS = 1000L // 1秒检查一次（支持强干扰每秒提醒）
 
         const val ACTION_START_MONITORING = "com.edgefocus.app.ACTION_START_MONITORING"
         const val ACTION_STOP_MONITORING = "com.edgefocus.app.ACTION_STOP_MONITORING"
@@ -208,6 +208,7 @@ class AppMonitorService : Service() {
         }
 
         val level = distractionLevels[foregroundPackage] ?: 3 // 默认为后台级别
+        Log.d(TAG, "App: $foregroundPackage, Level: $level, DistractionLevels size: ${distractionLevels.size}")
 
         when (level) {
             0 -> {
