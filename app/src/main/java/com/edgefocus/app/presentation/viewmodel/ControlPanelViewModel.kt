@@ -1,6 +1,8 @@
 package com.edgefocus.app.presentation.viewmodel
 
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import android.nfc.NfcAdapter
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.edgefocus.app.domain.model.TimerState
 import com.edgefocus.app.domain.repository.ISettingsRepository
@@ -38,8 +40,9 @@ data class ControlPanelUiState(
 
 @HiltViewModel
 class ControlPanelViewModel @Inject constructor(
+    private val application: Application,
     private val settingsRepository: ISettingsRepository
-) : ViewModel() {
+) : AndroidViewModel(application) {
 
     private val _uiState = MutableStateFlow(ControlPanelUiState())
     val uiState: StateFlow<ControlPanelUiState> = _uiState.asStateFlow()
@@ -124,8 +127,9 @@ class ControlPanelViewModel @Inject constructor(
     private fun checkNfcStatus() {
         viewModelScope.launch {
             _uiState.update { it.copy(nfcStatus = NfcStatus.CHECKING) }
-            delay(500)
-            _uiState.update { it.copy(nfcStatus = NfcStatus.AVAILABLE) }
+            val nfcAdapter = NfcAdapter.getDefaultAdapter(application)
+            val status = if (nfcAdapter?.isEnabled == true) NfcStatus.AVAILABLE else NfcStatus.UNAVAILABLE
+            _uiState.update { it.copy(nfcStatus = status) }
         }
     }
 
