@@ -22,7 +22,7 @@ data class InstalledApp(
 
 data class BleLog(
     val timestamp: Long = System.currentTimeMillis(),
-    val direction: String, // "SEND" or "RECEIVE"
+    val direction: String = "UNKNOWN", // "SEND" or "RECEIVE"
     val content: String
 )
 
