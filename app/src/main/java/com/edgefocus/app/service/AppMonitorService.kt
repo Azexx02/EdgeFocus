@@ -118,12 +118,6 @@ class AppMonitorService : Service() {
                 stopMonitoring()
                 stopSelf()
             }
-            ACTION_APP_TO_BACKGROUND -> {
-                // 服务存在 = 监控运行中，直接处理
-                isAppInForeground = false
-                lastBackgroundAlert = System.currentTimeMillis()
-                showBackgroundNotification()
-            }
             ACTION_APP_TO_FOREGROUND -> {
                 isAppInForeground = true
             }
@@ -190,8 +184,16 @@ class AppMonitorService : Service() {
         // 每次检查时重新加载干扰等级（确保用户修改后立即生效）
         loadDistractionLevels()
 
-        if (!isAppInForeground) {
-            // App 在后台，每10秒提醒
+        val foregroundPackage = AppCategorizer.getForegroundApp(this)
+
+        // 排除自己
+        if (foregroundPackage == packageName) {
+            isAppInForeground = true
+            return
+        }
+
+        // 无前台应用（锁屏）- 显示后台通知
+        if (foregroundPackage == null) {
             if (now - lastBackgroundAlert >= BACKGROUND_INTERVAL) {
                 lastBackgroundAlert = now
                 showBackgroundNotification()
@@ -199,9 +201,8 @@ class AppMonitorService : Service() {
             return
         }
 
-        val foregroundPackage = AppCategorizer.getForegroundApp(this) ?: return
-
-        // 记录应用使用
+        // 前台是其他应用，说明用户离开了EdgeFocus
+        // 根据干扰等级提醒
         if (foregroundPackage != currentPackageName) {
             recordCurrentAppUsage()
             currentPackageName = foregroundPackage

@@ -47,10 +47,10 @@ class MainActivity : ComponentActivity() {
     private val lifecycleObserver = LifecycleEventObserver { _, event ->
         when (event) {
             Lifecycle.Event.ON_STOP -> {
-                // 应用进入后台
-                Log.d(TAG, "App went to background")
+                // 应用进入后台（可能是切换到其他应用或锁屏）
+                Log.d(TAG, "App stopped")
                 wasInBackground = true
-                AppMonitorService.notifyAppToBackground(this)
+                // 不立即通知，让 AppMonitorService 通过前台应用检测判断
             }
             Lifecycle.Event.ON_START -> {
                 // 应用回到前台
