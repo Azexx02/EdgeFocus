@@ -3,6 +3,7 @@ package com.edgefocus.app.presentation.viewmodel
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.edgefocus.app.data.SessionMode
 import com.edgefocus.app.data.TimerStateHolder
 import com.edgefocus.app.domain.model.SessionType
 import com.edgefocus.app.domain.model.TimerState
@@ -22,7 +23,9 @@ data class TimerUiState(
     val sessionType: SessionType = SessionType.WORK,
     val timeRemaining: Long = TimeUtils.minutesToMillis(25),
     val totalTime: Long = TimeUtils.minutesToMillis(25),
-    val completedSessions: Int = 0
+    val completedSessions: Int = 0,
+    val sessionMode: SessionMode = SessionMode.LOCAL,
+    val isBoardConnected: Boolean = false
 )
 
 @HiltViewModel
@@ -52,7 +55,7 @@ class HomeViewModel @Inject constructor(
                     longBreakMinutes = it.longBreakDuration
                     sessionsBeforeLongBreak = it.sessionsBeforeLongBreak
 
-                    // 如果是空闲状态，更新显示时间
+                    // 空闲状态时更新显示时间
                     if (_uiState.value.timerState == TimerState.IDLE) {
                         val workDuration = TimeUtils.minutesToMillis(workDurationMinutes)
                         _uiState.update { state ->
@@ -75,11 +78,13 @@ class HomeViewModel @Inject constructor(
                         sessionType = sharedState.sessionType,
                         timeRemaining = sharedState.timeRemaining,
                         totalTime = sharedState.totalTime,
-                        completedSessions = sharedState.completedSessions
+                        completedSessions = sharedState.completedSessions,
+                        sessionMode = sharedState.sessionMode,
+                        isBoardConnected = sharedState.isBoardConnected
                     )
                 }
 
-                // 检查会话是否结束，启动休息
+                // 会话结束时处理休息
                 if (sharedState.timerState == TimerState.FINISHED) {
                     handleSessionFinished()
                 }
@@ -87,33 +92,44 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    fun startTimer(useBoard: Boolean = true) {
+    /**
+     * 启动 EdgeFocus 模式会话
+     * 必须已连接设备
+     */
+    fun startEdgeFocusSession() {
+        if (!timerStateHolder.isBoardConnected()) {
+            return
+        }
+
+        currentSessionId = "session_${System.currentTimeMillis()}"
+        startAppMonitor()
+        timerStateHolder.startEdgeFocusSession(workDurationMinutes)
+    }
+
+    /**
+     * 启动本地模式会话
+     * 不需要连接设备
+     */
+    fun startLocalSession() {
+        currentSessionId = "session_${System.currentTimeMillis()}"
+        startAppMonitor()
+        timerStateHolder.startLocalSession(workDurationMinutes)
+    }
+
+    /**
+     * 根据设置自动选择模式启动
+     */
+    fun startTimer(useBoard: Boolean) {
         val currentState = _uiState.value.timerState
 
         if (currentState == TimerState.IDLE || currentState == TimerState.FINISHED) {
-            // 开始新会话
-            currentSessionId = "session_${System.currentTimeMillis()}"
-            startAppMonitor()
-
-            // 通过 TimerStateHolder 启动会话
-            timerStateHolder.startSession(workDurationMinutes, useBoard)
-
-            // 如果连接板端，发送开始命令
-            if (useBoard && timerStateHolder.isBoardConnected()) {
-                viewModelScope.launch {
-                    timerStateHolder.sendStartToBoard(workDurationMinutes)
-                }
+            if (useBoard) {
+                startEdgeFocusSession()
+            } else {
+                startLocalSession()
             }
         } else if (currentState == TimerState.PAUSED) {
-            // 恢复会话
             timerStateHolder.resumeSession()
-
-            // 如果连接板端，发送恢复命令
-            if (timerStateHolder.isBoardSession()) {
-                viewModelScope.launch {
-                    timerStateHolder.sendResumeToBoard()
-                }
-            }
         }
     }
 
@@ -121,23 +137,17 @@ class HomeViewModel @Inject constructor(
         val state = _uiState.value.timerState
         if (state == TimerState.RUNNING || state == TimerState.BREAK) {
             timerStateHolder.pauseSession()
-
-            // 如果连接板端，发送暂停命令
-            if (timerStateHolder.isBoardSession()) {
-                viewModelScope.launch {
-                    timerStateHolder.sendPauseToBoard()
-                }
-            }
         }
     }
 
     fun stopTimer() {
         stopAppMonitor()
 
-        // 如果连接板端，发送停止命令
-        if (timerStateHolder.isBoardSession()) {
+        // 本地模式结束后，尝试同步记录给设备
+        if (_uiState.value.sessionMode == SessionMode.LOCAL && timerStateHolder.isBoardConnected()) {
             viewModelScope.launch {
-                timerStateHolder.sendStopToBoard()
+                val durationMinutes = timerStateHolder.getTargetDurationMinutes()
+                timerStateHolder.syncSessionToBoard(durationMinutes, durationMinutes, 0)
             }
         }
 
@@ -146,39 +156,12 @@ class HomeViewModel @Inject constructor(
 
     private fun handleSessionFinished() {
         val completedSessions = timerStateHolder.getCompletedSessions()
-
-        // 启动休息
         timerStateHolder.startBreak(
             completedSessions = completedSessions,
             shortBreakMinutes = shortBreakMinutes,
             longBreakMinutes = longBreakMinutes,
             sessionsBeforeLongBreak = sessionsBeforeLongBreak
         )
-    }
-
-    // 获取当前会话的目标时长（分钟）
-    fun getTargetDurationMinutes(): Int {
-        return timerStateHolder.getTargetDurationMinutes()
-    }
-
-    // 获取当前会话的剩余时间（毫秒）
-    fun getRemainingTimeMillis(): Long {
-        return timerStateHolder.getRemainingTimeMillis()
-    }
-
-    // 获取当前会话的总时长（毫秒）
-    fun getTotalTimeMillis(): Long {
-        return timerStateHolder.getTotalTimeMillis()
-    }
-
-    // 获取当前会话状态
-    fun getCurrentTimerState(): TimerState {
-        return timerStateHolder.getCurrentTimerState()
-    }
-
-    // 获取当前会话类型
-    fun getCurrentSessionType(): SessionType {
-        return timerStateHolder.getCurrentSessionType()
     }
 
     private fun startAppMonitor() {

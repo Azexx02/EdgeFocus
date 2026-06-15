@@ -15,18 +15,17 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.edgefocus.app.data.SessionMode
 import com.edgefocus.app.data.remote.ConnectionState
 import com.edgefocus.app.domain.model.SessionType
 import com.edgefocus.app.domain.model.TimerState
 import com.edgefocus.app.presentation.viewmodel.BleViewModel
 import com.edgefocus.app.presentation.viewmodel.HomeViewModel
 import com.edgefocus.app.presentation.viewmodel.SettingsViewModel
-import kotlinx.coroutines.launch
 
 @Composable
 fun HomeScreen(
@@ -36,14 +35,19 @@ fun HomeScreen(
     onNavigateToControlPanel: () -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsState()
-    val connectionState by bleViewModel.connectionState.collectAsState()
     val settings by settingsViewModel.settings.collectAsState()
-    val scope = rememberCoroutineScope()
-
-    // 获取有效的连接状态（考虑模拟模式）
     val effectiveConnectionState = bleViewModel.getEffectiveConnectionState()
+
     val useBoard = settings.useEdgeFocusBoard
     val isConnected = bleViewModel.isConnected()
+
+    // 判断是否可以启动会话
+    val canStart = when {
+        // EdgeFocus模式：必须连接设备
+        useBoard && uiState.timerState == TimerState.IDLE -> isConnected
+        // 其他状态：都可以操作
+        else -> true
+    }
 
     Column(
         modifier = Modifier
@@ -64,23 +68,41 @@ fun HomeScreen(
 
             Spacer(modifier = Modifier.height(8.dp))
 
+            // 连接状态
             Text(
                 text = when (effectiveConnectionState) {
-                    ConnectionState.CONNECTED -> if (bleViewModel.isSimulatingBle()) "模拟连接" else "蓝牙已连接"
+                    ConnectionState.CONNECTED -> "设备已连接"
                     ConnectionState.SCANNING -> "扫描中..."
                     ConnectionState.CONNECTING -> "连接中..."
-                    ConnectionState.ERROR -> "蓝牙错误"
-                    ConnectionState.DISCONNECTED -> if (useBoard) "蓝牙未连接" else "独立模式"
+                    ConnectionState.ERROR -> "连接错误"
+                    ConnectionState.DISCONNECTED -> "设备未连接"
                 },
                 style = MaterialTheme.typography.bodySmall,
-                color = if (effectiveConnectionState == ConnectionState.CONNECTED)
-                    MaterialTheme.colorScheme.primary
-                else
-                    MaterialTheme.colorScheme.onSurfaceVariant
+                color = if (isConnected) MaterialTheme.colorScheme.primary
+                else MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            Spacer(modifier = Modifier.height(4.dp))
+
+            // 会话模式
+            Text(
+                text = when {
+                    uiState.sessionMode == SessionMode.EDGEFOCUS -> "EdgeFocus 模式"
+                    uiState.sessionMode == SessionMode.LOCAL && uiState.timerState != TimerState.IDLE -> "本地模式"
+                    useBoard && !isConnected -> "请先连接设备"
+                    else -> "本地模式"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = when {
+                    uiState.sessionMode == SessionMode.EDGEFOCUS -> MaterialTheme.colorScheme.primary
+                    useBoard && !isConnected && uiState.timerState == TimerState.IDLE -> MaterialTheme.colorScheme.error
+                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                }
             )
 
             Spacer(modifier = Modifier.height(8.dp))
 
+            // 会话类型
             val sessionTypeText = when (uiState.sessionType) {
                 SessionType.WORK -> "工作会话"
                 SessionType.SHORT_BREAK -> "短休息"
@@ -121,14 +143,10 @@ fun HomeScreen(
                 onClick = {
                     when (uiState.timerState) {
                         TimerState.IDLE -> {
-                            // 如果需要BLE但未连接，不启动
-                            if (useBoard && !isConnected) {
-                                return@Button
-                            }
-                            viewModel.startTimer(useBoard)
+                            viewModel.startTimer(useBoard && isConnected)
                         }
                         TimerState.PAUSED -> {
-                            viewModel.startTimer(useBoard)
+                            viewModel.startTimer(useBoard && isConnected)
                         }
                         TimerState.RUNNING -> {
                             viewModel.pauseTimer()
@@ -142,11 +160,11 @@ fun HomeScreen(
                     }
                 },
                 modifier = Modifier.fillMaxWidth(),
-                enabled = !(useBoard && !isConnected && uiState.timerState == TimerState.IDLE)
+                enabled = canStart
             ) {
                 Text(
                     text = when (uiState.timerState) {
-                        TimerState.IDLE -> "开始专注"
+                        TimerState.IDLE -> if (useBoard && isConnected) "开始 EdgeFocus 会话" else "开始专注"
                         TimerState.RUNNING -> "暂停"
                         TimerState.PAUSED -> "继续"
                         TimerState.BREAK -> "暂停休息"
@@ -162,12 +180,7 @@ fun HomeScreen(
             ) {
                 // 停止按钮
                 OutlinedButton(
-                    onClick = {
-                        viewModel.stopTimer()
-                        if (isConnected) {
-                            scope.launch { bleViewModel.sendSessionCommand("stop") }
-                        }
-                    },
+                    onClick = { viewModel.stopTimer() },
                     modifier = Modifier.weight(1f),
                     enabled = uiState.timerState != TimerState.IDLE
                 ) {
@@ -183,12 +196,12 @@ fun HomeScreen(
                 }
             }
 
-            // 如果使用 EdgeFocus Board 但未连接，显示提示
-            if (useBoard && !isConnected) {
+            // 提示信息
+            if (useBoard && !isConnected && uiState.timerState == TimerState.IDLE) {
                 Text(
-                    text = "请先连接 EdgeFocus 设备",
+                    text = "连接设备后可使用 EdgeFocus 模式",
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }
