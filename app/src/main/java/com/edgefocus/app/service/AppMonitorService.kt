@@ -3,12 +3,12 @@ package com.edgefocus.app.service
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.util.Log
 import androidx.core.app.NotificationCompat
-import androidx.lifecycle.LifecycleService
 import com.edgefocus.app.data.local.dao.AppUsageDao
 import com.edgefocus.app.data.local.entity.AppUsage
 import com.edgefocus.app.util.AppCategorizer
@@ -24,7 +24,7 @@ import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 @AndroidEntryPoint
-class AppMonitorService : LifecycleService() {
+class AppMonitorService : Service() {
 
     companion object {
         private const val TAG = "AppMonitorService"
@@ -70,7 +70,6 @@ class AppMonitorService : LifecycleService() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        super.onStartCommand(intent, flags, startId)
         when (intent?.action) {
             ACTION_START_MONITORING -> {
                 sessionId = intent.getStringExtra("session_id")
@@ -82,6 +81,10 @@ class AppMonitorService : LifecycleService() {
             }
         }
         return START_STICKY
+    }
+
+    override fun onBind(intent: android.content.Intent?): android.os.IBinder? {
+        return null
     }
 
     override fun onDestroy() {
