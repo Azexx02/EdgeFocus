@@ -10,11 +10,13 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -25,6 +27,13 @@ fun HomeScreen() {
     val focusDurationMillis = TimeUtils.minutesToMillis(25)
     var timeRemaining by remember { mutableLongStateOf(focusDurationMillis) }
     var isRunning by remember { mutableStateOf(false) }
+
+    LaunchedEffect(isRunning) {
+        while (isRunning && timeRemaining > 0) {
+            delay(1000)
+            timeRemaining -= 1000
+        }
+    }
 
     Column(
         modifier = Modifier
