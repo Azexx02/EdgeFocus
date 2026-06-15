@@ -119,10 +119,12 @@ class AppMonitorService : Service() {
                 stopSelf()
             }
             ACTION_APP_TO_BACKGROUND -> {
-                isAppInForeground = false
-                lastBackgroundAlert = System.currentTimeMillis()
-                // 立即发送一条后台通知
-                showBackgroundNotification()
+                // 只有在监控运行中才发送后台通知
+                if (monitoringJob?.isActive == true) {
+                    isAppInForeground = false
+                    lastBackgroundAlert = System.currentTimeMillis()
+                    showBackgroundNotification()
+                }
             }
             ACTION_APP_TO_FOREGROUND -> {
                 isAppInForeground = true
@@ -180,6 +182,8 @@ class AppMonitorService : Service() {
         }
         currentPackageName = null
         currentStartTime = 0L
+        isAppInForeground = true
+        Log.d(TAG, "Monitoring stopped")
     }
 
     private suspend fun checkDistractionNotifications() {
