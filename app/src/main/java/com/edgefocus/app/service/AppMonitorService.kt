@@ -187,21 +187,13 @@ class AppMonitorService : Service() {
 
         val foregroundPackage = AppCategorizer.getForegroundApp(this)
 
-        // 1. 排除自己
+        // 1. 应用在前台 - 不通知
         if (foregroundPackage == packageName) {
             return
         }
 
-        // 2. 无前台应用（锁屏）或桌面 - 后台通知，每10秒
-        if (foregroundPackage == null || isLauncherApp(foregroundPackage)) {
-            if (now - lastBackgroundAlert >= BACKGROUND_INTERVAL) {
-                lastBackgroundAlert = now
-                showBackgroundNotification()
-            }
-            return
-        }
+        // 2. 应用不在前台（锁屏、桌面、其他应用）- 根据情况通知
 
-        // 3. 前台有应用 - 根据干扰等级提醒
         // 记录应用切换
         if (foregroundPackage != currentPackageName) {
             recordCurrentAppUsage()
@@ -210,9 +202,16 @@ class AppMonitorService : Service() {
             lowDistractionInitialAlertSent = false
         }
 
-        // 重置后台通知时间（前台有应用时不应该触发后台通知）
-        lastBackgroundAlert = now
+        // 无前台应用（锁屏）- 后台通知
+        if (foregroundPackage == null) {
+            if (now - lastBackgroundAlert >= BACKGROUND_INTERVAL) {
+                lastBackgroundAlert = now
+                showBackgroundNotification()
+            }
+            return
+        }
 
+        // 前台有应用（桌面或其他应用）- 根据干扰等级通知
         val level = distractionLevels[foregroundPackage] ?: 3 // 默认为未分类
         Log.d(TAG, "App: $foregroundPackage, Level: $level")
 
@@ -245,11 +244,11 @@ class AppMonitorService : Service() {
                 }
             }
             3 -> {
-                // 未分类应用：每10秒提醒（与后台频率一致）
+                // 未分类应用（包括桌面）：每10秒提醒
                 if (now - lastUnclassifiedAlert >= BACKGROUND_INTERVAL) {
                     lastUnclassifiedAlert = now
                     val appName = getAppName(foregroundPackage)
-                    showDistractionNotification("未分类应用", "您正在使用 $appName")
+                    showDistractionNotification("专注中", "请返回 EdgeFocus 继续专注")
                 }
             }
         }
@@ -380,14 +379,6 @@ class AppMonitorService : Service() {
         } catch (e: Exception) {
             packageName
         }
-    }
-
-    private fun isLauncherApp(packageName: String): Boolean {
-        val intent = android.content.Intent(android.content.Intent.ACTION_MAIN).apply {
-            addCategory(android.content.Intent.CATEGORY_HOME)
-        }
-        val resolveInfo = packageManager.resolveActivity(intent, 0)
-        return resolveInfo?.activityInfo?.packageName == packageName
     }
 
     private suspend fun recordCurrentAppUsage() {
