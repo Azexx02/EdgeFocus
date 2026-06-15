@@ -209,7 +209,7 @@ class AppMonitorService : Service() {
             lowDistractionInitialAlertSent = false
         }
 
-        val level = distractionLevels[foregroundPackage] ?: 3 // 默认为后台级别
+        val level = distractionLevels[foregroundPackage] ?: 3 // 默认为未分类
         Log.d(TAG, "App: $foregroundPackage, Level: $level, DistractionLevels size: ${distractionLevels.size}")
 
         when (level) {
@@ -241,7 +241,12 @@ class AppMonitorService : Service() {
                 }
             }
             3 -> {
-                // 未分类应用（后台级别）
+                // 未分类应用，与后台频率一致（每10秒）
+                if (now - lastBackgroundAlert >= BACKGROUND_INTERVAL) {
+                    lastBackgroundAlert = now
+                    val appName = getAppName(foregroundPackage)
+                    showDistractionNotification("未分类应用", "您正在使用 $appName")
+                }
             }
         }
     }
