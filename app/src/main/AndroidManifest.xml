@@ -42,6 +42,7 @@
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:screenOrientation="portrait"
             android:theme="@style/Theme.EdgeFocusApp">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -55,6 +56,12 @@
                 <data android:mimeType="application/com.edgefocus.app" />
             </intent-filter>
         </activity>
+
+        <!-- Control Panel Activity (Landscape) -->
+        <activity
+            android:name=".ControlPanelActivity"
+            android:screenOrientation="landscape"
+            android:exported="false" />
 
         <!-- BLE Foreground Service -->
         <service

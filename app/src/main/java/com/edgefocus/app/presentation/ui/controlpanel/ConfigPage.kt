@@ -37,7 +37,7 @@ fun ConfigPage(
             .padding(horizontal = 16.dp)
     ) {
         Text(
-            text = "System Mode",
+            text = "系统模式",
             style = MaterialTheme.typography.titleMedium,
             color = MaterialTheme.colorScheme.primary
         )
@@ -59,7 +59,7 @@ fun ConfigPage(
         Spacer(modifier = Modifier.height(24.dp))
 
         Text(
-            text = "Away Timeout",
+            text = "离座超时",
             style = MaterialTheme.typography.titleMedium,
             color = MaterialTheme.colorScheme.primary
         )
@@ -70,9 +70,9 @@ fun ConfigPage(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Text(text = "Auto-pause when idle", style = MaterialTheme.typography.bodyMedium)
+            Text(text = "空闲时自动暂停", style = MaterialTheme.typography.bodyMedium)
             Text(
-                text = "${uiState.awayTimeout} min",
+                text = "${uiState.awayTimeout} 分钟",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -88,7 +88,7 @@ fun ConfigPage(
         Spacer(modifier = Modifier.height(24.dp))
 
         Text(
-            text = "Reminder Sensitivity",
+            text = "提醒灵敏度",
             style = MaterialTheme.typography.titleMedium,
             color = MaterialTheme.colorScheme.primary
         )
@@ -99,8 +99,8 @@ fun ConfigPage(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Text(text = "Gentle", style = MaterialTheme.typography.bodyMedium)
-            Text(text = "Strict", style = MaterialTheme.typography.bodyMedium)
+            Text(text = "温和", style = MaterialTheme.typography.bodyMedium)
+            Text(text = "严格", style = MaterialTheme.typography.bodyMedium)
         }
 
         Slider(
@@ -146,7 +146,7 @@ fun ModeChip(
 }
 
 private fun SystemMode.displayName(): String = when (this) {
-    SystemMode.NORMAL -> "Normal"
-    SystemMode.SILENT -> "Silent"
-    SystemMode.HOME -> "Home"
+    SystemMode.NORMAL -> "正常"
+    SystemMode.SILENT -> "静音"
+    SystemMode.HOME -> "家庭"
 }

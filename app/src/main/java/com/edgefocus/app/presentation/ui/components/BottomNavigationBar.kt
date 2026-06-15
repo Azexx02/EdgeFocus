@@ -23,9 +23,9 @@ data class BottomNavItem(
 @Composable
 fun BottomNavigationBar(navController: NavController) {
     val items = listOf(
-        BottomNavItem("Home", Icons.Default.Home, "home"),
-        BottomNavItem("Stats", Icons.Default.Star, "dashboard"),
-        BottomNavItem("Settings", Icons.Default.Settings, "settings")
+        BottomNavItem("首页", Icons.Default.Home, "home"),
+        BottomNavItem("数据", Icons.Default.Star, "dashboard"),
+        BottomNavItem("设置", Icons.Default.Settings, "settings")
     )
 
     val navBackStackEntry by navController.currentBackStackEntryAsState()

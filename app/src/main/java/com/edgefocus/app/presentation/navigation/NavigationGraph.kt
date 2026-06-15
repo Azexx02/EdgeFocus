@@ -1,12 +1,15 @@
 package com.edgefocus.app.presentation.navigation
 
+import android.content.Intent
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import com.edgefocus.app.ControlPanelActivity
 import com.edgefocus.app.presentation.ui.components.BottomNavigationBar
 import com.edgefocus.app.presentation.ui.dashboard.DashboardScreen
 import com.edgefocus.app.presentation.ui.home.HomeScreen
@@ -21,6 +24,7 @@ sealed class Screen(val route: String) {
 @Composable
 fun NavigationGraph() {
     val navController = rememberNavController()
+    val context = LocalContext.current
 
     Scaffold(
         bottomBar = {
@@ -33,7 +37,12 @@ fun NavigationGraph() {
             modifier = Modifier.padding(innerPadding)
         ) {
             composable(Screen.Home.route) {
-                HomeScreen()
+                HomeScreen(
+                    onNavigateToControlPanel = {
+                        val intent = Intent(context, ControlPanelActivity::class.java)
+                        context.startActivity(intent)
+                    }
+                )
             }
             composable(Screen.Dashboard.route) {
                 DashboardScreen()

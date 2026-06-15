@@ -16,8 +16,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -27,6 +31,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.edgefocus.app.domain.model.TimerState
@@ -37,14 +42,23 @@ import com.edgefocus.app.util.TimeUtils
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 fun ControlPanelScreen(
-    viewModel: ControlPanelViewModel = hiltViewModel()
+    viewModel: ControlPanelViewModel = hiltViewModel(),
+    onBack: () -> Unit = {}
 ) {
     val uiState = viewModel.uiState.collectAsState().value
     val pagerState = rememberPagerState(pageCount = { 3 })
+    val context = LocalContext.current
 
     Column(modifier = Modifier.fillMaxSize()) {
         TopAppBar(
-            title = { Text("NFC Control Panel") }
+            title = { Text("控制面板") },
+            navigationIcon = {
+                IconButton(onClick = {
+                    (context as? android.app.Activity)?.finish()
+                }) {
+                    Icon(Icons.Default.ArrowBack, contentDescription = "返回")
+                }
+            }
         )
 
         HorizontalPager(
@@ -101,10 +115,10 @@ private fun TimerPage(
     ) {
         Text(
             text = when (uiState.timerState) {
-                TimerState.IDLE -> "Ready"
-                TimerState.RUNNING -> "Focusing"
-                TimerState.PAUSED -> "Paused"
-                TimerState.FINISHED -> "Complete"
+                TimerState.IDLE -> "准备就绪"
+                TimerState.RUNNING -> "专注中"
+                TimerState.PAUSED -> "已暂停"
+                TimerState.FINISHED -> "已完成"
                 else -> ""
             },
             style = MaterialTheme.typography.titleLarge,
@@ -134,23 +148,23 @@ private fun TimerPage(
             when (uiState.timerState) {
                 TimerState.IDLE, TimerState.FINISHED -> {
                     Button(onClick = { viewModel.startSession() }) {
-                        Text("Start Session")
+                        Text("开始专注")
                     }
                 }
                 TimerState.RUNNING -> {
                     Button(onClick = { viewModel.pauseSession() }) {
-                        Text("Pause")
+                        Text("暂停")
                     }
                     OutlinedButton(onClick = { viewModel.stopSession() }) {
-                        Text("Stop")
+                        Text("停止")
                     }
                 }
                 TimerState.PAUSED -> {
                     Button(onClick = { viewModel.startSession() }) {
-                        Text("Resume")
+                        Text("继续")
                     }
                     OutlinedButton(onClick = { viewModel.stopSession() }) {
-                        Text("Stop")
+                        Text("停止")
                     }
                 }
                 else -> {}
@@ -172,7 +186,7 @@ private fun StatsPage(
         verticalArrangement = Arrangement.Center
     ) {
         Text(
-            text = "Connection Status",
+            text = "连接状态",
             style = MaterialTheme.typography.titleMedium,
             color = MaterialTheme.colorScheme.primary
         )
@@ -197,9 +211,9 @@ private fun StatsPage(
             Spacer(modifier = Modifier.width(8.dp))
             Text(
                 text = when (uiState.nfcStatus) {
-                    NfcStatus.AVAILABLE -> "NFC Connected"
-                    NfcStatus.UNAVAILABLE -> "NFC Unavailable"
-                    NfcStatus.CHECKING -> "Checking NFC..."
+                    NfcStatus.AVAILABLE -> "NFC 已连接"
+                    NfcStatus.UNAVAILABLE -> "NFC 不可用"
+                    NfcStatus.CHECKING -> "检查 NFC..."
                 },
                 style = MaterialTheme.typography.bodyLarge
             )
@@ -208,21 +222,25 @@ private fun StatsPage(
         Spacer(modifier = Modifier.height(24.dp))
 
         Text(
-            text = "Session Statistics",
+            text = "会话统计",
             style = MaterialTheme.typography.titleMedium,
             color = MaterialTheme.colorScheme.primary
         )
 
         Spacer(modifier = Modifier.height(12.dp))
 
-        StatRow(label = "Completed Sessions", value = "${uiState.completedSessions}")
-        StatRow(label = "Total Focus Time", value = "${uiState.totalFocusMinutes} min")
-        StatRow(label = "System Mode", value = uiState.systemMode.name.lowercase().replaceFirstChar { it.uppercase() })
+        StatRow(label = "已完成会话", value = "${uiState.completedSessions}")
+        StatRow(label = "总专注时间", value = "${uiState.totalFocusMinutes} 分钟")
+        StatRow(label = "系统模式", value = when (uiState.systemMode) {
+            com.edgefocus.app.presentation.viewmodel.SystemMode.NORMAL -> "正常"
+            com.edgefocus.app.presentation.viewmodel.SystemMode.SILENT -> "静音"
+            com.edgefocus.app.presentation.viewmodel.SystemMode.HOME -> "家庭"
+        })
 
         Spacer(modifier = Modifier.height(24.dp))
 
         OutlinedButton(onClick = onEnableNfcRotation) {
-            Text("Enable NFC Screen Rotation")
+            Text("启用 NFC 屏幕旋转")
         }
     }
 }

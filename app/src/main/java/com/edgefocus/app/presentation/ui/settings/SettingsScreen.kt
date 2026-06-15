@@ -34,7 +34,7 @@ fun SettingsScreen(
 
     Column(modifier = Modifier.fillMaxSize()) {
         TopAppBar(
-            title = { Text("Settings") }
+            title = { Text("设置") }
         )
 
         Column(
@@ -44,7 +44,7 @@ fun SettingsScreen(
                 .padding(16.dp)
         ) {
             Text(
-                text = "Pomodoro Timer",
+                text = "番茄钟设置",
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.primary
             )
@@ -52,33 +52,33 @@ fun SettingsScreen(
             Spacer(modifier = Modifier.height(16.dp))
 
             SettingSlider(
-                label = "Focus Duration",
+                label = "专注时长",
                 value = settings.pomodoroDuration.toFloat(),
                 valueRange = 1f..60f,
                 onValueChange = { viewModel.updatePomodoroDuration(it.toInt()) },
-                valueText = "${settings.pomodoroDuration} min"
+                valueText = "${settings.pomodoroDuration} 分钟"
             )
 
             SettingSlider(
-                label = "Short Break",
+                label = "短休息",
                 value = settings.shortBreakDuration.toFloat(),
                 valueRange = 1f..30f,
                 onValueChange = { viewModel.updateShortBreakDuration(it.toInt()) },
-                valueText = "${settings.shortBreakDuration} min"
+                valueText = "${settings.shortBreakDuration} 分钟"
             )
 
             SettingSlider(
-                label = "Long Break",
+                label = "长休息",
                 value = settings.longBreakDuration.toFloat(),
                 valueRange = 1f..60f,
                 onValueChange = { viewModel.updateLongBreakDuration(it.toInt()) },
-                valueText = "${settings.longBreakDuration} min"
+                valueText = "${settings.longBreakDuration} 分钟"
             )
 
             Spacer(modifier = Modifier.height(24.dp))
 
             Text(
-                text = "Integration",
+                text = "设备集成",
                 style = MaterialTheme.typography.titleMedium,
                 color = MaterialTheme.colorScheme.primary
             )
@@ -86,19 +86,19 @@ fun SettingsScreen(
             Spacer(modifier = Modifier.height(16.dp))
 
             SettingSwitch(
-                label = "Use EdgeFocus Board",
+                label = "使用 EdgeFocus 开发板",
                 checked = settings.useEdgeFocusBoard,
                 onCheckedChange = { viewModel.updateUseEdgeFocusBoard(it) }
             )
 
             SettingSwitch(
-                label = "Auto-rotate for NFC",
+                label = "NFC 自动旋转",
                 checked = settings.autoRotateNFC,
                 onCheckedChange = { viewModel.updateAutoRotateNFC(it) }
             )
 
             SettingSwitch(
-                label = "Notification on Exit",
+                label = "退出时通知",
                 checked = settings.notificationOnExit,
                 onCheckedChange = { viewModel.updateNotificationOnExit(it) }
             )

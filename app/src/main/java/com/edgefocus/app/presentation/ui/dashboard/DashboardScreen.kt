@@ -38,7 +38,7 @@ fun DashboardScreen(
 
     Column(modifier = Modifier.fillMaxSize()) {
         TopAppBar(
-            title = { Text("Dashboard") }
+            title = { Text("数据面板") }
         )
 
         LazyColumn(
@@ -49,7 +49,7 @@ fun DashboardScreen(
         ) {
             item {
                 StatsCard(
-                    title = "Today",
+                    title = "今日",
                     focusSeconds = uiState.todayFocusSeconds,
                     sessionCount = uiState.todaySessionCount
                 )
@@ -57,7 +57,7 @@ fun DashboardScreen(
 
             item {
                 StatsCard(
-                    title = "This Week",
+                    title = "本周",
                     focusSeconds = uiState.weekFocusSeconds,
                     sessionCount = null
                 )
@@ -66,7 +66,7 @@ fun DashboardScreen(
             if (uiState.sessions.isNotEmpty()) {
                 item {
                     Text(
-                        text = "Recent Sessions",
+                        text = "最近会话",
                         style = MaterialTheme.typography.titleMedium,
                         color = MaterialTheme.colorScheme.primary
                     )
@@ -104,12 +104,12 @@ private fun StatsCard(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 StatItem(
-                    label = "Focus Time",
+                    label = "专注时间",
                     value = formatDuration(focusSeconds)
                 )
                 if (sessionCount != null) {
                     StatItem(
-                        label = "Sessions",
+                        label = "会话数",
                         value = "$sessionCount"
                     )
                 }
@@ -155,7 +155,7 @@ private fun SessionCard(session: Session) {
                     style = MaterialTheme.typography.bodyMedium
                 )
                 Text(
-                    text = "Distractions: ${session.distractionCount}",
+                    text = "分心次数: ${session.distractionCount}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -172,10 +172,10 @@ private fun SessionCard(session: Session) {
 private fun formatDuration(seconds: Int): String {
     val hours = seconds / 3600
     val minutes = (seconds % 3600) / 60
-    return if (hours > 0) "${hours}h ${minutes}m" else "${minutes}m"
+    return if (hours > 0) "${hours}小时 ${minutes}分钟" else "${minutes}分钟"
 }
 
 private fun formatDate(timestamp: Long): String {
-    val sdf = SimpleDateFormat("MMM dd, HH:mm", Locale.getDefault())
+    val sdf = SimpleDateFormat("MM月dd日 HH:mm", Locale.CHINA)
     return sdf.format(Date(timestamp))
 }

@@ -28,12 +28,12 @@ data class FeedbackOption(
 )
 
 val feedbackOptions = listOf(
-    FeedbackOption("too_many", "Too many reminders"),
-    FeedbackOption("not_enough", "Not enough reminders"),
-    FeedbackOption("perfect", "Perfect timing"),
-    FeedbackOption("well_detected", "Distractions were well detected"),
-    FeedbackOption("missed", "Missed some distractions"),
-    FeedbackOption("other", "Other")
+    FeedbackOption("too_many", "提醒太多"),
+    FeedbackOption("not_enough", "提醒太少"),
+    FeedbackOption("perfect", "时机刚好"),
+    FeedbackOption("well_detected", "分心检测准确"),
+    FeedbackOption("missed", "遗漏了一些分心"),
+    FeedbackOption("other", "其他")
 )
 
 @Composable
@@ -46,7 +46,7 @@ fun FeedbackDialog(
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("Session Feedback") },
+        title = { Text("会话反馈") },
         text = {
             Column {
                 feedbackOptions.forEach { option ->
@@ -72,7 +72,7 @@ fun FeedbackDialog(
                         value = otherText,
                         onValueChange = { otherText = it },
                         modifier = Modifier.fillMaxWidth(),
-                        placeholder = { Text("Please specify...") },
+                        placeholder = { Text("请说明...") },
                         singleLine = true
                     )
                 }
@@ -88,12 +88,12 @@ fun FeedbackDialog(
                 enabled = selectedOptionId != null &&
                         (selectedOptionId != "other" || otherText.isNotBlank())
             ) {
-                Text("Submit")
+                Text("提交")
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("Cancel")
+                Text("取消")
             }
         }
     )
