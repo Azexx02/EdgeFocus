@@ -88,9 +88,8 @@ object AppCategorizer {
             events.getNextEvent(event)
             when (event.eventType) {
                 android.app.usage.UsageEvents.Event.ACTIVITY_RESUMED -> {
-                    // 过滤掉系统UI和自身
-                    if (event.packageName != myPackageName &&
-                        event.packageName != "com.android.systemui") {
+                    // 过滤掉自身
+                    if (event.packageName != myPackageName) {
                         lastResumedPackage = event.packageName
                     }
                 }
@@ -112,8 +111,7 @@ object AppCategorizer {
                 extendedEvents.getNextEvent(extEvent)
                 when (extEvent.eventType) {
                     android.app.usage.UsageEvents.Event.ACTIVITY_RESUMED -> {
-                        if (extEvent.packageName != myPackageName &&
-                            extEvent.packageName != "com.android.systemui") {
+                        if (extEvent.packageName != myPackageName) {
                             extendedPkg = extEvent.packageName
                         }
                     }
