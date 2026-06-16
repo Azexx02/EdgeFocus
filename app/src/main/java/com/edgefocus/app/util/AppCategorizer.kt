@@ -77,6 +77,7 @@ object AppCategorizer {
                 ?: return null
 
         val now = System.currentTimeMillis()
+        val myPackageName = context.packageName
 
         // 60秒窗口查询
         val events = usageStatsManager.queryEvents(now - 60_000, now) ?: return null
@@ -87,7 +88,11 @@ object AppCategorizer {
             events.getNextEvent(event)
             when (event.eventType) {
                 android.app.usage.UsageEvents.Event.ACTIVITY_RESUMED -> {
-                    lastResumedPackage = event.packageName
+                    // 过滤掉系统UI和自身
+                    if (event.packageName != myPackageName &&
+                        event.packageName != "com.android.systemui") {
+                        lastResumedPackage = event.packageName
+                    }
                 }
                 android.app.usage.UsageEvents.Event.ACTIVITY_PAUSED,
                 android.app.usage.UsageEvents.Event.ACTIVITY_STOPPED -> {
@@ -106,7 +111,12 @@ object AppCategorizer {
             while (extendedEvents.hasNextEvent()) {
                 extendedEvents.getNextEvent(extEvent)
                 when (extEvent.eventType) {
-                    android.app.usage.UsageEvents.Event.ACTIVITY_RESUMED -> extendedPkg = extEvent.packageName
+                    android.app.usage.UsageEvents.Event.ACTIVITY_RESUMED -> {
+                        if (extEvent.packageName != myPackageName &&
+                            extEvent.packageName != "com.android.systemui") {
+                            extendedPkg = extEvent.packageName
+                        }
+                    }
                     android.app.usage.UsageEvents.Event.ACTIVITY_PAUSED,
                     android.app.usage.UsageEvents.Event.ACTIVITY_STOPPED -> {
                         if (extEvent.packageName == extendedPkg) extendedPkg = null
