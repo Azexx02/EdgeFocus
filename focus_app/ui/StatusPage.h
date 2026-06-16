@@ -32,6 +32,9 @@ private:
     static constexpr int DURATION_MAX = 120;
     static constexpr int DURATION_STEP = 5;
 
+    // Calibration auto-skip timer
+    int64_t calibration_start_ms_ = 0;
+
     Color focusStateColor(FocusState state) const;
     const char* focusStateText(FocusState state) const;
     const char* focusStateEmoji(FocusState state) const;

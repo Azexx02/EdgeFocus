@@ -109,45 +109,87 @@ void StatusPage::render(FrameBuffer& fb, const SystemSnapshot& snap) {
         fb.drawTextCentered(Rect(20, 270, W - 40, 30), goal_str, Color::primary(), goal_font);
 
     } else if (internal_state_ == InternalState::CALIBRATING) {
-        // --- Calibration Transition ---
+        // --- Pre-session Check Page ---
         FontInfo title_font;
         title_font.scale = 2;
-        fb.drawTextCentered(Rect(0, 50, W, 30), "Calibration", Color::textPrimary(), title_font);
+        fb.drawTextCentered(Rect(0, 45, W, 25), "Pre-Check", Color::textPrimary(), title_font);
 
-        const int CIRCLE_Y = 160;
-        const int CIRCLE_R = 50;
+        FontInfo item_font;
+        item_font.scale = 1;
+        FontInfo val_font;
+        val_font.scale = 1;
 
-        Color q_color;
-        const char* q_text;
-        if (snap.frame_quality.score >= 0.6f) {
-            q_color = Color::primary();
-            q_text = "Good";
-        } else if (snap.frame_quality.score >= 0.4f) {
-            q_color = Color::secondary();
-            q_text = "Fair";
+        const int LIST_Y = 80;
+        const int ROW_H = 30;
+
+        // 1. Camera status
+        fb.drawText(20, LIST_Y, "Camera:", Color::textSecondary(), item_font);
+        if (snap.device.camera_ok) {
+            fb.drawText(100, LIST_Y, "OK", Color::primary(), val_font);
         } else {
-            q_color = Color::error();
-            q_text = "Poor";
+            fb.drawText(100, LIST_Y, "Not Found", Color::error(), val_font);
         }
 
-        fb.fillCircle(W / 2, CIRCLE_Y, CIRCLE_R, q_color);
-        char score_buf[16];
-        snprintf(score_buf, sizeof(score_buf), "%d", static_cast<int>(snap.frame_quality.score * 100));
-        FontInfo score_font;
-        score_font.scale = 3;
-        fb.drawTextCentered(Rect(W / 2 - CIRCLE_R, CIRCLE_Y - 20, CIRCLE_R * 2, 40), score_buf, Color::bgDark(), score_font);
-
-        fb.drawTextCentered(Rect(0, CIRCLE_Y + CIRCLE_R + 10, W, 30), q_text, q_color, title_font);
-
-        if (!snap.frame_quality.reason.empty()) {
-            FontInfo reason_font;
-            reason_font.scale = 1;
-            fb.drawTextCentered(Rect(0, CIRCLE_Y + CIRCLE_R + 40, W, 20), snap.frame_quality.reason, Color::textSecondary(), reason_font);
+        // 2. Frame quality
+        fb.drawText(20, LIST_Y + ROW_H, "Quality:", Color::textSecondary(), item_font);
+        if (snap.frame_quality.score >= 0.6f) {
+            char buf[16];
+            snprintf(buf, sizeof(buf), "%d%%", static_cast<int>(snap.frame_quality.score * 100));
+            fb.drawText(100, LIST_Y + ROW_H, buf, Color::primary(), val_font);
+        } else if (snap.frame_quality.score > 0.0f) {
+            char buf[16];
+            snprintf(buf, sizeof(buf), "%d%%", static_cast<int>(snap.frame_quality.score * 100));
+            fb.drawText(100, LIST_Y + ROW_H, buf, Color::secondary(), val_font);
+        } else {
+            fb.drawText(100, LIST_Y + ROW_H, "N/A", Color::textSecondary(), val_font);
         }
 
-        // NEXT / PASS Button
-        fb.fillRoundRect(Rect(20, H - 90, W - 40, 60), 8, Color::primary());
-        fb.drawTextCentered(Rect(20, H - 90, W - 40, 60), "GO", Color::bgDark(), score_font);
+        // 3. BLE band
+        fb.drawText(20, LIST_Y + ROW_H * 2, "Band:", Color::textSecondary(), item_font);
+        if (snap.device.bracelet_connected) {
+            fb.drawText(100, LIST_Y + ROW_H * 2, "Connected", Color::primary(), val_font);
+        } else if (snap.device.ble_enabled) {
+            fb.drawText(100, LIST_Y + ROW_H * 2, "Searching", Color::secondary(), val_font);
+        } else {
+            fb.drawText(100, LIST_Y + ROW_H * 2, "Off", Color::textSecondary(), val_font);
+        }
+
+        // 4. Mode
+        fb.drawText(20, LIST_Y + ROW_H * 3, "Mode:", Color::textSecondary(), item_font);
+        const char* mode_str = "Normal";
+        if (snap.device.system_mode == SystemMode::SILENT) mode_str = "Silent";
+        else if (snap.device.system_mode == SystemMode::HOME) mode_str = "Home";
+        fb.drawText(100, LIST_Y + ROW_H * 3, mode_str, Color::textPrimary(), val_font);
+
+        // 5. Target duration
+        fb.drawText(20, LIST_Y + ROW_H * 4, "Timer:", Color::textSecondary(), item_font);
+        char timer_buf[16];
+        if (target_duration_min_ >= 60) {
+            int h = target_duration_min_ / 60;
+            int m = target_duration_min_ % 60;
+            if (m > 0) snprintf(timer_buf, sizeof(timer_buf), "%dh%02dm", h, m);
+            else snprintf(timer_buf, sizeof(timer_buf), "%dh", h);
+        } else {
+            snprintf(timer_buf, sizeof(timer_buf), "%dmin", target_duration_min_);
+        }
+        fb.drawText(100, LIST_Y + ROW_H * 4, timer_buf, Color::textPrimary(), val_font);
+
+        // Tip
+        FontInfo tip_font;
+        tip_font.scale = 1;
+        if (!snap.device.camera_ok) {
+            fb.drawTextCentered(Rect(0, LIST_Y + ROW_H * 5 + 10, W, 15), "Tip: Connect camera for", Color::textSecondary(), tip_font);
+            fb.drawTextCentered(Rect(0, LIST_Y + ROW_H * 5 + 25, W, 15), "posture detection", Color::textSecondary(), tip_font);
+        } else if (snap.frame_quality.score < 0.4f) {
+            fb.drawTextCentered(Rect(0, LIST_Y + ROW_H * 5 + 10, W, 15), "Tip: Adjust lighting or", Color::textSecondary(), tip_font);
+            fb.drawTextCentered(Rect(0, LIST_Y + ROW_H * 5 + 25, W, 15), "camera angle", Color::textSecondary(), tip_font);
+        }
+
+        // GO Button
+        fb.fillRoundRect(Rect(20, H - 80, W - 40, 55), 10, Color::primary());
+        FontInfo go_font;
+        go_font.scale = 3;
+        fb.drawTextCentered(Rect(20, H - 80, W - 40, 55), "GO", Color::bgDark(), go_font);
 
     } else if (internal_state_ == InternalState::FOCUSED) {
         // --- Active Session Screen ---
@@ -255,6 +297,8 @@ bool StatusPage::onTouch(int x, int y) {
         if (y > 175 && y < 230 && x > 20 && x < W - 20) {
             // START button tapped - begin session with calibration
             internal_state_ = InternalState::CALIBRATING;
+            calibration_start_ms_ = std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
 
             SessionInfo s;
             s.active = true;
@@ -274,12 +318,12 @@ bool StatusPage::onTouch(int x, int y) {
             store_->updateSession(s);
             store_->notifySessionChange();
 
-            LOGI("StatusPage", "Session started (calibration phase, target=%dmin)", target_duration_min_);
+            LOGI("StatusPage", "Session started (calibration, target=%dmin)", target_duration_min_);
             return true;
         }
     } else if (internal_state_ == InternalState::CALIBRATING) {
-        if (y > H - 90 && y < H - 30 && x > 20 && x < W - 20) {
-            // GO button tapped - skip to focused monitoring
+        if (y > H - 90) {
+            // GO button tapped - start focused monitoring
             internal_state_ = InternalState::FOCUSED;
 
             SessionInfo s = store_->snapshot().session;
