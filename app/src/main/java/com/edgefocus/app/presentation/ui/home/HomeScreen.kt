@@ -41,6 +41,14 @@ fun HomeScreen(
     val useBoard = settings.useEdgeFocusBoard
     val isConnected = bleViewModel.isConnected()
 
+    // 判断是否可以启动会话
+    val canStart = when {
+        // EdgeFocus模式：必须连接设备
+        useBoard && uiState.timerState == TimerState.IDLE -> isConnected
+        // 其他状态：都可以操作
+        else -> true
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -135,10 +143,10 @@ fun HomeScreen(
                 onClick = {
                     when (uiState.timerState) {
                         TimerState.IDLE -> {
-                            viewModel.startTimer(useBoard)
+                            viewModel.startTimer(useBoard && isConnected)
                         }
                         TimerState.PAUSED -> {
-                            viewModel.startTimer(useBoard)
+                            viewModel.startTimer(useBoard && isConnected)
                         }
                         TimerState.RUNNING -> {
                             viewModel.pauseTimer()
@@ -151,11 +159,12 @@ fun HomeScreen(
                         }
                     }
                 },
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth(),
+                enabled = canStart
             ) {
                 Text(
                     text = when (uiState.timerState) {
-                        TimerState.IDLE -> if (useBoard) "开始 EdgeFocus 会话" else "开始专注"
+                        TimerState.IDLE -> if (useBoard && isConnected) "开始 EdgeFocus 会话" else "开始专注"
                         TimerState.RUNNING -> "暂停"
                         TimerState.PAUSED -> "继续"
                         TimerState.BREAK -> "暂停休息"
@@ -188,9 +197,9 @@ fun HomeScreen(
             }
 
             // 提示信息
-            if (useBoard && !isConnected) {
+            if (useBoard && !isConnected && uiState.timerState == TimerState.IDLE) {
                 Text(
-                    text = "设备未连接，将尝试自动连接",
+                    text = "连接设备后可使用 EdgeFocus 模式",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
