@@ -88,6 +88,10 @@ class TimerStateHolder @Inject constructor(
     /**
      * 启动 EdgeFocus 模式会话
      * 必须已连接设备才能调用
+     * 
+     * 原则：EdgeFocus 设备是核心，手机是遥控器
+     * 逻辑：先通知板端开始，等待板端响应后才设置状态
+     * 本地计时只是保底，防止中途蓝牙断连
      */
     fun startEdgeFocusSession(targetDurationMinutes: Int) {
         if (!bleManager.isConnected()) {
@@ -95,32 +99,83 @@ class TimerStateHolder @Inject constructor(
             return
         }
 
+        // 先设置基础状态（不启动倒计时）
         val totalTimeMs = TimeUtils.minutesToMillis(targetDurationMinutes)
-
         _state.update {
             it.copy(
-                timerState = TimerState.RUNNING,
-                sessionType = SessionType.WORK,
-                timeRemaining = totalTimeMs,
-                totalTime = totalTimeMs,
-                targetDurationMinutes = targetDurationMinutes,
                 sessionMode = SessionMode.EDGEFOCUS,
                 isSyncingWithBoard = true
             )
         }
 
-        // 启动本地倒计时（保底）
-        startLocalCountdown()
-
-        // 启动板端同步
-        startBoardSync()
-
-        // 通知板端开始会话
+        // 通知板端开始会话，等待响应
         scope.launch {
-            bleManager.sessionControl("start", targetDurationMinutes)
+            try {
+                val result = bleManager.sessionControl("start", targetDurationMinutes)
+                result.onSuccess { data ->
+                    // 板端响应成功
+                    val json = String(data, Charsets.UTF_8)
+                    val jsonObj = JSONObject(json)
+                    val responseData = jsonObj.optJSONObject("data")
+                    
+                    val boardRemainingMs = responseData?.optLong("remaining_ms", 0) ?: 0
+                    val boardTargetMs = responseData?.optLong("target_duration_ms", 0) ?: 0
+                    
+                    if (boardRemainingMs > 0 && boardTargetMs > 0) {
+                        // 板端有时间数据，跟随板端
+                        Log.d(TAG, "Board responded with time: remaining=${boardRemainingMs}ms, target=${boardTargetMs}ms")
+                        _state.update {
+                            it.copy(
+                                timerState = TimerState.RUNNING,
+                                sessionType = SessionType.WORK,
+                                timeRemaining = boardRemainingMs,
+                                totalTime = boardTargetMs,
+                                targetDurationMinutes = targetDurationMinutes
+                            )
+                        }
+                    } else {
+                        // 板端无时间数据，使用本地时间
+                        Log.d(TAG, "Board responded without time, using local time")
+                        _state.update {
+                            it.copy(
+                                timerState = TimerState.RUNNING,
+                                sessionType = SessionType.WORK,
+                                timeRemaining = totalTimeMs,
+                                totalTime = totalTimeMs,
+                                targetDurationMinutes = targetDurationMinutes
+                            )
+                        }
+                    }
+                    
+                    // 启动板端同步和本地倒计时
+                    startBoardSync()
+                    startLocalCountdown()
+                    
+                }.onFailure { error ->
+                    Log.e(TAG, "Failed to start session on board: ${error.message}")
+                    // 板端通信失败，回退到空闲状态
+                    _state.update {
+                        it.copy(
+                            timerState = TimerState.IDLE,
+                            sessionMode = SessionMode.LOCAL,
+                            isSyncingWithBoard = false
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error starting session on board: ${e.message}")
+                // 异常，回退到空闲状态
+                _state.update {
+                    it.copy(
+                        timerState = TimerState.IDLE,
+                        sessionMode = SessionMode.LOCAL,
+                        isSyncingWithBoard = false
+                    )
+                }
+            }
         }
 
-        Log.d(TAG, "EdgeFocus session started: duration=${targetDurationMinutes}min")
+        Log.d(TAG, "EdgeFocus session starting: waiting for board response...")
     }
 
     /**
@@ -161,15 +216,41 @@ class TimerStateHolder @Inject constructor(
     }
 
     fun resumeSession() {
-        _state.update { it.copy(timerState = TimerState.RUNNING) }
-
-        // 恢复本地倒计时
-        startLocalCountdown()
-
-        // EdgeFocus模式下恢复同步
+        // EdgeFocus模式下，先通知板端，等响应后再恢复
         if (_state.value.sessionMode == SessionMode.EDGEFOCUS && bleManager.isConnected()) {
-            startBoardSync()
-            scope.launch { bleManager.sessionControl("resume") }
+            scope.launch {
+                try {
+                    val result = bleManager.sessionControl("resume")
+                    result.onSuccess { data ->
+                        // 板端响应成功，检查 success 字段
+                        val json = String(data, Charsets.UTF_8)
+                        val jsonObj = JSONObject(json)
+                        val responseData = jsonObj.optJSONObject("data")
+                        val success = responseData?.optBoolean("success", false) ?: false
+                        
+                        if (success) {
+                            // 板端恢复成功，恢复本地倒计时和板端同步
+                            Log.d(TAG, "Board resume successful")
+                            _state.update { it.copy(timerState = TimerState.RUNNING) }
+                            startLocalCountdown()
+                            startBoardSync()
+                        } else {
+                            // 板端恢复失败
+                            val message = responseData?.optString("message", "unknown error") ?: "unknown error"
+                            Log.e(TAG, "Board resume failed: $message")
+                        }
+                    }.onFailure { error ->
+                        Log.e(TAG, "Failed to resume session on board: ${error.message}")
+                        // 板端通信失败，不恢复
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Error resuming session on board: ${e.message}")
+                }
+            }
+        } else {
+            // 本地模式，直接恢复
+            _state.update { it.copy(timerState = TimerState.RUNNING) }
+            startLocalCountdown()
         }
     }
 
