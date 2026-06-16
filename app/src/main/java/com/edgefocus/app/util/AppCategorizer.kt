@@ -77,8 +77,6 @@ object AppCategorizer {
                 ?: return null
 
         val now = System.currentTimeMillis()
-        val myPackageName = context.packageName
-
         // 60秒窗口查询
         val events = usageStatsManager.queryEvents(now - 60_000, now) ?: return null
         var lastResumedPackage: String? = null
@@ -88,10 +86,7 @@ object AppCategorizer {
             events.getNextEvent(event)
             when (event.eventType) {
                 android.app.usage.UsageEvents.Event.ACTIVITY_RESUMED -> {
-                    // 过滤掉自身
-                    if (event.packageName != myPackageName) {
-                        lastResumedPackage = event.packageName
-                    }
+                    lastResumedPackage = event.packageName
                 }
                 android.app.usage.UsageEvents.Event.ACTIVITY_PAUSED,
                 android.app.usage.UsageEvents.Event.ACTIVITY_STOPPED -> {
@@ -110,11 +105,7 @@ object AppCategorizer {
             while (extendedEvents.hasNextEvent()) {
                 extendedEvents.getNextEvent(extEvent)
                 when (extEvent.eventType) {
-                    android.app.usage.UsageEvents.Event.ACTIVITY_RESUMED -> {
-                        if (extEvent.packageName != myPackageName) {
-                            extendedPkg = extEvent.packageName
-                        }
-                    }
+                    android.app.usage.UsageEvents.Event.ACTIVITY_RESUMED -> extendedPkg = extEvent.packageName
                     android.app.usage.UsageEvents.Event.ACTIVITY_PAUSED,
                     android.app.usage.UsageEvents.Event.ACTIVITY_STOPPED -> {
                         if (extEvent.packageName == extendedPkg) extendedPkg = null
