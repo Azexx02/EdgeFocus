@@ -24,12 +24,15 @@ struct SessionInfo {
     bool        active = false;
     bool        calibrating = false;           // true during calibration phase
     bool        calibration_completed = false;  // true after FSM exits CALIBRATING
+    std::string session_id;                    // unique session identifier
     int64_t     start_ms = 0;
     int64_t     elapsed_ms = 0;
     int         distraction_count = 0;
     int         reminder_count = 0;
     int64_t     away_since_ms = 0;             // timestamp when AWAY state began (0 = not away)
     int64_t     away_timeout_ms = 30 * 60 * 1000; // auto-terminate after away for this long
+    int64_t     target_duration_ms = 0;        // pomodoro target duration (0 = no target)
+    int64_t     remaining_ms = 0;              // remaining time (target - elapsed)
 };
 
 struct TodayStats {
@@ -37,6 +40,7 @@ struct TodayStats {
     int64_t focus_seconds = 0;
     int     sessions = 0;
     int     events = 0;
+    int     phone_distraction_count = 0;
 };
 
 struct ActiveReminder {

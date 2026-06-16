@@ -1,5 +1,6 @@
 #pragma once
 #include "Page.h"
+#include "policy/ModeManager.h"
 
 namespace edgefocus {
 
@@ -10,6 +11,8 @@ public:
     bool onTouch(int x, int y) override;
     const char* name() const override { return "SettingsPage"; }
 
+    void setModeManager(ModeManager* mm) { mode_mgr_ = mm; }
+
     using ModeChangeCallback = std::function<void(SystemMode)>;
     void setModeChangeCallback(ModeChangeCallback cb) { mode_cb_ = std::move(cb); }
 
@@ -17,6 +20,7 @@ public:
     void setPageChangeCallback(PageChangeCallback cb) { page_cb_ = std::move(cb); }
 
 private:
+    ModeManager* mode_mgr_ = nullptr;
     ModeChangeCallback mode_cb_;
     PageChangeCallback page_cb_;
 

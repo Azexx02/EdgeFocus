@@ -94,7 +94,11 @@ VisionResult InferenceScheduler::buildResult(const CameraFrame& frame,
     result.head_state = inference.head_state;
 
     if (inference.person_detected) {
-        if (inference.presence_conf < 0.10f) {
+        // When real model ran but confidence is low (e.g. head not visible),
+        // downgrade presence to UNCERTAIN
+        if (inference.ran_model && inference.reason_code == ReasonCode::LOW_CONFIDENCE) {
+            result.presence = {Presence::UNCERTAIN, inference.presence_conf, true};
+        } else if (inference.presence_conf < 0.10f) {
             result.presence = {Presence::AWAY, inference.presence_conf, true};
         } else if (inference.presence_conf < 0.20f) {
             result.presence = {Presence::UNCERTAIN, inference.presence_conf, true};

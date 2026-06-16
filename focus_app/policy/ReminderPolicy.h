@@ -12,11 +12,12 @@ namespace edgefocus {
 
 class AppContext;
 class SystemStateStore;
+class DeviceManager;
 
 /// Reminder policy module. Generates InterventionCommands based on FocusState.
 class ReminderPolicy : public Module {
 public:
-    ReminderPolicy(SystemStateStore& store, SQLiteStore& sqlite_store);
+    ReminderPolicy(SystemStateStore& store, SQLiteStore& sqlite_store, DeviceManager& device_mgr);
     bool init(AppContext& ctx) override;
     void runOnce(AppContext& ctx) override;
     void shutdown(AppContext& ctx) override;
@@ -29,6 +30,7 @@ public:
 private:
     SystemStateStore& store_;
     SQLiteStore& sqlite_store_;
+    DeviceManager& device_mgr_;
     ModeManager mode_manager_;
     int64_t last_reminder_time_ms_{0};
     int64_t base_cooling_ms_{5000};

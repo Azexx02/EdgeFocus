@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include <string>
 
 namespace edgefocus {
@@ -13,7 +14,7 @@ enum class StorageEventType {
 struct StorageEvent {
     StorageEventType type;
     std::string session_id;
-    int timestamp;
+    int64_t timestamp;
     std::string data;
 };
 

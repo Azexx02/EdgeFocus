@@ -25,6 +25,8 @@ private:
     SQLiteStore& sqlite_store_;
     FocusStateMachine fsm_;
     bool session_was_active_ = false;
+    int64_t focus_accumulated_ms_ = 0;
+    int64_t last_focus_update_ms_ = 0;
 };
 
 } // namespace edgefocus

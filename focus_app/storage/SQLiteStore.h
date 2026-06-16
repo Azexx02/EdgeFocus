@@ -3,6 +3,7 @@
 #include "app/BoundedQueue.h"
 #include "StorageEvent.h"
 #include <string>
+#include <vector>
 
 namespace edgefocus {
 
@@ -18,6 +19,7 @@ public:
     void shutdown(AppContext& ctx) override;
     
     bool logEvent(const StorageEvent& event);
+    std::vector<StorageEvent> queryEvents(const std::string& session_id);
 
 private:
     void* db_; // sqlite3* pointer

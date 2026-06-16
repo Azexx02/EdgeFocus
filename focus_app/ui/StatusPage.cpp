@@ -64,7 +64,17 @@ void StatusPage::render(FrameBuffer& fb, const SystemSnapshot& snap) {
         
         FontInfo goal_font;
         goal_font.scale = 2;
-        fb.drawTextCentered(Rect(20, 250, W - 40, 30), "2h 45m", Color::primary(), goal_font);
+        std::string goal_str = "No Goal";
+        if (snap.session.target_duration_ms > 0) {
+            int goal_min = static_cast<int>(snap.session.target_duration_ms / 60000);
+            int h = goal_min / 60;
+            int m = goal_min % 60;
+            char buf[16];
+            if (h > 0) snprintf(buf, sizeof(buf), "%dh %02dm", h, m);
+            else snprintf(buf, sizeof(buf), "%dm", m);
+            goal_str = buf;
+        }
+        fb.drawTextCentered(Rect(20, 250, W - 40, 30), goal_str, Color::primary(), goal_font);
         fb.drawProgressBar(Rect(30, 285, W - 60, 6), 0.3f, Color::primary(), Color::bgDark(), Color::bgDark());
 
     } else if (internal_state_ == InternalState::CALIBRATING) {
@@ -126,9 +136,12 @@ void StatusPage::render(FrameBuffer& fb, const SystemSnapshot& snap) {
         int radius = 50;
         int thickness = 8;
         fb.drawRing(cx, cy, radius, thickness, Color::bgCard());
-        // Progress (mock 75% for now, or based on goal)
-        // 45 min / 2h45m ~ 0.27
-        float progress = 0.75f; 
+        // Real progress based on elapsed/target
+        float progress = 0.0f;
+        if (snap.session.target_duration_ms > 0) {
+            progress = static_cast<float>(snap.session.elapsed_ms) / static_cast<float>(snap.session.target_duration_ms);
+            if (progress > 1.0f) progress = 1.0f;
+        }
         fb.drawArc(cx, cy, radius, thickness, -M_PI/2, -M_PI/2 + (progress * 2.0f * M_PI), Color::primary());
 
         // Time text inside ring
@@ -176,6 +189,9 @@ bool StatusPage::onTouch(int x, int y) {
             s.active = true;
             s.calibrating = true;
             s.calibration_completed = false;
+            s.session_id = "session_" + std::to_string(
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch()).count());
             s.start_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                 std::chrono::steady_clock::now().time_since_epoch()).count();
             s.elapsed_ms = 0;
@@ -209,6 +225,13 @@ bool StatusPage::onTouch(int x, int y) {
             s.active = false;
             store_->updateSession(s);
             store_->notifySessionChange();
+
+            // Generate report before navigating to review
+            if (report_gen_ && !s.session_id.empty()) {
+                SessionReport report = report_gen_->generateReport(s.session_id);
+                store_->updateLastReport(report);
+            }
+
             store_->resetSession();
 
             if (switch_page_) switch_page_(3); // PAGE_REVIEW
@@ -225,6 +248,8 @@ Color StatusPage::focusStateColor(FocusState state) const {
         case FocusState::LOOKING_AWAY:      return Color::secondary();
         case FocusState::SLEEPY_OR_SLUMPED: return Color::secondary();
         case FocusState::PHONE_IN_USE:      return Color::error();
+        case FocusState::PHONE_IN_LEARNING: return Color::primary();
+        case FocusState::PHONE_IN_PLAYING:  return Color::error();
         case FocusState::AWAY:              return Color::textSecondary();
         case FocusState::LOW_CONFIDENCE:    return Color::textSecondary();
         default:                            return Color::textSecondary();
@@ -237,6 +262,8 @@ const char* StatusPage::focusStateText(FocusState state) const {
         case FocusState::LOOKING_AWAY:      return "Looking Away";
         case FocusState::SLEEPY_OR_SLUMPED: return "Fatigued";
         case FocusState::PHONE_IN_USE:      return "Phone Detected";
+        case FocusState::PHONE_IN_LEARNING: return "Phone Learning";
+        case FocusState::PHONE_IN_PLAYING:  return "Phone Gaming!";
         case FocusState::AWAY:              return "Away";
         case FocusState::LOW_CONFIDENCE:    return "Low Confidence";
         default:                            return "Unknown";
@@ -244,7 +271,17 @@ const char* StatusPage::focusStateText(FocusState state) const {
 }
 
 const char* StatusPage::focusStateEmoji(FocusState state) const {
-    return "";
+    switch (state) {
+        case FocusState::FOCUSED:           return "[*]";
+        case FocusState::LOOKING_AWAY:      return "[>]";
+        case FocusState::SLEEPY_OR_SLUMPED: return "[~]";
+        case FocusState::PHONE_IN_USE:      return "[!]";
+        case FocusState::PHONE_IN_LEARNING: return "[L]";
+        case FocusState::PHONE_IN_PLAYING:  return "[X]";
+        case FocusState::AWAY:              return "[ ]";
+        case FocusState::LOW_CONFIDENCE:    return "[?]";
+        default:                            return "[ ]";
+    }
 }
 
 std::string StatusPage::formatDuration(int64_t seconds) const {

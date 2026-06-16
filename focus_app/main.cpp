@@ -10,6 +10,8 @@
 #include "policy/ReminderPolicy.h"
 #include "device/DeviceManager.h"
 #include "storage/SQLiteStore.h"
+#include "storage/ReportGenerator.h"
+#include "network/BleGattServer.h"
 #include "ui/UIManager.h"
 
 #include <memory>
@@ -85,10 +87,27 @@ int main(int argc, char* argv[]) {
     ctx.addModule(std::make_unique<CameraPipeline>(camera_frame_queue, store));
     ctx.addModule(std::make_unique<VisionEngine>(vision_result_queue, camera_frame_queue, store));
     ctx.addModule(std::make_unique<BehaviorEngine>(vision_result_queue, store, sqlite_store));
-    ctx.addModule(std::make_unique<ReminderPolicy>(store, sqlite_store));
-    ctx.addModule(std::make_unique<DeviceManager>(store));
+    auto device_mgr_ptr = std::make_unique<DeviceManager>(store);
+    DeviceManager& device_mgr = *device_mgr_ptr;
+    ctx.addModule(std::move(device_mgr_ptr));
+    auto reminder_policy_ptr = std::make_unique<ReminderPolicy>(store, sqlite_store, device_mgr);
+    ReminderPolicy& reminder_policy = *reminder_policy_ptr;
+    ctx.addModule(std::move(reminder_policy_ptr));
     ctx.addModule(std::move(sqlite_store_ptr));
-    ctx.addModule(std::make_unique<UIManager>(store));
+
+    // Create ReportGenerator (uses SQLiteStore)
+    ReportGenerator report_gen(sqlite_store);
+
+    // Create BLE GATT Server
+    auto ble_server = std::make_unique<BleGattServer>(store, sqlite_store, reminder_policy,
+                                                       reminder_policy.getModeManager(), report_gen);
+    ctx.addModule(std::move(ble_server));
+
+    auto ui_mgr = std::make_unique<UIManager>(store);
+    ui_mgr->setReportGenerator(&report_gen);
+    ui_mgr->setSQLiteStore(&sqlite_store);
+    ui_mgr->setModeManager(&reminder_policy.getModeManager());
+    ctx.addModule(std::move(ui_mgr));
 
     if (!ctx.startAll()) {
         LOGE("Main", "Failed to start all modules");

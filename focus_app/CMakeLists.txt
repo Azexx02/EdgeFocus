@@ -49,6 +49,7 @@ set(APP_SOURCES
     device/BleBandController.cpp
     storage/SQLiteStore.cpp
     storage/ReportGenerator.cpp
+    network/BleGattServer.cpp
     ui/UIManager.cpp
     ui/FrameBuffer.cpp
     ui/StatusPage.cpp

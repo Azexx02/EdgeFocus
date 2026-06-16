@@ -34,11 +34,16 @@ void DeviceManager::runOnce(AppContext& ctx) {
         LOGI("DeviceManager", "Executing command level: %d, message: %s",
              static_cast<int>(cmd.level), cmd.message.c_str());
 
-        if (cmd.level == CommandLevel::LEVEL_2) {
+        if (cmd.level == CommandLevel::LEVEL_1) {
+            // Light notification: screen flash only
+            screen_ctrl_.flashScreen();
+        } else if (cmd.level == CommandLevel::LEVEL_2) {
             screen_ctrl_.flashScreen();
         } else if (cmd.level == CommandLevel::LEVEL_3) {
             screen_ctrl_.flashScreen();
             ble_ctrl_.sendAlert(static_cast<uint8_t>(cmd.level));
+        } else if (cmd.level == CommandLevel::REST_SUGGESTION) {
+            screen_ctrl_.flashScreen();
         }
     }
 

@@ -15,6 +15,7 @@ public:
     void processFrame(const VisionResult& frame);
     void reset();
     FocusState getCurrentState() const { return current_state_; }
+    int getRiskScore() const { return last_risk_score_; }
     
     void injectPhoneSignal(const PhoneUsageSignal& sig) {
         detector_.injectPhoneSignal(sig);
@@ -31,6 +32,7 @@ private:
     FocusState current_state_;
     FocusState candidate_state_;
     int64_t candidate_start_ms_;
+    int last_risk_score_ = 0;
 
     FocusState determineCandidateState(const FocusEvent& event);
 };

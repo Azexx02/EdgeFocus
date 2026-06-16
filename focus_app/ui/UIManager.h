@@ -17,6 +17,9 @@
 namespace edgefocus {
 
 class AppContext;
+class ReportGenerator;
+class SQLiteStore;
+class ModeManager;
 
 // ---------------------------------------------------------------------------
 // UIManager — owns the UI rendering loop, page stack, and touch input.
@@ -33,6 +36,10 @@ public:
     bool init(AppContext& ctx) override;
     void runOnce(AppContext& ctx) override;
     void shutdown(AppContext& ctx) override;
+
+    void setReportGenerator(ReportGenerator* rg) { report_gen_ = rg; }
+    void setSQLiteStore(SQLiteStore* store) { sqlite_store_ = store; }
+    void setModeManager(ModeManager* mm) { mode_mgr_ = mm; }
 
 private:
     enum PageId {
@@ -53,6 +60,9 @@ private:
     // Components
     FrameBuffer fb_;
     SystemStateStore& store_;
+    ReportGenerator* report_gen_ = nullptr;
+    SQLiteStore* sqlite_store_ = nullptr;
+    ModeManager* mode_mgr_ = nullptr;
 
     // Pages
     std::vector<std::unique_ptr<Page>> pages_;

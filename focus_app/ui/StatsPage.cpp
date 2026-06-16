@@ -17,7 +17,6 @@ void StatsPage::render(FrameBuffer& fb, const SystemSnapshot& snap) {
     fb.drawTextCentered(Rect(0, 60, W, 20), "TOTAL FOCUS", Color::primary(), label_font);
 
     std::string focus_str = formatMinutes(snap.today.focus_seconds);
-    if (snap.today.focus_seconds == 0) focus_str = "4h 12m"; // Preview data if 0
     FontInfo big_font;
     big_font.scale = 3;
     fb.drawTextCentered(Rect(0, 80, W, 50), focus_str, Color::primary(), big_font);
@@ -32,9 +31,18 @@ void StatsPage::render(FrameBuffer& fb, const SystemSnapshot& snap) {
     const int CHART_W = NUM_BARS * BAR_W + (NUM_BARS - 1) * SPACING;
     const int START_X = (W - CHART_W) / 2;
 
-    int heights[] = {30, 50, 20, 60, 45};
+    // Bar heights from today's sessions (simplified: use today focus_seconds distributed)
+    int heights[NUM_BARS] = {0, 0, 0, 0, 0};
+    if (snap.today.focus_seconds > 0) {
+        int avg = static_cast<int>(snap.today.focus_seconds / NUM_BARS);
+        for (int i = 0; i < NUM_BARS && i < snap.today.sessions; ++i) {
+            heights[i] = std::min(60, avg / 60); // Scale to chart height
+        }
+    }
     for (int i = 0; i < NUM_BARS; i++) {
-        fb.fillRect(Rect(START_X + i * (BAR_W + SPACING), CHART_Y + (CHART_H - heights[i]), BAR_W, heights[i]), Color::primary());
+        if (heights[i] > 0) {
+            fb.fillRect(Rect(START_X + i * (BAR_W + SPACING), CHART_Y + (CHART_H - heights[i]), BAR_W, heights[i]), Color::primary());
+        }
     }
 
     // --- Stat cards ---
@@ -47,7 +55,7 @@ void StatsPage::render(FrameBuffer& fb, const SystemSnapshot& snap) {
     label_font_small.scale = 1;
     fb.drawTextCentered(Rect(20, CARDS_Y + 10, CARD_W, 20), "EFFICIENCY", Color::textSecondary(), label_font_small);
     
-    int eff = snap.today.total_seconds > 0 ? (snap.today.focus_seconds * 100) / snap.today.total_seconds : 88;
+    int eff = snap.today.total_seconds > 0 ? (snap.today.focus_seconds * 100) / snap.today.total_seconds : 0;
     char eff_buf[16];
     snprintf(eff_buf, sizeof(eff_buf), "%d%%", eff);
     FontInfo stat_font;
@@ -58,7 +66,7 @@ void StatsPage::render(FrameBuffer& fb, const SystemSnapshot& snap) {
     fb.fillRoundRect(Rect(W - 20 - CARD_W, CARDS_Y, CARD_W, 80), 8, Color::bgCard());
     fb.drawTextCentered(Rect(W - 20 - CARD_W, CARDS_Y + 10, CARD_W, 20), "DISTS", Color::textSecondary(), label_font_small);
 
-    int events = snap.today.total_seconds > 0 ? snap.today.events : 12;
+    int events = snap.today.events;
     char dist_buf[16];
     snprintf(dist_buf, sizeof(dist_buf), "%d", events);
     fb.drawTextCentered(Rect(W - 20 - CARD_W, CARDS_Y + 40, CARD_W, 30), dist_buf, Color::textSecondary(), stat_font);

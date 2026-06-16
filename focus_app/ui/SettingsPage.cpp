@@ -87,6 +87,7 @@ bool SettingsPage::onTouch(int x, int y) {
                 DeviceStatus ds = store_->snapshot().device;
                 ds.system_mode = SystemMode::NORMAL;
                 store_->updateDeviceStatus(ds);
+                if (mode_mgr_) mode_mgr_->setMode(SystemMode::NORMAL);
             }
             return true;
         } else if (x >= 20 + btn_w && x <= W - 20) {
@@ -94,6 +95,7 @@ bool SettingsPage::onTouch(int x, int y) {
                 DeviceStatus ds = store_->snapshot().device;
                 ds.system_mode = SystemMode::SILENT;
                 store_->updateDeviceStatus(ds);
+                if (mode_mgr_) mode_mgr_->setMode(SystemMode::SILENT);
             }
             return true;
         }

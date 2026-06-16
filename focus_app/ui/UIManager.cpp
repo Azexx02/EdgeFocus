@@ -105,6 +105,17 @@ bool UIManager::init(AppContext& /*ctx*/) {
         page->setStore(&store_);
     }
 
+    // Wire report generator to StatusPage
+    if (auto* sp = dynamic_cast<StatusPage*>(pages_[0].get())) {
+        sp->setReportGenerator(report_gen_);
+        sp->setSQLiteStore(sqlite_store_);
+    }
+
+    // Wire mode manager to SettingsPage
+    if (auto* sp = dynamic_cast<SettingsPage*>(pages_[2].get())) {
+        sp->setModeManager(mode_mgr_);
+    }
+
 #ifdef __linux__
     if (touch_fd_ >= 0 && use_i2c_touch_) {
         touch_thread_running_ = true;
@@ -166,7 +177,36 @@ void UIManager::renderFrame() {
 }
 
 void UIManager::renderGlobalHeader(const SystemSnapshot& snap) {
-    // Basic header logic...
+    const int W = fb_.width();
+    const int HEADER_H = 40;
+
+    // Background
+    fb_.fillRect(Rect(0, 0, W, HEADER_H), Color::bgCard());
+
+    // Left: Mode icon
+    FontInfo header_font;
+    header_font.scale = 1;
+    const char* mode_str = "N";
+    if (snap.device.system_mode == SystemMode::SILENT) mode_str = "S";
+    else if (snap.device.system_mode == SystemMode::HOME) mode_str = "H";
+    fb_.drawText(10, 12, mode_str, Color::primary(), header_font);
+
+    // Center: Camera status
+    const char* cam_str = snap.device.camera_ok ? "CAM OK" : "CAM --";
+    Color cam_color = snap.device.camera_ok ? Color::primary() : Color::textSecondary();
+    fb_.drawTextCentered(Rect(0, 12, W, 20), cam_str, cam_color, header_font);
+
+    // Right: Battery percentage
+    char bat_buf[8];
+    if (snap.device.battery_percent >= 0) {
+        snprintf(bat_buf, sizeof(bat_buf), "%d%%", snap.device.battery_percent);
+    } else {
+        snprintf(bat_buf, sizeof(bat_buf), "--");
+    }
+    fb_.drawText(W - 40, 12, bat_buf, Color::textSecondary(), header_font);
+
+    // Bottom divider line
+    fb_.fillRect(Rect(0, HEADER_H - 1, W, 1), Color::divider());
 }
 
 void UIManager::queueTouchSwipe(int direction) {

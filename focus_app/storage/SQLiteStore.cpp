@@ -43,6 +43,39 @@ bool SQLiteStore::logEvent(const StorageEvent& event) {
     return eventQueue_.push(event);
 }
 
+std::vector<StorageEvent> SQLiteStore::queryEvents(const std::string& session_id) {
+    std::vector<StorageEvent> results;
+    if (!db_) return results;
+
+    std::string sql = "SELECT event_type, session_id, timestamp, data FROM event WHERE session_id = '" + session_id + "' ORDER BY timestamp;";
+
+    auto callback = [](void* data, int argc, char** argv, char** /*azColName*/) -> int {
+        auto* vec = static_cast<std::vector<StorageEvent>*>(data);
+        if (argc < 4) return 0;
+
+        StorageEvent ev;
+        std::string typeStr = argv[0] ? argv[0] : "";
+        if (typeStr == "SessionStart") ev.type = StorageEventType::SessionStart;
+        else if (typeStr == "SessionEnd") ev.type = StorageEventType::SessionEnd;
+        else if (typeStr == "StateChange") ev.type = StorageEventType::StateChange;
+        else if (typeStr == "ReminderIssued") ev.type = StorageEventType::ReminderIssued;
+        else return 0;
+
+        ev.session_id = argv[1] ? argv[1] : "";
+        ev.timestamp = argv[2] ? std::stoll(argv[2]) : 0;
+        ev.data = argv[3] ? argv[3] : "";
+        vec->push_back(ev);
+        return 0;
+    };
+
+    char* errMsg = nullptr;
+    if (sqlite3_exec(reinterpret_cast<sqlite3*>(db_), sql.c_str(), callback, &results, &errMsg) != SQLITE_OK) {
+        LOGE("SQLiteStore", "Query error: %s", errMsg);
+        sqlite3_free(errMsg);
+    }
+    return results;
+}
+
 void SQLiteStore::runOnce(AppContext& /*ctx*/) {
     auto ev_opt = eventQueue_.tryPop();
     if (ev_opt.has_value()) {

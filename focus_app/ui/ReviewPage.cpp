@@ -27,9 +27,6 @@ void ReviewPage::render(FrameBuffer& fb, const SystemSnapshot& snap) {
     if (report.total_duration > 0) {
         float ratio = static_cast<float>(report.focus_duration) / static_cast<float>(report.total_duration);
         score = static_cast<int>(ratio * 100);
-    } else {
-        // If no report, just fake 92 for preview
-        score = 92;
     }
     
     char score_buf[16];
@@ -51,7 +48,7 @@ void ReviewPage::render(FrameBuffer& fb, const SystemSnapshot& snap) {
     label_font_small.scale = 1;
     fb.drawTextCentered(Rect(20, 185, W / 2 - 20, 20), "TIME", Color::textSecondary(), label_font_small);
     
-    int mins = report.total_duration > 0 ? report.focus_duration / 60 : 45; // Fake 45m for preview if 0
+    int mins = report.total_duration > 0 ? report.focus_duration / 60 : 0;
     char time_buf[16];
     snprintf(time_buf, sizeof(time_buf), "%dm", mins);
     FontInfo stat_font;
@@ -63,7 +60,7 @@ void ReviewPage::render(FrameBuffer& fb, const SystemSnapshot& snap) {
 
     // Right: Distractions
     fb.drawTextCentered(Rect(W / 2, 185, W / 2 - 20, 20), "DISTS", Color::textSecondary(), label_font_small);
-    int dists = report.total_duration > 0 ? report.distraction_count : 2; // Fake 2 for preview if 0
+    int dists = report.total_duration > 0 ? report.distraction_count : 0;
     char dist_buf[16];
     snprintf(dist_buf, sizeof(dist_buf), "%d", dists);
     fb.drawTextCentered(Rect(W / 2, 210, W / 2 - 20, 20), dist_buf, Color::textPrimary(), stat_font);
@@ -86,7 +83,13 @@ bool ReviewPage::onTouch(int x, int y) {
 }
 
 std::string ReviewPage::formatDuration(int64_t seconds) const {
-    return ""; // Unused in this layout
+    int h = static_cast<int>(seconds / 3600);
+    int m = static_cast<int>((seconds % 3600) / 60);
+    int s = static_cast<int>(seconds % 60);
+    char buf[16];
+    if (h > 0) snprintf(buf, sizeof(buf), "%02d:%02d:%02d", h, m, s);
+    else snprintf(buf, sizeof(buf), "%02d:%02d", m, s);
+    return std::string(buf);
 }
 
 } // namespace edgefocus

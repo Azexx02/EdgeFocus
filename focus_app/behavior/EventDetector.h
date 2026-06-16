@@ -8,6 +8,7 @@ struct PhoneUsageSignal {
     int64_t timestamp_ms = 0;
     bool active = false;
     float confidence = 1.0f;
+    int distraction_level = 1; // 0=learning, 1=weak, 2=strong, 3=unclassified
 };
 
 struct FocusEvent {
@@ -16,6 +17,7 @@ struct FocusEvent {
     bool is_phone_in_use = false;
     bool is_away = false;
     bool is_low_confidence = false;
+    int phone_distraction_level = 1; // 0=learning, 1=weak, 2=strong, 3=unclassified
 };
 
 class EventDetector {

@@ -1,6 +1,7 @@
 #include "policy/ReminderPolicy.h"
 #include "app/AppContext.h"
 #include "app/SystemStateStore.h"
+#include "device/DeviceManager.h"
 #include <iostream>
 #include <cassert>
 
@@ -9,7 +10,8 @@ using namespace edgefocus;
 void test_policy_escalation() {
     SystemStateStore store;
     SQLiteStore sqlite_store;
-    ReminderPolicy policy(store, sqlite_store);
+    DeviceManager dev_mgr(store);
+    ReminderPolicy policy(store, sqlite_store, dev_mgr);
     AppContext ctx;
     policy.init(ctx);
     
@@ -35,7 +37,8 @@ void test_policy_escalation() {
 void test_fatigue() {
     SystemStateStore store;
     SQLiteStore sqlite_store;
-    ReminderPolicy policy(store, sqlite_store);
+    DeviceManager dev_mgr(store);
+    ReminderPolicy policy(store, sqlite_store, dev_mgr);
     auto cmd = policy.processState(FocusState::SLEEPY_OR_SLUMPED, 1000);
     assert(cmd.has_value());
     assert(cmd->level == CommandLevel::REST_SUGGESTION);
@@ -46,7 +49,8 @@ void test_fatigue() {
 void test_silent_mode() {
     SystemStateStore store;
     SQLiteStore sqlite_store;
-    ReminderPolicy policy(store, sqlite_store);
+    DeviceManager dev_mgr(store);
+    ReminderPolicy policy(store, sqlite_store, dev_mgr);
     policy.getModeManager().setMode(SystemMode::SILENT);
     
     // PHONE_IN_USE is LEVEL_2 normally, SILENT should downgrade to LEVEL_1
@@ -60,7 +64,8 @@ void test_silent_mode() {
 void test_user_ack() {
     SystemStateStore store;
     SQLiteStore sqlite_store;
-    ReminderPolicy policy(store, sqlite_store);
+    DeviceManager dev_mgr(store);
+    ReminderPolicy policy(store, sqlite_store, dev_mgr);
     auto cmd1 = policy.processState(FocusState::LOOKING_AWAY, 1000);
     assert(cmd1.has_value());
     
@@ -78,11 +83,36 @@ void test_user_ack() {
     std::cout << "test_user_ack passed\n";
 }
 
+void test_phone_learning_no_intervention() {
+    SystemStateStore store;
+    SQLiteStore sqlite_store;
+    DeviceManager dev_mgr(store);
+    ReminderPolicy policy(store, sqlite_store, dev_mgr);
+    // PHONE_IN_LEARNING should not trigger any intervention
+    auto cmd = policy.processState(FocusState::PHONE_IN_LEARNING, 1000);
+    assert(!cmd.has_value());
+    std::cout << "test_phone_learning_no_intervention passed\n";
+}
+
+void test_phone_playing_level3() {
+    SystemStateStore store;
+    SQLiteStore sqlite_store;
+    DeviceManager dev_mgr(store);
+    ReminderPolicy policy(store, sqlite_store, dev_mgr);
+    // PHONE_IN_PLAYING should trigger LEVEL_3
+    auto cmd = policy.processState(FocusState::PHONE_IN_PLAYING, 1000);
+    assert(cmd.has_value());
+    assert(cmd->level == CommandLevel::LEVEL_3);
+    std::cout << "test_phone_playing_level3 passed\n";
+}
+
 int main() {
     test_policy_escalation();
     test_fatigue();
     test_silent_mode();
     test_user_ack();
+    test_phone_learning_no_intervention();
+    test_phone_playing_level3();
     std::cout << "All reminder policy tests passed!\n";
     return 0;
 }

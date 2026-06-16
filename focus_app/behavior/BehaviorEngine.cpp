@@ -18,10 +18,21 @@ void BehaviorEngine::runOnce(AppContext& /*ctx*/) {
     // --- IDLE: session not active ---
     if (!snap.session.active) {
         if (session_was_active_) {
-            // Session just ended: reset FSM and drain queue
+            // Session just ended: update today stats
+            SessionInfo ended_session = snap.session;
+            TodayStats today = snap.today;
+            today.total_seconds += ended_session.elapsed_ms / 1000;
+            today.focus_seconds += focus_accumulated_ms_ / 1000;
+            today.sessions++;
+            today.events += ended_session.distraction_count;
+            store_.updateTodayStats(today);
+
+            // Reset FSM and drain queue
             fsm_.reset();
             while (vision_queue_.tryPop().has_value()) {}
             session_was_active_ = false;
+            focus_accumulated_ms_ = 0;
+            last_focus_update_ms_ = 0;
             LOGI("BehaviorEngine", "Session ended, FSM reset");
         }
         // Block until session becomes active
@@ -75,7 +86,7 @@ void BehaviorEngine::runOnce(AppContext& /*ctx*/) {
 
         // Log state change
         StorageEvent ev;
-        ev.session_id = "current_session";
+        ev.session_id = store_.snapshot().session.session_id;
         ev.type = StorageEventType::StateChange;
         ev.timestamp = vision_result.timestamp_ms;
         ev.data = "Changed to " + std::to_string(static_cast<int>(new_state));
@@ -99,11 +110,38 @@ void BehaviorEngine::runOnce(AppContext& /*ctx*/) {
         }
     }
 
-    // --- Update elapsed time ---
+    // --- Update elapsed time and check timer ---
     snap = store_.snapshot();
     if (snap.session.active && snap.session.start_ms > 0) {
         SessionInfo s = snap.session;
         s.elapsed_ms = vision_result.timestamp_ms - s.start_ms;
+
+        // Track focus time accumulation
+        if (new_state == FocusState::FOCUSED) {
+            if (last_focus_update_ms_ > 0) {
+                focus_accumulated_ms_ += vision_result.timestamp_ms - last_focus_update_ms_;
+            }
+            last_focus_update_ms_ = vision_result.timestamp_ms;
+        } else {
+            last_focus_update_ms_ = vision_result.timestamp_ms;
+        }
+        if (s.target_duration_ms > 0) {
+            s.remaining_ms = s.target_duration_ms - s.elapsed_ms;
+            if (s.remaining_ms <= 0) {
+                s.remaining_ms = 0;
+                LOGI("BehaviorEngine", "Target duration reached, auto-terminating session");
+                s.active = false;
+                store_.updateSession(s);
+                store_.notifySessionChange();
+
+                // Update today stats on session end
+                TodayStats today = store_.snapshot().today;
+                today.total_seconds += s.elapsed_ms / 1000;
+                today.sessions++;
+                store_.updateTodayStats(today);
+                return;
+            }
+        }
         store_.updateSession(s);
     }
 }

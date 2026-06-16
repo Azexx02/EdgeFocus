@@ -11,7 +11,11 @@ FocusStateMachine::FocusStateMachine()
 FocusState FocusStateMachine::determineCandidateState(const FocusEvent& event) {
     if (event.is_low_confidence) return FocusState::LOW_CONFIDENCE;
     if (event.is_away) return FocusState::AWAY;
-    if (event.is_phone_in_use) return FocusState::PHONE_IN_USE;
+    if (event.is_phone_in_use) {
+        if (event.phone_distraction_level == 0) return FocusState::PHONE_IN_LEARNING;
+        if (event.phone_distraction_level == 2) return FocusState::PHONE_IN_PLAYING;
+        return FocusState::PHONE_IN_USE;
+    }
     if (event.is_sleepy_or_slumped) return FocusState::SLEEPY_OR_SLUMPED;
     if (event.is_looking_away) return FocusState::LOOKING_AWAY;
     
@@ -21,11 +25,17 @@ FocusState FocusStateMachine::determineCandidateState(const FocusEvent& event) {
 void FocusStateMachine::processFrame(const VisionResult& frame) {
     win30s_.add(frame);
 
-    // Initial calibration period: require 1 second of data to transition out of CALIBRATING
+    // Initial calibration period: require 1 second of data with quality gate
     if (current_state_ == FocusState::CALIBRATING) {
         if (!win30s_.getItems().empty() && 
             (frame.timestamp_ms - win30s_.getItems().front().timestamp_ms) >= 1000) {
-            current_state_ = FocusState::FOCUSED;
+            // Require at least some frames with good quality before transitioning
+            float good_ratio = win30s_.getRatioCondition([](const VisionResult& r) {
+                return r.frame_quality.valid && r.frame_quality.level == FrameQualityLevel::GOOD;
+            });
+            if (good_ratio >= 0.3f) {
+                current_state_ = FocusState::FOCUSED;
+            }
         }
         return;
     }
@@ -54,12 +64,16 @@ void FocusStateMachine::processFrame(const VisionResult& frame) {
             current_state_ = candidate_state_;
         }
     }
+
+    // Update risk score
+    last_risk_score_ = scorer_.calculateScore(event);
 }
 
 void FocusStateMachine::reset() {
     current_state_ = FocusState::CALIBRATING;
     candidate_state_ = FocusState::CALIBRATING;
     candidate_start_ms_ = 0;
+    last_risk_score_ = 0;
     win30s_ = SlidingWindow(30000);
 }
 

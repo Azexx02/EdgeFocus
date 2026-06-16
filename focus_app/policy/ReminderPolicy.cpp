@@ -1,13 +1,14 @@
 #include "ReminderPolicy.h"
 #include "app/AppContext.h"
 #include "app/SystemStateStore.h"
+#include "device/DeviceManager.h"
 
 #include "storage/StorageEvent.h"
 
 namespace edgefocus {
 
-ReminderPolicy::ReminderPolicy(SystemStateStore& store, SQLiteStore& sqlite_store) 
-    : Module("ReminderPolicy"), store_(store), sqlite_store_(sqlite_store) {}
+ReminderPolicy::ReminderPolicy(SystemStateStore& store, SQLiteStore& sqlite_store, DeviceManager& device_mgr) 
+    : Module("ReminderPolicy"), store_(store), sqlite_store_(sqlite_store), device_mgr_(device_mgr) {}
 
 bool ReminderPolicy::init(AppContext& /*ctx*/) {
     LOGI("ReminderPolicy", "Init ReminderPolicy");
@@ -31,6 +32,7 @@ void ReminderPolicy::runOnce(AppContext& /*ctx*/) {
     if (cmd.has_value()) {
         LOGI("ReminderPolicy", "Issued reminder: level=%d msg=%s",
              static_cast<int>(cmd->level), cmd->message.c_str());
+        device_mgr_.issueCommand(*cmd);
     }
 
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
@@ -42,7 +44,7 @@ void ReminderPolicy::shutdown(AppContext& /*ctx*/) {
 
 std::optional<InterventionCommand> ReminderPolicy::processState(FocusState state, int64_t now_ms) {
     if (state == FocusState::FOCUSED || state == FocusState::PAUSED ||
-        state == FocusState::CALIBRATING) {
+        state == FocusState::CALIBRATING || state == FocusState::PHONE_IN_LEARNING) {
         last_level_ = CommandLevel::NONE;
         return std::nullopt;
     }
@@ -71,6 +73,9 @@ std::optional<InterventionCommand> ReminderPolicy::processState(FocusState state
     } else if (state == FocusState::PHONE_IN_USE) {
         target_level = CommandLevel::LEVEL_2;
         cmd.message = "学习期间手机正在使用，先放到一边吧。";
+    } else if (state == FocusState::PHONE_IN_PLAYING) {
+        target_level = CommandLevel::LEVEL_3;
+        cmd.message = "手机游戏/短视频严重干扰学习，请立即停止！";
     } else if (state == FocusState::LOW_CONFIDENCE) {
         target_level = CommandLevel::NONE;
         cmd.message = "画面不太清楚，可以调整一下角度或补光。";
@@ -103,7 +108,7 @@ std::optional<InterventionCommand> ReminderPolicy::processState(FocusState state
 
     // Log the reminder event to SQLiteStore
     StorageEvent ev;
-    ev.session_id = "current_session"; // Should be fetched properly
+    ev.session_id = store_.snapshot().session.session_id;
     ev.type = StorageEventType::ReminderIssued;
     ev.timestamp = now_ms;
     ev.data = "Level: " + std::to_string(static_cast<int>(cmd.level)) + ", Message: " + cmd.message;

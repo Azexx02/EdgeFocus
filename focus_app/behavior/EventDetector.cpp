@@ -1,4 +1,5 @@
 #include "behavior/EventDetector.h"
+#include <cmath>
 
 namespace edgefocus {
 
@@ -36,7 +37,6 @@ FocusEvent EventDetector::detect(const SlidingWindow& win, const BehaviorConfig&
     }) > config.low_confidence_ratio;
 
     if (event.is_low_confidence) {
-        // Do not output other interruption events if confidence is low
         return event;
     }
 
@@ -46,6 +46,15 @@ FocusEvent EventDetector::detect(const SlidingWindow& win, const BehaviorConfig&
     });
     if (away_dur >= config.away_confirm_ms) {
         event.is_away = true;
+    }
+
+    // Looking away: person present but head yaw > 30 degrees for confirming duration
+    int64_t looking_away_dur = getContinuousDuration(win, [](const VisionResult& r) {
+        return r.isPresent() && r.head_pose.valid 
+            && (std::abs(r.head_pose.value.yaw) > 30.0f);
+    });
+    if (looking_away_dur >= config.looking_away_confirm_ms) {
+        event.is_looking_away = true;
     }
 
     // Sleepy or slumped: Head DOWN (10s) or Eyes CLOSED (legacy fallback)
@@ -64,14 +73,11 @@ FocusEvent EventDetector::detect(const SlidingWindow& win, const BehaviorConfig&
         event.is_sleepy_or_slumped = true; 
     }
 
-    // Phone in use: Use injected signal
+    // Phone in use: Use injected signal with distraction level
     if (last_phone_sig_.active) {
-        if (current_ts - last_phone_sig_.timestamp_ms < 5000) { // Signal is fresh
-            // Check if duration exceeds phone_confirm_ms
-            // Since we don't have a history of signals, we just trigger if it's active.
-            // A more complex implementation would track signal history.
-            // For now, if active and fresh, trigger immediately or after simple confirm.
+        if (current_ts - last_phone_sig_.timestamp_ms < 5000) {
             event.is_phone_in_use = true;
+            event.phone_distraction_level = last_phone_sig_.distraction_level;
         }
     }
 

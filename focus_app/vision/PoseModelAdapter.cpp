@@ -94,11 +94,11 @@ ModelInference CpuFallbackPoseAdapter::infer(const CameraFrame& frame, const Fra
         pose.pitch = pitch;
         pose.dominant = dominantFromPitch(pitch);
         out.head_pose = {pose, 0.35f, true};
-        out.posture = {pitch < -18.0f ? PostureType::LEANING_FORWARD : PostureType::UPRIGHT, 0.38f, true};
+        out.posture = {pitch < -20.0f ? PostureType::LEANING_FORWARD : PostureType::UPRIGHT, 0.38f, true};
         
         // V1 fields fallback
-        out.presence_conf = clamp01(out.person_confidence);
-        out.head_down_score = pitch < -18.0f ? 0.8f : 0.0f;
+        out.presence_conf = clamp01(out.person_confidence * (static_cast<float>(1) / 1.0f));
+        out.head_down_score = pitch < -20.0f ? 0.8f : 0.0f;
         out.head_state = out.head_down_score > 0.70f ? HeadState::DOWN : HeadState::NORMAL;
 
         out.reason_code = pitch < -20.0f ? ReasonCode::HEAD_POSE_DOWN : ReasonCode::LOW_CONFIDENCE;
@@ -220,7 +220,7 @@ ModelInference StaiMpuPoseAdapter::infer(const CameraFrame& frame, const FrameQu
         pose.pitch = pitch;
         pose.dominant = dominantFromPitch(pitch);
         out.head_pose = {pose, clamp01((nose_s + shoulder_s) * 0.5f), true};
-        out.posture = {pitch < -18.0f ? PostureType::LEANING_FORWARD : PostureType::UPRIGHT,
+        out.posture = {pitch < -20.0f ? PostureType::LEANING_FORWARD : PostureType::UPRIGHT,
                        clamp01(shoulder_s), true};
         out.reason_code = out.head_state == HeadState::DOWN ? ReasonCode::HEAD_POSE_DOWN : ReasonCode::NONE;
     } else {

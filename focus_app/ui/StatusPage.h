@@ -1,5 +1,7 @@
 #pragma once
 #include "Page.h"
+#include "storage/ReportGenerator.h"
+#include "storage/SQLiteStore.h"
 
 namespace edgefocus {
 
@@ -10,6 +12,9 @@ public:
     bool onTouch(int x, int y) override;
     const char* name() const override { return "StatusPage"; }
 
+    void setReportGenerator(ReportGenerator* rg) { report_gen_ = rg; }
+    void setSQLiteStore(SQLiteStore* store) { sqlite_store_ = store; }
+
 private:
     enum class InternalState {
         READY,
@@ -18,6 +23,8 @@ private:
     };
 
     InternalState internal_state_ = InternalState::READY;
+    ReportGenerator* report_gen_ = nullptr;
+    SQLiteStore* sqlite_store_ = nullptr;
 
     Color focusStateColor(FocusState state) const;
     const char* focusStateText(FocusState state) const;

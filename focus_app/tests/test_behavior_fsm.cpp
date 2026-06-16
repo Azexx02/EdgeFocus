@@ -124,6 +124,93 @@ void test_hysteresis() {
     std::cout << "test_hysteresis passed\n";
 }
 
+void test_looking_away() {
+    FocusStateMachine fsm;
+    // Calibrate
+    for (int i = 0; i < 20; ++i) fsm.processFrame(createFrame(i * 100));
+    assert(fsm.getCurrentState() == FocusState::FOCUSED);
+    
+    // Looking away for 9 seconds (threshold is 8s)
+    for (int i = 20; i < 110; ++i) {
+        VisionResult r = createFrame(i * 100);
+        r.head_pose.valid = true;
+        r.head_pose.value.yaw = 35.0f; // > 30 degrees
+        fsm.processFrame(r);
+    }
+    assert(fsm.getCurrentState() == FocusState::LOOKING_AWAY);
+    std::cout << "test_looking_away passed\n";
+}
+
+void test_phone_distraction_levels() {
+    FocusStateMachine fsm;
+    for (int i = 0; i < 20; ++i) fsm.processFrame(createFrame(i * 100));
+    
+    // Test level 0 (learning) -> PHONE_IN_LEARNING
+    PhoneUsageSignal sig;
+    sig.active = true;
+    sig.timestamp_ms = 2000;
+    sig.distraction_level = 0;
+    fsm.injectPhoneSignal(sig);
+    fsm.processFrame(createFrame(2100));
+    assert(fsm.getCurrentState() == FocusState::PHONE_IN_LEARNING);
+    
+    // Test level 2 (strong) -> PHONE_IN_PLAYING
+    sig.distraction_level = 2;
+    sig.timestamp_ms = 2200;
+    fsm.injectPhoneSignal(sig);
+    fsm.processFrame(createFrame(2300));
+    assert(fsm.getCurrentState() == FocusState::PHONE_IN_PLAYING);
+    
+    // Test level 1 (weak) -> PHONE_IN_USE
+    sig.distraction_level = 1;
+    sig.timestamp_ms = 2400;
+    fsm.injectPhoneSignal(sig);
+    fsm.processFrame(createFrame(2500));
+    assert(fsm.getCurrentState() == FocusState::PHONE_IN_USE);
+    
+    std::cout << "test_phone_distraction_levels passed\n";
+}
+
+void test_calibration_quality_gate() {
+    FocusStateMachine fsm;
+    
+    // Simulate 2 seconds of dark/bad frames
+    for (int i = 0; i < 20; ++i) {
+        VisionResult r = createFrame(i * 100);
+        r.frame_quality.valid = true;
+        r.frame_quality.level = FrameQualityLevel::DARK;
+        fsm.processFrame(r);
+    }
+    // Should still be calibrating (quality gate blocks transition)
+    assert(fsm.getCurrentState() == FocusState::CALIBRATING);
+    
+    // Now add good quality frames for 2 more seconds
+    for (int i = 20; i < 40; ++i) {
+        VisionResult r = createFrame(i * 100);
+        r.frame_quality.valid = true;
+        r.frame_quality.level = FrameQualityLevel::GOOD;
+        fsm.processFrame(r);
+    }
+    // Should now be FOCUSED (good ratio >= 30%)
+    assert(fsm.getCurrentState() == FocusState::FOCUSED);
+    std::cout << "test_calibration_quality_gate passed\n";
+}
+
+void test_risk_score() {
+    FocusStateMachine fsm;
+    for (int i = 0; i < 20; ++i) fsm.processFrame(createFrame(i * 100));
+    assert(fsm.getRiskScore() == 0);
+    
+    // Phone use should increase risk
+    PhoneUsageSignal sig;
+    sig.active = true;
+    sig.timestamp_ms = 2000;
+    fsm.injectPhoneSignal(sig);
+    fsm.processFrame(createFrame(2100));
+    assert(fsm.getRiskScore() > 0);
+    std::cout << "test_risk_score passed\n";
+}
+
 int main() {
     test_focus();
     test_head_down();
@@ -131,6 +218,10 @@ int main() {
     test_away();
     test_low_confidence();
     test_hysteresis();
+    test_looking_away();
+    test_phone_distraction_levels();
+    test_calibration_quality_gate();
+    test_risk_score();
     std::cout << "All behavior FSM tests passed!\n";
     return 0;
 }
