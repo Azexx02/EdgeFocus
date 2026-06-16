@@ -49,18 +49,50 @@ void StatusPage::render(FrameBuffer& fb, const SystemSnapshot& snap) {
         // --- Ready to focus screen ---
         FontInfo ready_font;
         ready_font.scale = 3;
-        fb.drawTextCentered(Rect(0, 60, W, 30), "Ready to", Color::textPrimary(), ready_font);
-        fb.drawTextCentered(Rect(0, 90, W, 30), "focus?", Color::textPrimary(), ready_font);
+        fb.drawTextCentered(Rect(0, 55, W, 30), "Ready to", Color::textPrimary(), ready_font);
+        fb.drawTextCentered(Rect(0, 82, W, 30), "focus?", Color::textPrimary(), ready_font);
 
-        // START Button -> leads to calibration
-        fb.fillRoundRect(Rect(20, 140, W - 40, 60), 12, Color::primary());
-        fb.drawTextCentered(Rect(20, 140, W - 40, 60), "START", Color::bgDark(), ready_font);
+        // Duration selector: [-] 25min [+]
+        const int SEL_Y = 120;
+        const int SEL_H = 40;
+        const int BTN_W = 40;
+        const int VAL_W = 80;
+
+        FontInfo sel_font;
+        sel_font.scale = 2;
+        FontInfo sel_label;
+        sel_label.scale = 1;
+
+        fb.drawTextCentered(Rect(0, SEL_Y - 15, W, 15), "DURATION", Color::textSecondary(), sel_label);
+
+        // [-] button
+        fb.fillRoundRect(Rect(30, SEL_Y, BTN_W, SEL_H), 8, Color::bgCard());
+        fb.drawTextCentered(Rect(30, SEL_Y, BTN_W, SEL_H), "-", Color::textPrimary(), sel_font);
+
+        // Value display
+        fb.fillRoundRect(Rect(30 + BTN_W + 5, SEL_Y, VAL_W, SEL_H), 8, Color::bgCard());
+        char dur_buf[16];
+        if (target_duration_min_ >= 60) {
+            int h = target_duration_min_ / 60;
+            int m = target_duration_min_ % 60;
+            if (m > 0) snprintf(dur_buf, sizeof(dur_buf), "%dh%02dm", h, m);
+            else snprintf(dur_buf, sizeof(dur_buf), "%dh", h);
+        } else {
+            snprintf(dur_buf, sizeof(dur_buf), "%dmin", target_duration_min_);
+        }
+        fb.drawTextCentered(Rect(30 + BTN_W + 5, SEL_Y, VAL_W, SEL_H), dur_buf, Color::primary(), sel_font);
+
+        // [+] button
+        fb.fillRoundRect(Rect(30 + BTN_W + 5 + VAL_W + 5, SEL_Y, BTN_W, SEL_H), 8, Color::bgCard());
+        fb.drawTextCentered(Rect(30 + BTN_W + 5 + VAL_W + 5, SEL_Y, BTN_W, SEL_H), "+", Color::textPrimary(), sel_font);
+
+        // START Button
+        fb.fillRoundRect(Rect(20, 175, W - 40, 55), 12, Color::primary());
+        fb.drawTextCentered(Rect(20, 175, W - 40, 55), "START", Color::bgDark(), ready_font);
 
         // Today's Goal Card
-        fb.fillRoundRect(Rect(20, 220, W - 40, 80), 8, Color::bgCard());
-        FontInfo label_font;
-        label_font.scale = 1;
-        fb.drawTextCentered(Rect(20, 230, W - 40, 20), "TODAY'S GOAL", Color::textSecondary(), label_font);
+        fb.fillRoundRect(Rect(20, 245, W - 40, 60), 8, Color::bgCard());
+        fb.drawTextCentered(Rect(20, 250, W - 40, 20), "TODAY'S GOAL", Color::textSecondary(), sel_label);
         
         FontInfo goal_font;
         goal_font.scale = 2;
@@ -74,8 +106,7 @@ void StatusPage::render(FrameBuffer& fb, const SystemSnapshot& snap) {
             else snprintf(buf, sizeof(buf), "%dm", m);
             goal_str = buf;
         }
-        fb.drawTextCentered(Rect(20, 250, W - 40, 30), goal_str, Color::primary(), goal_font);
-        fb.drawProgressBar(Rect(30, 285, W - 60, 6), 0.3f, Color::primary(), Color::bgDark(), Color::bgDark());
+        fb.drawTextCentered(Rect(20, 270, W - 40, 30), goal_str, Color::primary(), goal_font);
 
     } else if (internal_state_ == InternalState::CALIBRATING) {
         // --- Calibration Transition ---
@@ -130,16 +161,24 @@ void StatusPage::render(FrameBuffer& fb, const SystemSnapshot& snap) {
         snprintf(dist_buf, sizeof(dist_buf), "%d distractions", snap.session.distraction_count);
         fb.drawTextCentered(Rect(0, 80, W, 20), dist_buf, Color::textSecondary(), small_font);
 
+        // Calculate elapsed time from system clock (not dependent on vision data)
+        int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        int64_t elapsed_ms = 0;
+        if (snap.session.start_ms > 0) {
+            elapsed_ms = now_ms - snap.session.start_ms;
+        }
+        if (elapsed_ms < 0) elapsed_ms = 0;
+
         // Draw circular progress
         int cx = W / 2;
         int cy = 170;
         int radius = 50;
         int thickness = 8;
         fb.drawRing(cx, cy, radius, thickness, Color::bgCard());
-        // Real progress based on elapsed/target
         float progress = 0.0f;
         if (snap.session.target_duration_ms > 0) {
-            progress = static_cast<float>(snap.session.elapsed_ms) / static_cast<float>(snap.session.target_duration_ms);
+            progress = static_cast<float>(elapsed_ms) / static_cast<float>(snap.session.target_duration_ms);
             if (progress > 1.0f) progress = 1.0f;
         }
         fb.drawArc(cx, cy, radius, thickness, -M_PI/2, -M_PI/2 + (progress * 2.0f * M_PI), Color::primary());
@@ -147,9 +186,20 @@ void StatusPage::render(FrameBuffer& fb, const SystemSnapshot& snap) {
         // Time text inside ring
         FontInfo time_font;
         time_font.scale = 2;
-        int64_t elapsed_sec = snap.session.elapsed_ms / 1000;
+        int64_t elapsed_sec = elapsed_ms / 1000;
         std::string time_str = formatDuration(elapsed_sec);
         fb.drawTextCentered(Rect(cx - radius, cy - 10, radius * 2, 20), time_str, Color::textPrimary(), time_font);
+
+        // Remaining time display
+        if (snap.session.target_duration_ms > 0) {
+            int64_t remaining_ms = snap.session.target_duration_ms - elapsed_ms;
+            if (remaining_ms < 0) remaining_ms = 0;
+            int64_t remaining_sec = remaining_ms / 1000;
+            std::string remain_str = formatDuration(remaining_sec);
+            FontInfo remain_font;
+            remain_font.scale = 1;
+            fb.drawTextCentered(Rect(0, cy + radius + 5, W, 15), remain_str, Color::textSecondary(), remain_font);
+        }
 
         // PAUSE Button
         fb.fillRoundRect(Rect(20, 250, W - 40, 50), 8, Color::bgCard());
@@ -181,7 +231,28 @@ bool StatusPage::onTouch(int x, int y) {
     }
 
     if (internal_state_ == InternalState::READY) {
-        if (y > 140 && y < 200 && x > 20 && x < W - 20) {
+        const int SEL_Y = 120;
+        const int SEL_H = 40;
+        const int BTN_W = 40;
+        const int VAL_W = 80;
+
+        // [-] button
+        if (y >= SEL_Y && y <= SEL_Y + SEL_H && x >= 30 && x <= 30 + BTN_W) {
+            target_duration_min_ -= DURATION_STEP;
+            if (target_duration_min_ < DURATION_MIN) target_duration_min_ = DURATION_MIN;
+            return true;
+        }
+
+        // [+] button
+        int plus_x = 30 + BTN_W + 5 + VAL_W + 5;
+        if (y >= SEL_Y && y <= SEL_Y + SEL_H && x >= plus_x && x <= plus_x + BTN_W) {
+            target_duration_min_ += DURATION_STEP;
+            if (target_duration_min_ > DURATION_MAX) target_duration_min_ = DURATION_MAX;
+            return true;
+        }
+
+        // START button
+        if (y > 175 && y < 230 && x > 20 && x < W - 20) {
             // START button tapped - begin session with calibration
             internal_state_ = InternalState::CALIBRATING;
 
@@ -198,11 +269,12 @@ bool StatusPage::onTouch(int x, int y) {
             s.distraction_count = 0;
             s.reminder_count = 0;
             s.away_since_ms = 0;
-            s.away_timeout_ms = snap.session.away_timeout_ms; // preserve user setting
+            s.away_timeout_ms = snap.session.away_timeout_ms;
+            s.target_duration_ms = target_duration_min_ * 60000;
             store_->updateSession(s);
             store_->notifySessionChange();
 
-            LOGI("StatusPage", "Session started (calibration phase)");
+            LOGI("StatusPage", "Session started (calibration phase, target=%dmin)", target_duration_min_);
             return true;
         }
     } else if (internal_state_ == InternalState::CALIBRATING) {

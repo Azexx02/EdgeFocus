@@ -26,6 +26,12 @@ private:
     ReportGenerator* report_gen_ = nullptr;
     SQLiteStore* sqlite_store_ = nullptr;
 
+    // Focus duration selector (minutes)
+    int target_duration_min_ = 25;  // default 25min pomodoro
+    static constexpr int DURATION_MIN = 5;
+    static constexpr int DURATION_MAX = 120;
+    static constexpr int DURATION_STEP = 5;
+
     Color focusStateColor(FocusState state) const;
     const char* focusStateText(FocusState state) const;
     const char* focusStateEmoji(FocusState state) const;

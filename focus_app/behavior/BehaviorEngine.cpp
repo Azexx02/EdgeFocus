@@ -43,6 +43,33 @@ void BehaviorEngine::runOnce(AppContext& /*ctx*/) {
 
     session_was_active_ = true;
 
+    // --- Update elapsed time using system clock (independent of vision data) ---
+    {
+        int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        SessionInfo s = store_.snapshot().session;
+        if (s.active && s.start_ms > 0) {
+            s.elapsed_ms = now_ms - s.start_ms;
+            if (s.target_duration_ms > 0) {
+                s.remaining_ms = s.target_duration_ms - s.elapsed_ms;
+                if (s.remaining_ms <= 0) {
+                    s.remaining_ms = 0;
+                    LOGI("BehaviorEngine", "Target duration reached, auto-terminating session");
+                    s.active = false;
+                    store_.updateSession(s);
+                    store_.notifySessionChange();
+
+                    TodayStats today = store_.snapshot().today;
+                    today.total_seconds += s.elapsed_ms / 1000;
+                    today.sessions++;
+                    store_.updateTodayStats(today);
+                    return;
+                }
+            }
+            store_.updateSession(s);
+        }
+    }
+
     // --- ACTIVE: process vision results ---
     auto result_opt = vision_queue_.tryPop();
     if (!result_opt.has_value()) {
@@ -94,55 +121,38 @@ void BehaviorEngine::runOnce(AppContext& /*ctx*/) {
     }
 
     // --- Away timeout check ---
-    snap = store_.snapshot();
-    if (snap.session.away_since_ms > 0 && snap.session.active) {
-        int64_t away_duration = vision_result.timestamp_ms - snap.session.away_since_ms;
-        int64_t timeout_ms = snap.session.away_timeout_ms;
-        if (timeout_ms <= 0) timeout_ms = 30 * 60 * 1000; // default 30 min
+    {
+        int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        snap = store_.snapshot();
+        if (snap.session.away_since_ms > 0 && snap.session.active) {
+            int64_t away_duration = now_ms - snap.session.away_since_ms;
+            int64_t timeout_ms = snap.session.away_timeout_ms;
+            if (timeout_ms <= 0) timeout_ms = 30 * 60 * 1000;
 
-        if (away_duration >= timeout_ms) {
-            LOGI("BehaviorEngine", "Away for %lld ms, auto-terminating session",
-                 (long long)away_duration);
-            SessionInfo s = snap.session;
-            s.active = false;
-            store_.updateSession(s);
-            store_.notifySessionChange();
-        }
-    }
-
-    // --- Update elapsed time and check timer ---
-    snap = store_.snapshot();
-    if (snap.session.active && snap.session.start_ms > 0) {
-        SessionInfo s = snap.session;
-        s.elapsed_ms = vision_result.timestamp_ms - s.start_ms;
-
-        // Track focus time accumulation
-        if (new_state == FocusState::FOCUSED) {
-            if (last_focus_update_ms_ > 0) {
-                focus_accumulated_ms_ += vision_result.timestamp_ms - last_focus_update_ms_;
-            }
-            last_focus_update_ms_ = vision_result.timestamp_ms;
-        } else {
-            last_focus_update_ms_ = vision_result.timestamp_ms;
-        }
-        if (s.target_duration_ms > 0) {
-            s.remaining_ms = s.target_duration_ms - s.elapsed_ms;
-            if (s.remaining_ms <= 0) {
-                s.remaining_ms = 0;
-                LOGI("BehaviorEngine", "Target duration reached, auto-terminating session");
+            if (away_duration >= timeout_ms) {
+                LOGI("BehaviorEngine", "Away for %lld ms, auto-terminating session",
+                     (long long)away_duration);
+                SessionInfo s = snap.session;
                 s.active = false;
                 store_.updateSession(s);
                 store_.notifySessionChange();
-
-                // Update today stats on session end
-                TodayStats today = store_.snapshot().today;
-                today.total_seconds += s.elapsed_ms / 1000;
-                today.sessions++;
-                store_.updateTodayStats(today);
-                return;
             }
         }
-        store_.updateSession(s);
+    }
+
+    // --- Track focus time accumulation ---
+    {
+        int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        if (new_state == FocusState::FOCUSED) {
+            if (last_focus_update_ms_ > 0) {
+                focus_accumulated_ms_ += now_ms - last_focus_update_ms_;
+            }
+            last_focus_update_ms_ = now_ms;
+        } else {
+            last_focus_update_ms_ = now_ms;
+        }
     }
 }
 
