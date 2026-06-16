@@ -87,14 +87,9 @@ class TimerStateHolder @Inject constructor(
 
     /**
      * 启动 EdgeFocus 模式会话
-     * 必须已连接设备才能调用
+     * 不强制要求连接，会尝试与板端同步
      */
     fun startEdgeFocusSession(targetDurationMinutes: Int) {
-        if (!bleManager.isConnected()) {
-            Log.w(TAG, "Cannot start EdgeFocus session: device not connected")
-            return
-        }
-
         val totalTimeMs = TimeUtils.minutesToMillis(targetDurationMinutes)
 
         _state.update {
@@ -105,12 +100,23 @@ class TimerStateHolder @Inject constructor(
                 totalTime = totalTimeMs,
                 targetDurationMinutes = targetDurationMinutes,
                 sessionMode = SessionMode.EDGEFOCUS,
-                isSyncingWithBoard = true
+                isSyncingWithBoard = bleManager.isConnected()
             )
         }
 
         // 启动本地倒计时（保底）
         startLocalCountdown()
+
+        // 如果板端连接，启动同步并通知板端
+        if (bleManager.isConnected()) {
+            startBoardSync()
+            scope.launch {
+                bleManager.sessionControl("start", targetDurationMinutes)
+            }
+        }
+
+        Log.d(TAG, "EdgeFocus session started: duration=${targetDurationMinutes}min, boardConnected=${bleManager.isConnected()}")
+    }
 
         // 启动板端同步
         startBoardSync()

@@ -94,13 +94,9 @@ class HomeViewModel @Inject constructor(
 
     /**
      * 启动 EdgeFocus 模式会话
-     * 必须已连接设备
+     * 会尝试连接设备，但不强制要求连接
      */
     fun startEdgeFocusSession() {
-        if (!timerStateHolder.isBoardConnected()) {
-            return
-        }
-
         currentSessionId = "session_${System.currentTimeMillis()}"
         startAppMonitor()
         timerStateHolder.startEdgeFocusSession(workDurationMinutes)

@@ -76,24 +76,47 @@ object AppCategorizer {
             context.getSystemService(Context.USAGE_STATS_SERVICE) as? UsageStatsManager
                 ?: return null
 
-        val endTime = System.currentTimeMillis()
-        val beginTime = endTime - 10_000
+        val now = System.currentTimeMillis()
 
-        val usageEvents = usageStatsManager.queryEvents(beginTime, endTime) ?: return null
-
-        var lastForegroundPackage: String? = null
+        // 60秒窗口查询
+        val events = usageStatsManager.queryEvents(now - 60_000, now) ?: return null
+        var lastResumedPackage: String? = null
         val event = android.app.usage.UsageEvents.Event()
 
-        while (usageEvents.hasNextEvent()) {
-            usageEvents.getNextEvent(event)
-            if (event.eventType == android.app.usage.UsageEvents.Event.ACTIVITY_RESUMED ||
-                event.eventType == android.app.usage.UsageEvents.Event.MOVE_TO_FOREGROUND
-            ) {
-                lastForegroundPackage = event.packageName
+        while (events.hasNextEvent()) {
+            events.getNextEvent(event)
+            when (event.eventType) {
+                android.app.usage.UsageEvents.Event.ACTIVITY_RESUMED -> {
+                    lastResumedPackage = event.packageName
+                }
+                android.app.usage.UsageEvents.Event.ACTIVITY_PAUSED,
+                android.app.usage.UsageEvents.Event.ACTIVITY_STOPPED -> {
+                    if (event.packageName == lastResumedPackage) {
+                        lastResumedPackage = null
+                    }
+                }
             }
         }
 
-        return lastForegroundPackage
+        // 扩大到5分钟兜底
+        if (lastResumedPackage == null) {
+            val extendedEvents = usageStatsManager.queryEvents(now - 300_000, now) ?: return null
+            var extendedPkg: String? = null
+            val extEvent = android.app.usage.UsageEvents.Event()
+            while (extendedEvents.hasNextEvent()) {
+                extendedEvents.getNextEvent(extEvent)
+                when (extEvent.eventType) {
+                    android.app.usage.UsageEvents.Event.ACTIVITY_RESUMED -> extendedPkg = extEvent.packageName
+                    android.app.usage.UsageEvents.Event.ACTIVITY_PAUSED,
+                    android.app.usage.UsageEvents.Event.ACTIVITY_STOPPED -> {
+                        if (extEvent.packageName == extendedPkg) extendedPkg = null
+                    }
+                }
+            }
+            return extendedPkg
+        }
+
+        return lastResumedPackage
     }
 
     fun isDistractionApp(packageName: String): Boolean {
