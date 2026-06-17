@@ -6,6 +6,19 @@
 
 ---
 
+## 零、产品定位与本文档效力
+
+EdgeFocus 项目中，手机 App 当前承担两个核心职责：
+
+1. **手机使用状态采集器**：检测用户当前手机使用状态、前台应用类别、干扰等级，并通过 `phone_sync` 提供给 EdgeFocus 设备的 EventDetector/ReminderPolicy 使用。`phone_sync` 是板端判断用户是否被手机干扰的重要输入，但不是最终分心结论；最终结论仍由板端结合摄像头、状态机和提醒策略统一判断。
+2. **EdgeFocus 大屏遥控器**：手机屏幕大于产品自带屏幕，因此 App 承担一部分控制面板功能，包括启动/暂停/恢复/结束会话、模式切换、提醒确认、振动/LED/灵敏度/离座超时等参数调节、查看当前状态和统计。
+
+**本地模式不是产品主流程**。本地模式是为了复用番茄钟、监控、会话记录等 App 代码而加入的附属能力；不连接 EdgeFocus 设备时可独立运行，但不代表板端可以缺失核心会话控制、状态同步、报告生成和提醒策略。
+
+当前 App 端开发进度最快，因此本文档作为阶段性主导文档，用于直接指导板端实现。凡本文档标为“必须”的字段、事件、流程，板端按本文档实现，不再等待额外确认。若板端现有代码与本文档冲突，以本文档为用户会话流程和信息交互准则。
+
+---
+
 ## 一、项目架构与角色
 
 ### 1.1 三个组成部分
@@ -84,14 +97,16 @@ EdgeFocus 设备 (Central)  ←──BLE GATT──→  BLE Band (Peripheral)
 ### 请求（手机 → 板）
 
 ```json
-{"cmd": "<命令名>", "data": {<参数>}}
+{"cmd": "<命令名>", "id": 12, "data": {<参数>}}
 ```
 
 ### 响应（板 → 手机）
 
 ```json
-{"status": "success"|"error", "data": {<结果>}, "error": "<错误信息>"}
+{"status": "success"|"error", "id": 12, "data": {<结果>}, "error": "<错误信息>"}
 ```
+
+**强制规则：** App 实际发送的每个普通请求都会带 `id`；板端普通响应必须原样回显同一个 `id`。下文若有示例省略 `id`，仅为阅读简化，板端实现时不能省略。
 
 ### 推送（板 → 手机，无需手机请求）
 
@@ -195,7 +210,7 @@ EdgeFocus 设备 (Central)  ←──BLE GATT──→  BLE Band (Peripheral)
 | `is_in_use` | bool | 手机是否在使用 |
 | `app_category` | string | learning/social/entertainment/other |
 | `distraction_level` | int | 0=学习, 1=弱干扰, 2=强干扰, 3=未分类 |
-| `app_name` | string | 包名或 "com.launcher" |
+| `app_name` | string | 包名；桌面/后台且系统未提供 Launcher 前台事件时为 `"desktop_or_background"` |
 | `duration_sec` | int | 当前应用使用时长（秒） |
 
 **板端响应（需返回）：**
@@ -312,7 +327,7 @@ EdgeFocus 设备 (Central)  ←──BLE GATT──→  BLE Band (Peripheral)
 
 **手机处理：** 保存会话记录到本地数据库（`synced=true`，板端数据为权威来源）。如果手机未收到 `push_timer_complete`，则用此事件的数据保存。
 
-**⚠️ 手动停止时也会发 `session_control(stop)` 给板端，板端应回复 `push_session_end`。手机等板端回复后再保存 Session，不提前本地创建。
+**⚠️ 手动停止时 App 内部调用 stop，但 BLE 协议实际发送 `session_control` 的 `action=end` 给板端，板端应回复 `push_session_end`。手机会立即停止本机 App 监控，但 Session 记录优先等板端 `push_session_end` 或 `session_control(action=end)` 响应中的报告字段后保存；如果 BLE 命令失败、断连，或 stop 成功后板端长时间没有返回报告，手机会用本地计时兜底保存，并标记为未同步。
 
 ### `push_timer_complete` — 计时器完成
 
@@ -371,7 +386,7 @@ EdgeFocus 设备 (Central)  ←──BLE GATT──→  BLE Band (Peripheral)
 | `app_category` | 固定 "other" |
 | `distraction_level` | 固定 3 |
 | `app_name` | 固定 "local_session_sync"（标识这是本地会话同步） |
-| `duration_sec` | 本次会话总时长（秒） |
+| `duration_sec` | 本次会话实际进行时长（秒）；手动停止时不是目标时长 |
 
 **板端处理：**
 - 收到 `app_name == "local_session_sync"` 时，识别为本地会话同步数据
@@ -485,22 +500,108 @@ EdgeFocus 设备 (Central)  ←──BLE GATT──→  BLE Band (Peripheral)
 
 ---
 
-## 十、板端需实现的事项
+## 十、App 主导的板端实现要求
+
+> 背景：当前 EdgeFocus 设备端代码开发较混乱，App 端作为阶段性主导方定义用户会话流程和信息交互边界。以下内容是板端实现依据，不是待讨论建议；板端不要按旧契约或隐含行为实现。
+
+### 10.1 App 端已经采用的协议规则
+
+| 事项 | 优先级 | 当前风险 | 目标行为 |
+|------|--------|----------|----------|
+| BLE 请求/响应模型 | 🔴 高 | App 端已改为请求带 `id`，写入成功只代表传输确认 | 板端必须通过 Notify 返回同 `id` 的 JSON 响应；无 `id` 的 Notify 只按 push 事件处理 |
+| UUID 对齐 | 🔴 高 | App 端已改为 `FF00/FF01/FF02` | 双方统一使用 `0000FF00` Service、`0000FF01` Write、`0000FF02` Notify |
+| MTU 协商 | 🟡 中 | App 端已在 GATT 连接成功后请求 MTU=128 | 板端必须支持 MTU ≥ 128；如协商失败，响应 JSON 仍尽量控制在短包范围内 |
+| 绑定后连接判断 | 🟡 中 | App 端要求用户先绑定特定设备再使用，因此连接判断必须以已绑定 MAC 为准 | 绑定流程必须保证 MAC 保存到本地设置，并在 BLE 层连接/重连前恢复 `targetMacAddress` |
+| `update_preferences` 数据类型 | 🟡 中 | App 端已按 key 转换数值类型 | `system_mode`、`away_timeout_min`、`led_brightness` 发送数字；`vibration_strength`、`reminder_sensitivity` 发送浮点数 |
+| 会话保存时机 | 🔴 高 | EdgeFocus 模式下若 App 提前用本地计时结果保存 Session，会和板端权威数据冲突 | EdgeFocus 模式优先用 `push_timer_complete`、`push_session_end` 或 `session_control(action=end)` 响应报告保存；手动停止必须保存 Session，若板端没有及时给报告则 App 用本地数据兜底保存为未同步 |
+
+### 10.2 板端必须支持的信息交互
+
+EdgeFocus 模式下，用户会话的权威生命周期在板端：App 可以发起控制、显示状态、上报手机使用情况，但会话是否开始、是否结束、最终报告数据均以板端响应和板端 push 为准。板端必须保证每次会话结束后能通过 `push_timer_complete` 或 `push_session_end` 收口，手动结束则必须通过 `session_control(action=end)` 的响应报告字段或随后的 `push_session_end` 收口。
+
+| 交互 | 板端要求 | App 端用途 |
+|------|----------|------------|
+| `session_control(start)` 响应 | 必须返回 `success`、`remaining_ms`、`target_duration_ms`；如果板端有会话 ID，也必须返回 `session_id` | App 根据板端时间启动倒计时，避免本地时间和板端不同步 |
+| `get_current_state` 响应 | 必须返回 `active`、`focus_state`、`elapsed_ms`、`remaining_ms`、`target_duration_ms`、`distraction_count`、`reminder_count` | App 连接后判断板端是否已有会话，并进行 1-2 秒周期校准 |
+| `push_timer_complete` | 时间到时主动推送，字段包含 `elapsed_ms`、`target_duration_ms`、`distraction_count`、`reminder_count` | App 触发完成态、停止监控、保存会话；优先级高于 `push_session_end` |
+| `push_session_end` | 会话结束并生成报告后推送，字段必须包含 `total_duration`、`focus_duration`、`distraction_count`、`reminder_count`；如果板端统计手机干扰和会话 ID，也必须包含 `phone_distraction_count`、`session_id` | App 保存板端权威 Session；手动停止也依赖此事件收尾 |
+| `phone_sync` 响应 | 必须返回 `focus_state`、`action_taken`，可返回 `distraction_count`、`reminder_count` | App 展示板端处理后的状态；注意 `phone_sync` 本身不等于分心结论 |
+| `reminder_ack` 响应 | 必须返回 `cooling_ms` | App 控制面板提醒弹窗确认后进入冷却提示 |
+
+### 10.3 桌面/后台状态不要依赖 Launcher 包名
+
+Android 不保证桌面一定会以 Launcher 包名出现在 UsageEvents 中。App 端规则如下：
+
+- 如果能拿到真实前台包名：`phone_sync.app_name` 上报真实包名。
+- 如果只检测到上一个 App 已退后台，但没有新的前台 App：视为桌面/后台，上报 `app_name="desktop_or_background"`、`app_category="other"`、`distraction_level=3`。
+- 板端不需要解析 `app_name` 做学习/干扰分类，分类只以 App 上报的 `app_category` 和 `distraction_level` 为准；`desktop_or_background` 也只是包名占位，供以后做 App 时长统计时识别“没有明确前台包名”的状态。
+
+### 10.4 推送和普通响应必须区分
+
+板端通过同一个 Notify 通道返回普通响应和主动推送，因此消息必须按以下规则区分：
+
+```json
+{"status":"success","id":12,"data":{}}   // 普通响应：必须带回请求 id
+{"cmd":"push_alert","data":{}}           // 主动推送：无 status/id，使用 cmd=push_xxx
+```
+
+App 端处理规则：
+
+- 带 `status` 且带 `id`：唤醒对应挂起请求。
+- `cmd` 以 `push_` 开头：广播给 PushEventHandler。
+- 既无 `status` 又无 `push_`：记录协议错误日志，不崩溃。
+
+---
+
+### 10.5 板端会话状态机实现顺序
+
+板端代码改造时建议先按下面顺序落地，避免 UI、摄像头检测、提醒策略和 BLE 协议互相抢状态：
+
+1. 先实现 BLE GATT 基础层：`FF00` Service、`FF01` Write、`FF02` Notify、CCCD 通知订阅、MTU >= 128。
+2. 再实现统一消息分发：解析 `cmd` 和 `id`，所有普通命令必须通过 Notify 返回同 `id` 响应。
+3. 再实现会话状态机：`IDLE -> RUNNING -> PAUSED -> RUNNING -> ENDING -> IDLE`。`ENDING` 阶段必须生成报告，再发 `push_session_end`。
+4. 再接入 `get_current_state`：任何时刻都能返回 `active`、`focus_state`、`elapsed_ms`、`remaining_ms`、`target_duration_ms`。
+5. 再接入 `phone_sync`：只更新手机使用输入，不直接等同于最终分心结论。
+6. 最后接入提醒和硬件控制：`push_alert`、`reminder_ack`、`update_preferences`。
+
+### 10.6 信号冲突处理规则
+
+| 冲突场景 | 板端必须怎么做 | App 端当前处理 |
+|---|---|---|
+| App 发 `session_control(start)`，但板端已有活动会话 | 返回 `status=success`、`success=true`，并返回当前会话 `remaining_ms`/`target_duration_ms`；不要重新创建第二个会话 | App 会按板端时间同步 |
+| App 发 `session_control(start)`，板端拒绝启动 | 返回 `status=success`、`id`、`data.success=false`，可附带 `message`；不要返回伪造时间 | App 保持 IDLE，不进入 RUNNING |
+| App 发 `session_control(end)` 后报告尚未生成 | 立即返回同 `id` 的 `success=true`，随后尽快 `push_session_end`；如果能同步生成报告，也可直接在响应 `data` 中带 `total_duration` 等字段 | App 先停止手机监控，等待报告；超时则本地兜底保存为未同步 |
+| 计时自然完成 | 先停止计时并冻结统计，再发送 `push_timer_complete` 或 `push_session_end`；不要重复累加同一次完成 | App 的完成处理是幂等的，但板端仍应避免重复 push |
+| `phone_sync` 与摄像头判断冲突 | 以板端 EventDetector 综合结果为准；`phone_sync` 只是手机侧输入 | App 保存板端 `distraction_count`/`reminder_count` 为权威值 |
+| Notify 中同时存在普通响应和主动事件 | 普通响应必须带 `status` + `id`；主动事件必须使用 `cmd=push_xxx` 且不要复用请求 `id` | App 按 `status/id` 与 `push_` 分流 |
+| App 连接后立即发命令 | 板端必须等 CCCD 订阅成功后再依赖 Notify 返回响应 | App 现在只在通知订阅完成后标记 CONNECTED |
+
+### 10.7 `phone_sync` 会话边界
+
+App 在每次 AppMonitorService 开始时都会重置上报去重键。因此新一轮会话即使用户仍停留在同一个手机 App，也会重新发送第一次 `phone_sync`。板端统计手机干扰时应按“当前板端活动会话”归属，不要把上一轮会话的手机状态延续到下一轮。
+
+如果板端维护 App 使用时长统计，可以使用 `app_name` 做包名维度统计；但学习/干扰分类必须使用 App 上报的 `app_category` 和 `distraction_level`。
+
+## 十一、板端需实现的事项
 
 | 事项 | 优先级 | 说明 |
 |------|--------|------|
 | `session_control` 响应中添加 `remaining_ms` 和 `target_duration_ms` | 🔴 高 | 手机计时器依赖此数据启动倒计时 |
 | `phone_sync` 响应返回 `focus_state` 和 `action_taken` | 🟡 中 | 板端处理手机干扰后的状态反馈 |
 | 所有命令响应统一 JSON 格式 | 🔴 高 | 手机端已全部改为 JSON 发送 |
+| 所有普通响应回显请求 `id` | 🔴 高 | App 通过 `id` 匹配挂起命令；无 `id` 的 `status` 响应会被忽略 |
+| CCCD/Notify 订阅成功后再视为可通信 | 🔴 高 | App 只有收到通知订阅成功后才认为 CONNECTED |
+| `session_control(start)` 明确返回 `data.success` | 🔴 高 | `success=false` 时 App 保持 IDLE，不启动本地倒计时 |
+| `session_control(end)` 必须收口报告 | 🔴 高 | 响应可直接带报告，或随后 `push_session_end`；否则 App 超时兜底为未同步 |
 | `push_session_end` 字段对齐（total_duration, focus_duration 等） | 🟡 中 | 手机端保存会话记录依赖 |
 | `get_today_summary` / `get_last_report` 实现 | 🟢 低 | 统计页数据展示 |
 | 硬件控制接口（振动/LED/提醒灵敏度） | 🟡 中 | 控制面板设置页需要调用 |
 | 离座超时通过 `update_preferences` 发送 | 🟡 中 | 手机端调整后需同步到板端 |
 | 系统模式通过 `update_preferences` 发送 | 🟡 中 | 静音/正常模式切换需同步到板端 |
 
-### 硬件控制接口建议
+### 硬件控制接口要求
 
-手机端控制面板第3页需要调整以下参数，建议板端新增 `update_preferences` 支持：
+手机端控制面板第3页需要调整以下参数，板端必须通过 `update_preferences` 支持：
 
 ```json
 {"cmd":"update_preferences","data":{

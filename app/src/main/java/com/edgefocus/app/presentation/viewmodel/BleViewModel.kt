@@ -51,6 +51,30 @@ class BleViewModel @Inject constructor(
     private val _alertEvent = MutableSharedFlow<AlertInfo>()
     val alertEvent: SharedFlow<AlertInfo> = _alertEvent.asSharedFlow()
 
+    private val pushEventHandler = object : PushEventHandler {
+        override fun onPushState(state: FocusState) {
+            Log.d(TAG, "Push state: $state")
+        }
+
+        override fun onPushAlert(alert: AlertInfo) {
+            Log.d(TAG, "Push alert: $alert")
+            viewModelScope.launch {
+                _alertEvent.emit(alert)
+            }
+        }
+
+        override fun onPushSessionEnd(summary: String) {
+            Log.d(TAG, "Push session end: $summary")
+        }
+
+        override fun onPushTimerComplete(timerComplete: TimerComplete) {
+            Log.d(TAG, "Push timer complete: $timerComplete")
+            viewModelScope.launch {
+                _timerCompleteEvent.emit(timerComplete)
+            }
+        }
+    }
+
     init {
         // 恢复模拟状态
         val simulateBle = prefs.getBoolean("simulate_ble", false)
@@ -59,29 +83,7 @@ class BleViewModel @Inject constructor(
         }
 
         // 设置推送事件处理器
-        bleManager.setPushEventHandler(object : PushEventHandler {
-            override fun onPushState(state: FocusState) {
-                Log.d(TAG, "Push state: $state")
-            }
-
-            override fun onPushAlert(alert: AlertInfo) {
-                Log.d(TAG, "Push alert: $alert")
-                viewModelScope.launch {
-                    _alertEvent.emit(alert)
-                }
-            }
-
-            override fun onPushSessionEnd(summary: String) {
-                Log.d(TAG, "Push session end: $summary")
-            }
-
-            override fun onPushTimerComplete(timerComplete: TimerComplete) {
-                Log.d(TAG, "Push timer complete: $timerComplete")
-                viewModelScope.launch {
-                    _timerCompleteEvent.emit(timerComplete)
-                }
-            }
-        })
+        bleManager.setPushEventHandler(pushEventHandler)
     }
 
     fun isSimulatingBle(): Boolean {
@@ -142,7 +144,7 @@ class BleViewModel @Inject constructor(
             return true
         }
 
-        if (connectionState.value != ConnectionState.CONNECTED) return false
+        if (!bleManager.isConnected()) return false
         val result = bleManager.sessionControl(action, targetDurationMin)
         return result.fold(
             onSuccess = {
@@ -163,7 +165,7 @@ class BleViewModel @Inject constructor(
             return true
         }
 
-        if (connectionState.value != ConnectionState.CONNECTED) return false
+        if (!bleManager.isConnected()) return false
         val result = bleManager.phoneSync(usage)
         return result.fold(
             onSuccess = {
@@ -184,7 +186,7 @@ class BleViewModel @Inject constructor(
             return null // 模拟模式返回null
         }
 
-        if (connectionState.value != ConnectionState.CONNECTED) return null
+        if (!bleManager.isConnected()) return null
         val result = bleManager.getConsoleData()
         return result.fold(
             onSuccess = { data ->
@@ -203,7 +205,12 @@ class BleViewModel @Inject constructor(
         return if (isSimulatingBle()) {
             true // 模拟模式下始终返回已连接
         } else {
-            connectionState.value == ConnectionState.CONNECTED
+            bleManager.isConnected()
         }
+    }
+
+    override fun onCleared() {
+        bleManager.removePushEventHandler(pushEventHandler)
+        super.onCleared()
     }
 }

@@ -17,12 +17,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
-import androidx.lifecycle.ProcessLifecycleOwner
 import com.edgefocus.app.presentation.navigation.NavigationGraph
 import com.edgefocus.app.presentation.ui.theme.EdgeFocusTheme
-import com.edgefocus.app.service.AppMonitorService
 import dagger.hilt.android.AndroidEntryPoint
 
 @AndroidEntryPoint
@@ -31,8 +27,6 @@ class MainActivity : ComponentActivity() {
     companion object {
         private const val TAG = "MainActivity"
     }
-
-    private var wasInBackground = false
 
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -44,32 +38,9 @@ class MainActivity : ComponentActivity() {
         checkUsageStatsPermission()
     }
 
-    private val lifecycleObserver = LifecycleEventObserver { _, event ->
-        when (event) {
-            Lifecycle.Event.ON_STOP -> {
-                // 应用进入后台（可能是切换到其他应用或锁屏）
-                Log.d(TAG, "App stopped")
-                wasInBackground = true
-                // 不立即通知，让 AppMonitorService 通过前台应用检测判断
-            }
-            Lifecycle.Event.ON_START -> {
-                // 应用回到前台
-                if (wasInBackground) {
-                    Log.d(TAG, "App returned to foreground")
-                    wasInBackground = false
-                    AppMonitorService.notifyAppToForeground(this)
-                }
-            }
-            else -> {}
-        }
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         requestPermissions()
-
-        // 注册生命周期观察者
-        ProcessLifecycleOwner.get().lifecycle.addObserver(lifecycleObserver)
 
         // NFC / Deep Link: edgefocus://controlpanel
         handleNfcIntent(intent)
@@ -96,11 +67,6 @@ class MainActivity : ComponentActivity() {
             startActivity(Intent(this, ControlPanelActivity::class.java))
             finish()
         }
-    }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        ProcessLifecycleOwner.get().lifecycle.removeObserver(lifecycleObserver)
     }
 
     private fun requestPermissions() {

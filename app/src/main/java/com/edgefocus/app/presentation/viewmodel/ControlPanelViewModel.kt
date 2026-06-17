@@ -4,13 +4,17 @@ import android.app.Application
 import android.nfc.NfcAdapter
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.edgefocus.app.data.SessionMode
 import com.edgefocus.app.data.TimerStateHolder
+import com.edgefocus.app.data.local.entity.Session
 import com.edgefocus.app.data.remote.BleManager
 import com.edgefocus.app.data.remote.PushEventHandler
 import com.edgefocus.app.domain.model.AlertInfo
 import com.edgefocus.app.domain.model.FocusState
 import com.edgefocus.app.domain.model.TimerState
+import com.edgefocus.app.domain.repository.ISessionRepository
 import com.edgefocus.app.domain.repository.ISettingsRepository
+import com.edgefocus.app.service.AppMonitorService
 import com.edgefocus.app.util.TimeUtils
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -53,6 +57,7 @@ data class ControlPanelUiState(
 class ControlPanelViewModel @Inject constructor(
     private val application: Application,
     private val settingsRepository: ISettingsRepository,
+    private val sessionRepository: ISessionRepository,
     private val timerStateHolder: TimerStateHolder,
     private val bleManager: BleManager
 ) : AndroidViewModel(application) {
@@ -62,6 +67,35 @@ class ControlPanelViewModel @Inject constructor(
 
     private val _alertEvent = MutableSharedFlow<AlertInfo>()
     val alertEvent: SharedFlow<AlertInfo> = _alertEvent.asSharedFlow()
+
+    private var currentSessionId: String? = null
+    private var sessionStartTime: Long = 0L
+    private var hasSavedCurrentSession = false
+    private var isAppMonitorRunning = false
+
+    private val pushEventHandler = object : PushEventHandler {
+        override fun onPushState(state: FocusState) {}
+
+        override fun onPushAlert(alert: AlertInfo) {
+            viewModelScope.launch {
+                _alertEvent.emit(alert)
+            }
+            if (alert.type == com.edgefocus.app.domain.model.AlertType.DISTRACTION) {
+                _uiState.update { it.copy(distractionCount = it.distractionCount + 1) }
+            }
+        }
+
+        override fun onPushSessionEnd(summary: String) {}
+
+        override fun onPushTimerComplete(timerComplete: com.edgefocus.app.data.remote.TimerComplete) {
+            _uiState.update {
+                it.copy(
+                    distractionCount = timerComplete.distractionCount,
+                    phoneDistractionCount = it.phoneDistractionCount
+                )
+            }
+        }
+    }
 
     init {
         // 加载设置
@@ -78,6 +112,7 @@ class ControlPanelViewModel @Inject constructor(
 
         // 从 TimerStateHolder 同步状态
         viewModelScope.launch {
+            var prevTimerState = TimerState.IDLE
             timerStateHolder.state.collect { sharedState ->
                 _uiState.update { state ->
                     state.copy(
@@ -88,32 +123,28 @@ class ControlPanelViewModel @Inject constructor(
                         selectedDuration = sharedState.targetDurationMinutes
                     )
                 }
+
+                if (prevTimerState == TimerState.IDLE && sharedState.timerState == TimerState.RUNNING) {
+                    currentSessionId = sharedState.sessionId ?: currentSessionId ?: "session_${System.currentTimeMillis()}"
+                    sessionStartTime = sharedState.sessionStartTime.takeIf { it > 0L }
+                        ?: sessionStartTime.takeIf { it > 0L }
+                        ?: System.currentTimeMillis()
+                    hasSavedCurrentSession = false
+                    startAppMonitor()
+                }
+
+                if (prevTimerState != TimerState.FINISHED && sharedState.timerState == TimerState.FINISHED) {
+                    saveFinishedSession()
+                    stopAppMonitor()
+                }
+                prevTimerState = sharedState.timerState
             }
         }
 
         checkNfcStatus()
 
         // 监听 BLE 推送的走神事件
-        bleManager.setPushEventHandler(object : PushEventHandler {
-            override fun onPushState(state: FocusState) {}
-            override fun onPushAlert(alert: AlertInfo) {
-                viewModelScope.launch {
-                    _alertEvent.emit(alert)
-                }
-                if (alert.type == com.edgefocus.app.domain.model.AlertType.DISTRACTION) {
-                    _uiState.update { it.copy(distractionCount = it.distractionCount + 1) }
-                }
-            }
-            override fun onPushSessionEnd(summary: String) {}
-            override fun onPushTimerComplete(timerComplete: com.edgefocus.app.data.remote.TimerComplete) {
-                _uiState.update {
-                    it.copy(
-                        distractionCount = timerComplete.distractionCount,
-                        phoneDistractionCount = timerComplete.reminderCount
-                    )
-                }
-            }
-        })
+        bleManager.setPushEventHandler(pushEventHandler)
     }
 
     fun updateSelectedDuration(minutes: Int) {
@@ -175,8 +206,11 @@ class ControlPanelViewModel @Inject constructor(
 
     fun startSession() {
         val duration = _uiState.value.selectedDuration
+        currentSessionId = "session_${System.currentTimeMillis()}"
+        sessionStartTime = System.currentTimeMillis()
+        hasSavedCurrentSession = false
         _uiState.update { it.copy(distractionCount = 0, phoneDistractionCount = 0) }
-        timerStateHolder.startEdgeFocusSession(duration)
+        timerStateHolder.startEdgeFocusSession(duration, currentSessionId!!, sessionStartTime)
     }
 
     fun pauseSession() {
@@ -184,7 +218,82 @@ class ControlPanelViewModel @Inject constructor(
     }
 
     fun stopSession() {
+        stopAppMonitor()
         timerStateHolder.stopSession()
+    }
+
+    private fun saveFinishedSession() {
+        if (hasSavedCurrentSession) return
+
+        val sessionId = currentSessionId ?: return
+        val state = timerStateHolder.state.value
+        val isEdgeFocus = state.sessionMode == SessionMode.EDGEFOCUS
+        val hasBoardReport = timerStateHolder.hasBoardSessionReport()
+        val elapsedSeconds = if (isEdgeFocus && timerStateHolder.getBoardTotalDuration() > 0) {
+            timerStateHolder.getBoardTotalDuration()
+        } else {
+            ((state.totalTime - state.timeRemaining) / 1000).toInt()
+        }
+        val focusSeconds = if (isEdgeFocus && timerStateHolder.getBoardFocusDuration() > 0) {
+            timerStateHolder.getBoardFocusDuration()
+        } else {
+            elapsedSeconds
+        }
+
+        viewModelScope.launch {
+            sessionRepository.insertSession(
+                Session(
+                    id = sessionId,
+                    startTime = if (sessionStartTime > 0) sessionStartTime else System.currentTimeMillis(),
+                    endTime = System.currentTimeMillis(),
+                    duration = elapsedSeconds,
+                    focusDuration = focusSeconds,
+                    distractionCount = if (isEdgeFocus) timerStateHolder.getBoardSessionDistractionCount() else 0,
+                    reminderCount = if (isEdgeFocus) timerStateHolder.getBoardSessionReminderCount() else 0,
+                    phoneDistractionCount = if (isEdgeFocus) {
+                        timerStateHolder.getBoardSessionPhoneDistractionCount()
+                    } else {
+                        state.phoneDistractionCount
+                    },
+                    feedback = null,
+                    boardSessionId = if (isEdgeFocus) sessionId else null,
+                    source = if (isEdgeFocus) "EDGEFOCUS" else "LOCAL",
+                    synced = isEdgeFocus && hasBoardReport
+                )
+            )
+        }
+
+        hasSavedCurrentSession = true
+        currentSessionId = null
+        sessionStartTime = 0L
+    }
+
+    private fun startAppMonitor() {
+        if (isAppMonitorRunning) return
+
+        try {
+            AppMonitorService.startService(application, currentSessionId)
+            isAppMonitorRunning = true
+        } catch (e: Exception) {
+            android.util.Log.e("ControlPanelViewModel", "Failed to start AppMonitorService: ${e.message}")
+        }
+    }
+
+    private fun stopAppMonitor() {
+        if (!isAppMonitorRunning) return
+
+        try {
+            AppMonitorService.stopService(application)
+            isAppMonitorRunning = false
+        } catch (e: Exception) {
+            android.util.Log.e("ControlPanelViewModel", "Failed to stop AppMonitorService: ${e.message}")
+        }
+    }
+
+    override fun onCleared() {
+        bleManager.removePushEventHandler(pushEventHandler)
+        stopAppMonitor()
+        super.onCleared()
     }
 
     private fun checkNfcStatus() {

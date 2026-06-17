@@ -40,12 +40,10 @@ class AppMonitorService : Service() {
         private const val NOTIFICATION_ID = 1002
         private const val ALERT_NOTIFICATION_ID = 2000
         private const val POLL_INTERVAL_MS = 1000L // 1秒检查一次（支持强干扰每秒提醒）
-        private const val LAUNCHER_PACKAGE = "com.launcher"
+        private const val DESKTOP_OR_BACKGROUND = "desktop_or_background"
 
         const val ACTION_START_MONITORING = "com.edgefocus.app.ACTION_START_MONITORING"
         const val ACTION_STOP_MONITORING = "com.edgefocus.app.ACTION_STOP_MONITORING"
-        const val ACTION_APP_TO_BACKGROUND = "com.edgefocus.app.ACTION_APP_TO_BACKGROUND"
-        const val ACTION_APP_TO_FOREGROUND = "com.edgefocus.app.ACTION_APP_TO_FOREGROUND"
 
         fun startService(context: Context, sessionId: String? = null) {
             val intent = Intent(context, AppMonitorService::class.java).apply {
@@ -66,19 +64,6 @@ class AppMonitorService : Service() {
             context.startService(intent)
         }
 
-        fun notifyAppToBackground(context: Context) {
-            val intent = Intent(context, AppMonitorService::class.java).apply {
-                action = ACTION_APP_TO_BACKGROUND
-            }
-            context.startService(intent)
-        }
-
-        fun notifyAppToForeground(context: Context) {
-            val intent = Intent(context, AppMonitorService::class.java).apply {
-                action = ACTION_APP_TO_FOREGROUND
-            }
-            context.startService(intent)
-        }
     }
 
     @Inject
@@ -102,7 +87,6 @@ class AppMonitorService : Service() {
     private var currentStartTime: Long = 0L
     private var sessionId: String? = null
     private var distractionLevels: Map<String, Int> = emptyMap()
-    private var isAppInForeground = true
     private var lastBleReportedKey: String? = null
 
     // 通知时间记录
@@ -122,6 +106,8 @@ class AppMonitorService : Service() {
     private val LOW_DISTRACTION_INTERVAL = 60000L // 弱干扰：每分钟
     private val LOW_DISTRACTION_INITIAL_DELAY = 3000L // 弱干扰：启动后3秒首次提醒
     private val BACKGROUND_INTERVAL = 10000L // 后台：每10秒
+    private val DISTRACTION_RELOAD_INTERVAL = 5000L
+    private var lastDistractionReload = 0L
 
     override fun onCreate() {
         super.onCreate()
@@ -140,12 +126,6 @@ class AppMonitorService : Service() {
                 stopMonitoring()
                 stopSelf()
             }
-            ACTION_APP_TO_FOREGROUND -> {
-                isAppInForeground = true
-            }
-            ACTION_APP_TO_BACKGROUND -> {
-                isAppInForeground = false
-            }
         }
         return START_STICKY
     }
@@ -161,6 +141,7 @@ class AppMonitorService : Service() {
     }
 
     private fun loadDistractionLevels() {
+        lastDistractionReload = System.currentTimeMillis()
         val prefs = getSharedPreferences("test_prefs", MODE_PRIVATE)
         val saved = prefs.getString("distraction_levels", "") ?: ""
         if (saved.isNotEmpty()) {
@@ -183,7 +164,7 @@ class AppMonitorService : Service() {
         if (monitoringJob?.isActive == true) return
 
         loadDistractionLevels()
-        isAppInForeground = true
+        lastBleReportedKey = null
 
         monitoringJob = serviceScope.launch {
             while (isActive) {
@@ -202,21 +183,23 @@ class AppMonitorService : Service() {
         }
         currentPackageName = null
         currentStartTime = 0L
-        isAppInForeground = true
+        lastBleReportedKey = null
         Log.d(TAG, "Monitoring stopped")
     }
 
     private suspend fun checkDistractionNotifications() {
         val now = System.currentTimeMillis()
 
-        // 每次检查时重新加载干扰等级
-        loadDistractionLevels()
+        if (now - lastDistractionReload >= DISTRACTION_RELOAD_INTERVAL) {
+            loadDistractionLevels()
+        }
 
         val foregroundPackage = AppCategorizer.getForegroundApp(this)
         Log.d(TAG, "Foreground: $foregroundPackage, self=$packageName")
 
         // 1. EdgeFocus 自己在前台：BLE 上报 learning，不通知
         if (foregroundPackage == packageName) {
+            closeCurrentAppUsage()
             reportBleIfChanged(
                 packageName = packageName,
                 category = "learning",
@@ -227,8 +210,9 @@ class AppMonitorService : Service() {
 
         // 2. null：复用原通知逻辑，按后台/桌面/other 处理
         if (foregroundPackage == null) {
+            closeCurrentAppUsage()
             reportBleIfChanged(
-                packageName = LAUNCHER_PACKAGE,
+                packageName = DESKTOP_OR_BACKGROUND,
                 category = "other",
                 level = 3
             )
@@ -253,12 +237,7 @@ class AppMonitorService : Service() {
         }
 
         val level = distractionLevels[foregroundPackage] ?: 3
-        val category = when (level) {
-            0 -> "learning"
-            1 -> "social"
-            2 -> "entertainment"
-            else -> "other"
-        }
+        val category = categoryForLevel(level)
 
         Log.d(TAG, "App: $foregroundPackage, Level: $level")
 
@@ -310,36 +289,18 @@ class AppMonitorService : Service() {
     }
 
     private fun showBackgroundNotification() {
-        notificationCounter++
-        val notificationId = ALERT_NOTIFICATION_ID + notificationCounter
-
-        val notificationManager = getSystemService(NotificationManager::class.java)
-
-        val intent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
-        }
-        val pendingIntent = PendingIntent.getActivity(
-            this, notificationId, intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        showAlertNotification(
+            title = "📱 EdgeFocus 专注中",
+            message = "您的专注会话正在进行，请返回应用继续专注",
+            bigText = "您的专注会话正在进行中。为了保持专注效果，请返回 EdgeFocus 应用。放下手机，专注于当前任务。"
         )
-
-        val notification = NotificationCompat.Builder(this, ALERT_CHANNEL_ID)
-            .setSmallIcon(android.R.drawable.ic_dialog_alert)
-            .setContentTitle("📱 EdgeFocus 专注中")
-            .setContentText("您的专注会话正在进行，请返回应用继续专注")
-            .setStyle(NotificationCompat.BigTextStyle()
-                .bigText("您的专注会话正在进行中。为了保持专注效果，请返回 EdgeFocus 应用。放下手机，专注于当前任务。"))
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setContentIntent(pendingIntent)
-            .setAutoCancel(true)
-            .setVibrate(longArrayOf(0, 500, 200, 500))
-            .build()
-
-        notificationManager.notify(notificationId, notification)
-        Log.d(TAG, "Background notification sent: $notificationId")
     }
 
     private fun showDistractionNotification(title: String, message: String) {
+        showAlertNotification(title = title, message = message)
+    }
+
+    private fun showAlertNotification(title: String, message: String, bigText: String? = null) {
         notificationCounter++
         val notificationId = ALERT_NOTIFICATION_ID + notificationCounter
 
@@ -353,7 +314,7 @@ class AppMonitorService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        val notification = NotificationCompat.Builder(this, ALERT_CHANNEL_ID)
+        val builder = NotificationCompat.Builder(this, ALERT_CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_dialog_alert)
             .setContentTitle(title)
             .setContentText(message)
@@ -361,10 +322,13 @@ class AppMonitorService : Service() {
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)
             .setVibrate(longArrayOf(0, 500, 200, 500))
-            .build()
 
-        notificationManager.notify(notificationId, notification)
-        Log.d(TAG, "Distraction notification sent: $notificationId")
+        bigText?.let {
+            builder.setStyle(NotificationCompat.BigTextStyle().bigText(it))
+        }
+
+        notificationManager.notify(notificationId, builder.build())
+        Log.d(TAG, "Alert notification sent: $notificationId")
     }
 
     private fun getAppName(packageName: String): String {
@@ -426,12 +390,7 @@ class AppMonitorService : Service() {
         if (duration <= 0) return
 
         val level = distractionLevels[packageName] ?: 3
-        val category = when (level) {
-            0 -> "learning"
-            1 -> "social"
-            2 -> "entertainment"
-            else -> "other"
-        }
+        val category = categoryForLevel(level)
 
         val appUsage = AppUsage(
             packageName = packageName,
@@ -445,6 +404,22 @@ class AppMonitorService : Service() {
             Log.d(TAG, "Recorded usage: $packageName - ${duration}s (level: $level)")
         } catch (e: Exception) {
             Log.e(TAG, "Failed to record app usage: ${e.message}")
+        }
+    }
+
+    private suspend fun closeCurrentAppUsage() {
+        recordCurrentAppUsage()
+        currentPackageName = null
+        currentStartTime = 0L
+        lowDistractionInitialAlertSent = false
+    }
+
+    private fun categoryForLevel(level: Int): String {
+        return when (level) {
+            0 -> "learning"
+            1 -> "social"
+            2 -> "entertainment"
+            else -> "other"
         }
     }
 
