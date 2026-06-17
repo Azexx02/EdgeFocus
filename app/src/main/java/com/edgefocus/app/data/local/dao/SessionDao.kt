@@ -30,4 +30,13 @@ interface SessionDao {
 
     @Query("DELETE FROM sessions WHERE id = :id")
     suspend fun deleteSession(id: String)
+
+    @Query("UPDATE sessions SET feedback = :feedback WHERE id = :id")
+    suspend fun updateFeedback(id: String, feedback: String)
+
+    @Query("SELECT * FROM sessions WHERE synced = 0")
+    suspend fun getUnsyncedSessions(): List<Session>
+
+    @Query("UPDATE sessions SET synced = 1 WHERE id = :id")
+    suspend fun markSynced(id: String)
 }

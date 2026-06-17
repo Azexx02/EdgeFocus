@@ -84,16 +84,8 @@ object AppCategorizer {
 
         while (events.hasNextEvent()) {
             events.getNextEvent(event)
-            when (event.eventType) {
-                android.app.usage.UsageEvents.Event.ACTIVITY_RESUMED -> {
-                    lastResumedPackage = event.packageName
-                }
-                android.app.usage.UsageEvents.Event.ACTIVITY_PAUSED,
-                android.app.usage.UsageEvents.Event.ACTIVITY_STOPPED -> {
-                    if (event.packageName == lastResumedPackage) {
-                        lastResumedPackage = null
-                    }
-                }
+            if (event.eventType == android.app.usage.UsageEvents.Event.ACTIVITY_RESUMED) {
+                lastResumedPackage = event.packageName
             }
         }
 
@@ -104,12 +96,8 @@ object AppCategorizer {
             val extEvent = android.app.usage.UsageEvents.Event()
             while (extendedEvents.hasNextEvent()) {
                 extendedEvents.getNextEvent(extEvent)
-                when (extEvent.eventType) {
-                    android.app.usage.UsageEvents.Event.ACTIVITY_RESUMED -> extendedPkg = extEvent.packageName
-                    android.app.usage.UsageEvents.Event.ACTIVITY_PAUSED,
-                    android.app.usage.UsageEvents.Event.ACTIVITY_STOPPED -> {
-                        if (extEvent.packageName == extendedPkg) extendedPkg = null
-                    }
+                if (extEvent.eventType == android.app.usage.UsageEvents.Event.ACTIVITY_RESUMED) {
+                    extendedPkg = extEvent.packageName
                 }
             }
             return extendedPkg

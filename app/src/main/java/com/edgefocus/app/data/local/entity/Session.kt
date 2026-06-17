@@ -13,6 +13,9 @@ data class Session(
     val focusDuration: Int,
     val distractionCount: Int,
     val reminderCount: Int,
-    val feedback: String?,
-    val boardSessionId: String?
+    val phoneDistractionCount: Int = 0,
+    val feedback: String? = null,
+    val boardSessionId: String? = null,
+    val source: String = "LOCAL",
+    val synced: Boolean = false
 )

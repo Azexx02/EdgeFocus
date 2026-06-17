@@ -51,7 +51,7 @@ fun ConfigPage(
                 ModeChip(
                     label = mode.displayName(),
                     selected = uiState.systemMode == mode,
-                    onClick = { viewModel.updateSystemMode(mode) }
+                    onClick = { viewModel.setSystemMode(mode.ordinal) }
                 )
             }
         }
@@ -80,7 +80,7 @@ fun ConfigPage(
 
         Slider(
             value = uiState.awayTimeout.toFloat(),
-            onValueChange = { viewModel.updateAwayTimeout(it.toInt()) },
+                    onValueChange = { viewModel.setAwayTimeout(it.toInt()) },
             valueRange = 5f..60f,
             modifier = Modifier.fillMaxWidth()
         )
@@ -105,7 +105,7 @@ fun ConfigPage(
 
         Slider(
             value = uiState.reminderSensitivity,
-            onValueChange = { viewModel.updateReminderSensitivity(it) },
+                    onValueChange = { viewModel.setReminderSensitivity(it) },
             valueRange = 0f..1f,
             modifier = Modifier.fillMaxWidth()
         )
@@ -148,5 +148,4 @@ fun ModeChip(
 private fun SystemMode.displayName(): String = when (this) {
     SystemMode.NORMAL -> "正常"
     SystemMode.SILENT -> "静音"
-    SystemMode.HOME -> "家庭"
 }

@@ -12,7 +12,12 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.edgefocus.app.MainActivity
 import com.edgefocus.app.data.local.dao.AppUsageDao
+import com.edgefocus.app.data.TimerStateHolder
+import com.edgefocus.app.data.local.dao.SettingsDao
 import com.edgefocus.app.data.local.entity.AppUsage
+import com.edgefocus.app.data.remote.AppEventLog
+import com.edgefocus.app.data.remote.BleManager
+import com.edgefocus.app.data.remote.PhoneUsage
 import com.edgefocus.app.util.AppCategorizer
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
@@ -35,6 +40,7 @@ class AppMonitorService : Service() {
         private const val NOTIFICATION_ID = 1002
         private const val ALERT_NOTIFICATION_ID = 2000
         private const val POLL_INTERVAL_MS = 1000L // 1秒检查一次（支持强干扰每秒提醒）
+        private const val LAUNCHER_PACKAGE = "com.launcher"
 
         const val ACTION_START_MONITORING = "com.edgefocus.app.ACTION_START_MONITORING"
         const val ACTION_STOP_MONITORING = "com.edgefocus.app.ACTION_STOP_MONITORING"
@@ -78,6 +84,18 @@ class AppMonitorService : Service() {
     @Inject
     lateinit var appUsageDao: AppUsageDao
 
+    @Inject
+    lateinit var bleManager: BleManager
+
+    @Inject
+    lateinit var appEventLog: AppEventLog
+
+    @Inject
+    lateinit var timerStateHolder: TimerStateHolder
+
+    @Inject
+    lateinit var settingsDao: SettingsDao
+
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var monitoringJob: Job? = null
     private var currentPackageName: String? = null
@@ -85,6 +103,7 @@ class AppMonitorService : Service() {
     private var sessionId: String? = null
     private var distractionLevels: Map<String, Int> = emptyMap()
     private var isAppInForeground = true
+    private var lastBleReportedKey: String? = null
 
     // 通知时间记录
     private var lastHighDistractionAlert = 0L
@@ -93,7 +112,9 @@ class AppMonitorService : Service() {
     private var lastUnclassifiedAlert = 0L
     private var lowDistractionInitialAlertSent = false
 
-    // 通知计数器（用于生成不同ID）
+    // 通知计数器：每次生成新 ID，确保强干扰等持续提醒不会被 Android 系统静默
+    // Android 对相同 ID 的通知只更新内容不重新提醒（不震动/不响铃），
+    // 使用递增 ID 让每次通知都是新通知，触发新的提醒行为
     private var notificationCounter = 0
 
     // 通知间隔（毫秒）
@@ -122,6 +143,9 @@ class AppMonitorService : Service() {
             ACTION_APP_TO_FOREGROUND -> {
                 isAppInForeground = true
             }
+            ACTION_APP_TO_BACKGROUND -> {
+                isAppInForeground = false
+            }
         }
         return START_STICKY
     }
@@ -148,6 +172,9 @@ class AppMonitorService : Service() {
                     "" to 3
                 }
             }.filterKeys { it.isNotEmpty() }
+        }
+        distractionLevels = distractionLevels.toMutableMap().apply {
+            put(packageName, 0)
         }
         Log.d(TAG, "Loaded ${distractionLevels.size} distraction level entries")
     }
@@ -186,14 +213,26 @@ class AppMonitorService : Service() {
         loadDistractionLevels()
 
         val foregroundPackage = AppCategorizer.getForegroundApp(this)
+        Log.d(TAG, "Foreground: $foregroundPackage, self=$packageName")
 
-        // 1. 应用在前台 - 不通知
+        // 1. EdgeFocus 自己在前台：BLE 上报 learning，不通知
         if (foregroundPackage == packageName) {
+            reportBleIfChanged(
+                packageName = packageName,
+                category = "learning",
+                level = 0
+            )
             return
         }
 
-        // 2. 无前台应用（锁屏）- 后台通知
+        // 2. null：复用原通知逻辑，按后台/桌面/other 处理
         if (foregroundPackage == null) {
+            reportBleIfChanged(
+                packageName = LAUNCHER_PACKAGE,
+                category = "other",
+                level = 3
+            )
+
             if (now - lastBackgroundAlert >= BACKGROUND_INTERVAL) {
                 lastBackgroundAlert = now
                 showBackgroundNotification()
@@ -201,19 +240,36 @@ class AppMonitorService : Service() {
             return
         }
 
-        // 3. 前台有应用 - 根据干扰等级通知，禁用后台通知
-
-        // 记录应用切换
+        // 3. 有明确前台 App：保持原有应用切换记录逻辑
         if (foregroundPackage != currentPackageName) {
             recordCurrentAppUsage()
             currentPackageName = foregroundPackage
             currentStartTime = now
             lowDistractionInitialAlertSent = false
+            lastHighDistractionAlert = 0L
+            lastLowDistractionAlert = 0L
+            lastBackgroundAlert = 0L
+            lastUnclassifiedAlert = 0L
         }
 
-        val level = distractionLevels[foregroundPackage] ?: 3 // 默认为未分类
+        val level = distractionLevels[foregroundPackage] ?: 3
+        val category = when (level) {
+            0 -> "learning"
+            1 -> "social"
+            2 -> "entertainment"
+            else -> "other"
+        }
+
         Log.d(TAG, "App: $foregroundPackage, Level: $level")
 
+        // BLE 只跟随最终分类结果上报一次，不跟随通知频率重复发送
+        reportBleIfChanged(
+            packageName = foregroundPackage,
+            category = category,
+            level = level
+        )
+
+        // 下面的通知策略保持原样
         when (level) {
             0 -> {
                 // 学习软件，不提醒
@@ -320,12 +376,47 @@ class AppMonitorService : Service() {
         }
     }
 
-    private fun isLauncherApp(packageName: String): Boolean {
-        val intent = android.content.Intent(android.content.Intent.ACTION_MAIN).apply {
-            addCategory(android.content.Intent.CATEGORY_HOME)
+    private suspend fun reportBleIfChanged(
+        packageName: String,
+        category: String,
+        level: Int
+    ) {
+        val key = "$packageName|$category|$level"
+
+        if (key == lastBleReportedKey) {
+            return
         }
-        val resolveInfo = packageManager.resolveActivity(intent, 0)
-        return resolveInfo?.activityInfo?.packageName == packageName
+
+        val settings = settingsDao.getSettingsOnce()
+        if (settings?.useEdgeFocusBoard != true) {
+            return
+        }
+
+        if (!bleManager.isConnected()) {
+            return
+        }
+
+        val result = bleManager.phoneSync(
+            PhoneUsage(
+                isInUse = true,
+                appCategory = category,
+                distractionLevel = level,
+                appName = packageName,
+                durationSec = null
+            )
+        )
+
+        if (result.isSuccess) {
+            lastBleReportedKey = key
+            appEventLog.log("PHONE_SYNC", "$category, level=$level, pkg=$packageName")
+            // 手机干扰计数（level > 0 表示干扰应用）
+            if (level > 0) {
+                timerStateHolder.incrementPhoneDistraction()
+            }
+            Log.d(TAG, "BLE phoneSync sent: $key")
+        } else {
+            Log.e(TAG, "BLE phoneSync failed: ${result.exceptionOrNull()?.message}")
+        }
     }
 
     private suspend fun recordCurrentAppUsage() {

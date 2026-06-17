@@ -5,8 +5,10 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.edgefocus.app.data.SessionMode
 import com.edgefocus.app.data.TimerStateHolder
+import com.edgefocus.app.data.local.entity.Session
 import com.edgefocus.app.domain.model.SessionType
 import com.edgefocus.app.domain.model.TimerState
+import com.edgefocus.app.domain.repository.ISessionRepository
 import com.edgefocus.app.domain.repository.ISettingsRepository
 import com.edgefocus.app.service.AppMonitorService
 import com.edgefocus.app.util.TimeUtils
@@ -25,13 +27,17 @@ data class TimerUiState(
     val totalTime: Long = TimeUtils.minutesToMillis(25),
     val completedSessions: Int = 0,
     val sessionMode: SessionMode = SessionMode.LOCAL,
-    val isBoardConnected: Boolean = false
+    val isBoardConnected: Boolean = false,
+    val distractionCount: Int = 0,
+    val reminderCount: Int = 0,
+    val phoneDistractionCount: Int = 0
 )
 
 @HiltViewModel
 class HomeViewModel @Inject constructor(
     application: Application,
     private val settingsRepository: ISettingsRepository,
+    private val sessionRepository: ISessionRepository,
     private val timerStateHolder: TimerStateHolder
 ) : AndroidViewModel(application) {
 
@@ -39,11 +45,19 @@ class HomeViewModel @Inject constructor(
     val uiState: StateFlow<TimerUiState> = _uiState.asStateFlow()
 
     private var workDurationMinutes = 25
-    private var shortBreakMinutes = 5
-    private var longBreakMinutes = 15
-    private var sessionsBeforeLongBreak = 4
+
+    fun setWorkDuration(minutes: Int) {
+        workDurationMinutes = minutes.coerceIn(1, 120)
+        if (_uiState.value.timerState == TimerState.IDLE) {
+            val duration = TimeUtils.minutesToMillis(workDurationMinutes)
+            _uiState.update { it.copy(timeRemaining = duration, totalTime = duration) }
+        }
+    }
+
+    fun getWorkDurationMinutes(): Int = workDurationMinutes
 
     private var currentSessionId: String? = null
+    private var sessionStartTime: Long = 0L
 
     init {
         // 加载设置
@@ -51,9 +65,6 @@ class HomeViewModel @Inject constructor(
             settingsRepository.getSettings().collect { settings ->
                 settings?.let {
                     workDurationMinutes = it.pomodoroDuration
-                    shortBreakMinutes = it.shortBreakDuration
-                    longBreakMinutes = it.longBreakDuration
-                    sessionsBeforeLongBreak = it.sessionsBeforeLongBreak
 
                     // 空闲状态时更新显示时间
                     if (_uiState.value.timerState == TimerState.IDLE) {
@@ -71,6 +82,7 @@ class HomeViewModel @Inject constructor(
 
         // 从 TimerStateHolder 同步状态
         viewModelScope.launch {
+            var prevTimerState = TimerState.IDLE
             timerStateHolder.state.collect { sharedState ->
                 _uiState.update { state ->
                     state.copy(
@@ -80,9 +92,23 @@ class HomeViewModel @Inject constructor(
                         totalTime = sharedState.totalTime,
                         completedSessions = sharedState.completedSessions,
                         sessionMode = sharedState.sessionMode,
-                        isBoardConnected = sharedState.isBoardConnected
+                        isBoardConnected = sharedState.isBoardConnected,
+                        distractionCount = sharedState.distractionCount,
+                        reminderCount = sharedState.reminderCount,
+                        phoneDistractionCount = sharedState.phoneDistractionCount
                     )
                 }
+
+                // 板端同步启动会话时，自动启动 AppMonitorService
+                if (prevTimerState == TimerState.IDLE && sharedState.timerState == TimerState.RUNNING
+                    && sharedState.sessionMode == SessionMode.EDGEFOCUS) {
+                    if (currentSessionId == null) {
+                        currentSessionId = "session_${System.currentTimeMillis()}"
+                        sessionStartTime = System.currentTimeMillis()
+                        startAppMonitor()
+                    }
+                }
+                prevTimerState = sharedState.timerState
 
                 // 会话结束时处理休息
                 if (sharedState.timerState == TimerState.FINISHED) {
@@ -102,6 +128,7 @@ class HomeViewModel @Inject constructor(
         }
 
         currentSessionId = "session_${System.currentTimeMillis()}"
+        sessionStartTime = System.currentTimeMillis()
         startAppMonitor()
         timerStateHolder.startEdgeFocusSession(workDurationMinutes)
     }
@@ -112,6 +139,7 @@ class HomeViewModel @Inject constructor(
      */
     fun startLocalSession() {
         currentSessionId = "session_${System.currentTimeMillis()}"
+        sessionStartTime = System.currentTimeMillis()
         startAppMonitor()
         timerStateHolder.startLocalSession(workDurationMinutes)
     }
@@ -135,19 +163,24 @@ class HomeViewModel @Inject constructor(
 
     fun pauseTimer() {
         val state = _uiState.value.timerState
-        if (state == TimerState.RUNNING || state == TimerState.BREAK) {
+        if (state == TimerState.RUNNING) {
             timerStateHolder.pauseSession()
         }
     }
 
     fun stopTimer() {
+        // 手动停止时保存会话记录
+        if (_uiState.value.timerState == TimerState.RUNNING && sessionStartTime > 0) {
+            handleSessionFinished()
+        }
+
         stopAppMonitor()
 
         // 本地模式结束后，尝试同步记录给设备
         if (_uiState.value.sessionMode == SessionMode.LOCAL && timerStateHolder.isBoardConnected()) {
             viewModelScope.launch {
                 val durationMinutes = timerStateHolder.getTargetDurationMinutes()
-                timerStateHolder.syncSessionToBoard(durationMinutes, durationMinutes, 0)
+                timerStateHolder.syncSessionToBoard(durationMinutes)
             }
         }
 
@@ -155,13 +188,34 @@ class HomeViewModel @Inject constructor(
     }
 
     private fun handleSessionFinished() {
-        val completedSessions = timerStateHolder.getCompletedSessions()
-        timerStateHolder.startBreak(
-            completedSessions = completedSessions,
-            shortBreakMinutes = shortBreakMinutes,
-            longBreakMinutes = longBreakMinutes,
-            sessionsBeforeLongBreak = sessionsBeforeLongBreak
-        )
+        val ui = _uiState.value
+        val isEdgeFocus = ui.sessionMode == SessionMode.EDGEFOCUS
+
+        // EdgeFocus 模式：如果有板端数据就保存，否则等 push_session_end
+        // 本地模式：直接保存
+        if (!isEdgeFocus || currentSessionId != null) {
+            val elapsedMs = ui.totalTime - ui.timeRemaining
+            viewModelScope.launch {
+                val session = Session(
+                    id = currentSessionId ?: "session_${System.currentTimeMillis()}",
+                    startTime = if (sessionStartTime > 0) sessionStartTime else System.currentTimeMillis(),
+                    endTime = System.currentTimeMillis(),
+                    duration = (elapsedMs / 1000).toInt(),
+                    focusDuration = (elapsedMs / 1000).toInt(),
+                    distractionCount = if (isEdgeFocus) timerStateHolder.getBoardSessionDistractionCount() else 0,
+                    reminderCount = if (isEdgeFocus) timerStateHolder.getBoardSessionReminderCount() else 0,
+                    phoneDistractionCount = ui.phoneDistractionCount,
+                    feedback = null,
+                    boardSessionId = currentSessionId,
+                    source = if (isEdgeFocus) "EDGEFOCUS" else "LOCAL",
+                    synced = false
+                )
+                sessionRepository.insertSession(session)
+            }
+
+            currentSessionId = null
+            sessionStartTime = 0L
+        }
     }
 
     private fun startAppMonitor() {

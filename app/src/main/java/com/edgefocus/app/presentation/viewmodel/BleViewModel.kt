@@ -39,6 +39,7 @@ class BleViewModel @Inject constructor(
 
     val connectionState: StateFlow<ConnectionState> = bleManager.connectionState
     val deviceStatus: StateFlow<DeviceStatus?> = bleManager.deviceStatus
+    val discoveredDevices: StateFlow<List<BleManager.DiscoveredDevice>> = bleManager.discoveredDevices
 
     private val _lastError = MutableStateFlow<String?>(null)
     val lastError: StateFlow<String?> = _lastError.asStateFlow()
@@ -113,6 +114,25 @@ class BleViewModel @Inject constructor(
         } else {
             bleManager.disconnect()
         }
+    }
+
+    fun connectToDiscoveredDevice(address: String) {
+        if (!isSimulatingBle()) {
+            bleManager.connectToDiscoveredDevice(address)
+        }
+    }
+
+    fun setTargetMac(mac: String) {
+        bleManager.setTargetMac(mac)
+    }
+
+    fun clearDiscoveredDevices() {
+        bleManager.clearDiscoveredDevices()
+    }
+
+    fun saveMacAddress(mac: String) {
+        prefs.edit().putString("edge_focus_mac", mac).apply()
+        bleManager.setTargetMac(mac)
     }
 
     suspend fun sendSessionCommand(action: String, targetDurationMin: Int? = null): Boolean {

@@ -71,6 +71,9 @@ class MainActivity : ComponentActivity() {
         // 注册生命周期观察者
         ProcessLifecycleOwner.get().lifecycle.addObserver(lifecycleObserver)
 
+        // NFC / Deep Link: edgefocus://controlpanel
+        handleNfcIntent(intent)
+
         setContent {
             EdgeFocusTheme {
                 Surface(
@@ -80,6 +83,18 @@ class MainActivity : ComponentActivity() {
                     NavigationGraph()
                 }
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        handleNfcIntent(intent)
+    }
+
+    private fun handleNfcIntent(intent: Intent?) {
+        if (intent?.data?.host == "controlpanel") {
+            startActivity(Intent(this, ControlPanelActivity::class.java))
+            finish()
         }
     }
 

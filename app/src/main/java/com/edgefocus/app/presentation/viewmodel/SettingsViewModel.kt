@@ -32,28 +32,8 @@ class SettingsViewModel @Inject constructor(
         saveSettings()
     }
 
-    fun updateShortBreakDuration(duration: Int) {
-        _settings.value = _settings.value.copy(shortBreakDuration = duration)
-        saveSettings()
-    }
-
-    fun updateLongBreakDuration(duration: Int) {
-        _settings.value = _settings.value.copy(longBreakDuration = duration)
-        saveSettings()
-    }
-
     fun updateUseEdgeFocusBoard(enabled: Boolean) {
         _settings.value = _settings.value.copy(useEdgeFocusBoard = enabled)
-        saveSettings()
-    }
-
-    fun updateAutoRotateNFC(enabled: Boolean) {
-        _settings.value = _settings.value.copy(autoRotateNFC = enabled)
-        saveSettings()
-    }
-
-    fun updateNotificationOnExit(enabled: Boolean) {
-        _settings.value = _settings.value.copy(notificationOnExit = enabled)
         saveSettings()
     }
 

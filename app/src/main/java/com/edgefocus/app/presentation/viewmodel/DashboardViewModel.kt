@@ -8,6 +8,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.util.Calendar
 import javax.inject.Inject
@@ -40,12 +41,14 @@ class DashboardViewModel @Inject constructor(
                 val todaySessions = sessions.filter { it.startTime >= todayStart }
                 val weekSessions = sessions.filter { it.startTime >= weekStart }
 
-                _uiState.value = DashboardUiState(
-                    sessions = sessions,
-                    todayFocusSeconds = todaySessions.sumOf { it.focusDuration },
-                    todaySessionCount = todaySessions.size,
-                    weekFocusSeconds = weekSessions.sumOf { it.focusDuration }
-                )
+                _uiState.update {
+                    it.copy(
+                        sessions = sessions,
+                        todayFocusSeconds = todaySessions.sumOf { s -> s.focusDuration },
+                        todaySessionCount = todaySessions.size,
+                        weekFocusSeconds = weekSessions.sumOf { s -> s.focusDuration }
+                    )
+                }
             }
         }
     }
@@ -67,5 +70,11 @@ class DashboardViewModel @Inject constructor(
         calendar.set(Calendar.SECOND, 0)
         calendar.set(Calendar.MILLISECOND, 0)
         return calendar.timeInMillis
+    }
+
+    fun updateSessionFeedback(sessionId: String, feedback: String) {
+        viewModelScope.launch {
+            sessionRepository.updateFeedback(sessionId, feedback)
+        }
     }
 }

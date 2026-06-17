@@ -11,7 +11,7 @@ import com.edgefocus.app.data.local.entity.Settings
 
 @Database(
     entities = [Session::class, Settings::class, AppUsage::class],
-    version = 2,
+    version = 7,
     exportSchema = true
 )
 abstract class AppDatabase : RoomDatabase() {

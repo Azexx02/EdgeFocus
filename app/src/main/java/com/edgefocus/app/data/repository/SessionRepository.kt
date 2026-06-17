@@ -22,4 +22,10 @@ class SessionRepository @Inject constructor(
     override suspend fun updateSession(session: Session) = sessionDao.updateSession(session)
 
     override suspend fun deleteSession(id: String) = sessionDao.deleteSession(id)
+
+    override suspend fun updateFeedback(id: String, feedback: String) = sessionDao.updateFeedback(id, feedback)
+
+    override suspend fun getUnsyncedSessions(): List<Session> = sessionDao.getUnsyncedSessions()
+
+    override suspend fun markSynced(id: String) = sessionDao.markSynced(id)
 }

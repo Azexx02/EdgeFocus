@@ -70,11 +70,78 @@ class BleManager @Inject constructor(
     private val _deviceStatus = MutableStateFlow<DeviceStatus?>(null)
     val deviceStatus: StateFlow<DeviceStatus?> = _deviceStatus.asStateFlow()
 
-    private var pushEventHandler: PushEventHandler? = null
+    private var pushEventHandlers = mutableListOf<PushEventHandler>()
     private var bleLogListener: ((String, String) -> Unit)? = null
 
+    data class DiscoveredDevice(val name: String, val address: String)
+    private val _discoveredDevices = MutableStateFlow<List<DiscoveredDevice>>(emptyList())
+    val discoveredDevices: StateFlow<List<DiscoveredDevice>> = _discoveredDevices.asStateFlow()
+
+    private var targetMacAddress: String = ""
+    @Volatile
+    private var simulatedConnected = false
+    @Volatile
+    private var simulateDeviceResponse = false
+    @Volatile
+    private var simulateAutoCountdown = false
+    @Volatile
+    private var simulateBoardInSession = false
+    private var appEventLog: AppEventLog? = null
+
+    // 模拟计时器状态
+    private var simStartTime = 0L
+    private var simDurationMs = 25 * 60 * 1000L
+    @Volatile
+    private var simSessionActive = false
+
+    init {
+        val prefs = context.getSharedPreferences("test_prefs", 0)
+        simulatedConnected = prefs.getBoolean("simulate_ble", false)
+        simulateDeviceResponse = prefs.getBoolean("simulate_device_response", false)
+        simulateAutoCountdown = prefs.getBoolean("simulate_auto_countdown", false)
+        simulateBoardInSession = prefs.getBoolean("simulate_board_in_session", false)
+        simSessionActive = simulateBoardInSession
+        simDurationMs = prefs.getInt("simulate_duration", 25) * 60 * 1000L
+        targetMacAddress = prefs.getString("edge_focus_mac", "") ?: ""
+    }
+
+    fun setSimulatedConnected(value: Boolean) {
+        simulatedConnected = value
+        if (value) {
+            _connectionState.value = ConnectionState.CONNECTED
+            appEventLog?.log("BLE_CONNECT", "模拟连接已启用")
+        } else {
+            _connectionState.value = ConnectionState.DISCONNECTED
+            appEventLog?.log("BLE_DISCONNECT", "模拟连接已关闭")
+        }
+    }
+
+    fun setAppEventLog(log: AppEventLog) {
+        this.appEventLog = log
+    }
+
+    fun setSimulateDeviceResponse(value: Boolean) {
+        simulateDeviceResponse = value
+    }
+
+    fun setSimulateAutoCountdown(value: Boolean) {
+        simulateAutoCountdown = value
+    }
+
+    fun setSimulateBoardInSession(value: Boolean) {
+        simulateBoardInSession = value
+        simSessionActive = value
+        if (value) {
+            simStartTime = 0L // 板端已在会话中，不需要倒计时起点
+        }
+    }
+
+    fun setSimDuration(minutes: Int) {
+        simDurationMs = minutes * 60 * 1000L
+    }
+
     fun setPushEventHandler(handler: PushEventHandler) {
-        this.pushEventHandler = handler
+        this.pushEventHandlers.add(handler)
     }
 
     fun setBleLogListener(listener: (direction: String, content: String) -> Unit) {
@@ -90,14 +157,30 @@ class BleManager @Inject constructor(
         @SuppressLint("MissingPermission")
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             val deviceName = result.device.name ?: ""
-            if (DEVICE_NAME_FILTERS.none { deviceName.contains(it, ignoreCase = true) }) {
-                Log.d(TAG, "Ignoring device: ${result.device.address} (name: '$deviceName')")
+            val deviceAddress = result.device.address
+
+            // 如果设定了目标 MAC，只连接该 MAC
+            if (targetMacAddress.isNotEmpty()) {
+                if (deviceAddress == targetMacAddress) {
+                    Log.d(TAG, "Found target MAC: $deviceAddress")
+                    bluetoothAdapter?.bluetoothLeScanner?.stopScan(this)
+                    _connectionState.value = ConnectionState.CONNECTING
+                    connectToDevice(result.device)
+                }
                 return
             }
-            Log.d(TAG, "Found target device: ${result.device.address} (name: '$deviceName')")
-            bluetoothAdapter?.bluetoothLeScanner?.stopScan(this)
-            _connectionState.value = ConnectionState.CONNECTING
-            connectToDevice(result.device)
+
+            // 否则按设备名过滤
+            if (DEVICE_NAME_FILTERS.none { deviceName.contains(it, ignoreCase = true) }) {
+                return
+            }
+
+            // 添加到发现列表（不自动连接）
+            val current = _discoveredDevices.value.toMutableList()
+            if (current.none { it.address == deviceAddress }) {
+                current.add(DiscoveredDevice(deviceName, deviceAddress))
+                _discoveredDevices.value = current
+            }
         }
 
         override fun onScanFailed(errorCode: Int) {
@@ -226,15 +309,34 @@ class BleManager @Inject constructor(
     }
 
     fun isConnected(): Boolean {
-        return _connectionState.value == ConnectionState.CONNECTED
+        if (simulatedConnected) return true
+        if (_connectionState.value != ConnectionState.CONNECTED) return false
+        if (targetMacAddress.isEmpty()) return false
+        return bluetoothGatt?.device?.address == targetMacAddress
+    }
+
+    fun isSimulating(): Boolean {
+        return simulatedConnected
     }
 
     suspend fun sendData(data: ByteArray): Result<ByteArray> {
         return sendDataAndAwait(data)
     }
 
+    @SuppressLint("MissingPermission")
+    override suspend fun getDeviceStatus(): Result<ByteArray> {
+        val json = """{"cmd":"get_device_status"}"""
+        return sendDataAndAwait(json.toByteArray(Charsets.UTF_8))
+    }
+
     private suspend fun sendDataAndAwait(data: ByteArray): Result<ByteArray> {
         logBle("SEND", dataToString(data))
+
+        // 模拟模式：直接返回成功
+        if (simulatedConnected) {
+            return Result.success(data)
+        }
+
         return try {
             val gatt: BluetoothGatt
             val characteristic: BluetoothGattCharacteristic
@@ -285,143 +387,194 @@ class BleManager @Inject constructor(
         }
     }
 
+    fun setTargetMac(mac: String) {
+        targetMacAddress = mac
+    }
+
     @SuppressLint("MissingPermission")
-    override suspend fun getDeviceStatus(): Result<ByteArray> {
-        return sendDataAndAwait(byteArrayOf(0x01))
+    fun connectToDiscoveredDevice(address: String) {
+        val device = bluetoothAdapter?.getRemoteDevice(address) ?: return
+        bluetoothAdapter?.bluetoothLeScanner?.stopScan(scanCallback)
+        _connectionState.value = ConnectionState.CONNECTING
+        connectToDevice(device)
+    }
+
+    fun clearDiscoveredDevices() {
+        _discoveredDevices.value = emptyList()
     }
 
     @SuppressLint("MissingPermission")
     override suspend fun getCurrentState(): Result<ByteArray> {
-        return sendDataAndAwait(byteArrayOf(0x02))
+        if (simulatedConnected && simulateDeviceResponse) {
+            logBle("SEND", """{"cmd":"get_current_state"}""")
+
+            val isActive = simSessionActive
+            val remaining = if (isActive && simStartTime > 0) {
+                val elapsed = System.currentTimeMillis() - simStartTime
+                (simDurationMs - elapsed).coerceAtLeast(0)
+            } else if (isActive) {
+                (simDurationMs * 0.7).toLong()
+            } else {
+                0L
+            }
+            val elapsed = if (isActive && simStartTime > 0) {
+                (System.currentTimeMillis() - simStartTime).coerceAtMost(simDurationMs)
+            } else if (isActive) {
+                (simDurationMs * 0.3).toLong()
+            } else 0L
+
+            val response = """{"status":"success","data":{"focus_state":1,"elapsed_ms":${elapsed},"distraction_count":0,"reminder_count":0,"calibration_completed":true,"remaining_ms":${remaining},"target_duration_ms":${simDurationMs}}}"""
+            logBle("RECV", response)
+            return Result.success(response.toByteArray())
+        }
+
+        val json = """{"cmd":"get_current_state"}"""
+        return sendDataAndAwait(json.toByteArray(Charsets.UTF_8))
     }
 
     @SuppressLint("MissingPermission")
     override suspend fun getTodaySummary(): Result<ByteArray> {
-        return sendDataAndAwait(byteArrayOf(0x03))
+        val json = """{"cmd":"get_today_summary"}"""
+        return sendDataAndAwait(json.toByteArray(Charsets.UTF_8))
     }
 
     @SuppressLint("MissingPermission")
     override suspend fun getLastReport(): Result<ByteArray> {
-        return sendDataAndAwait(byteArrayOf(0x04))
+        val json = """{"cmd":"get_last_report"}"""
+        return sendDataAndAwait(json.toByteArray(Charsets.UTF_8))
     }
 
     @SuppressLint("MissingPermission")
     override suspend fun sessionControl(action: String, targetDurationMin: Int?): Result<ByteArray> {
-        val actionByte = when (action) {
-            "start" -> 0x01.toByte()
-            "pause" -> 0x02.toByte()
-            "resume" -> 0x03.toByte()
-            "stop" -> 0x04.toByte()
-            else -> 0x00.toByte()
+        // 模拟设备回复
+        if (simulatedConnected && simulateDeviceResponse) {
+            val actionName = when (action) {
+                "start" -> "start"
+                "pause" -> "pause"
+                "resume" -> "resume"
+                "stop" -> "end"
+                else -> action
+            }
+            logBle("SEND", """{"cmd":"session_control","data":{"action":"$actionName"}}""")
+
+            if (action == "start") {
+                val durationMs = (targetDurationMin ?: 25) * 60 * 1000L
+                simDurationMs = durationMs
+                simSessionActive = true
+                if (simulateAutoCountdown) {
+                    simStartTime = System.currentTimeMillis()
+                }
+                val response = """{"status":"success","data":{"success":true,"remaining_ms":${durationMs},"target_duration_ms":${durationMs}}}"""
+                logBle("RECV", response)
+                return Result.success(response.toByteArray())
+            }
+
+            if (action == "stop") {
+                simSessionActive = false
+                simStartTime = 0L
+            }
+
+            val response = """{"status":"success","data":{"success":true}}"""
+            logBle("RECV", response)
+            return Result.success(response.toByteArray())
         }
-        val durationBytes = targetDurationMin?.let {
-            byteArrayOf((it shr 8).toByte(), it.toByte())
-        } ?: byteArrayOf()
-        return sendDataAndAwait(byteArrayOf(0x05, actionByte) + durationBytes)
+
+        val actionName = when (action) {
+            "start" -> "start"
+            "pause" -> "pause"
+            "resume" -> "resume"
+            "stop" -> "end"
+            else -> action
+        }
+        val data = buildString {
+            append("{\"cmd\":\"session_control\",\"data\":{\"action\":\"$actionName\"")
+            targetDurationMin?.let { append(",\"target_duration_min\":$it") }
+            append("}}")
+        }
+        return sendDataAndAwait(data.toByteArray(Charsets.UTF_8))
     }
 
     @SuppressLint("MissingPermission")
     override suspend fun updatePreferences(key: String, value: String): Result<ByteArray> {
-        val keyBytes = key.toByteArray()
-        val valueBytes = value.toByteArray()
-        return sendDataAndAwait(byteArrayOf(0x06, keyBytes.size.toByte()) + keyBytes + valueBytes)
+        val json = """{"cmd":"update_preferences","data":{"$key":"$value"}}"""
+        return sendDataAndAwait(json.toByteArray(Charsets.UTF_8))
     }
 
     @SuppressLint("MissingPermission")
     override suspend fun reminderAck(alertId: String): Result<ByteArray> {
-        return sendDataAndAwait(byteArrayOf(0x07) + alertId.toByteArray())
+        val json = """{"cmd":"reminder_ack"}"""
+        return sendDataAndAwait(json.toByteArray(Charsets.UTF_8))
     }
 
     @SuppressLint("MissingPermission")
     override suspend fun phoneSync(usage: PhoneUsage): Result<ByteArray> {
-        // 构建JSON格式的phone_sync数据
-        val json = buildString {
-            append("{")
-            append("\"cmd\":\"phone_sync\",")
-            append("\"data\":{")
-            append("\"is_in_use\":${usage.isInUse},")
-            usage.appCategory?.let { append("\"app_category\":\"$it\",") }
-            append("\"distraction_level\":${usage.distractionLevel},")
-            usage.appName?.let { append("\"app_name\":\"$it\",") }
-            usage.durationSec?.let { append("\"duration_sec\":$it") }
-            // 移除末尾的逗号
-            if (endsWith(",")) deleteCharAt(length - 1)
-            append("}}")
+        val data = org.json.JSONObject().apply {
+            put("is_in_use", usage.isInUse)
+            put("app_category", usage.appCategory ?: "other")
+            put("distraction_level", usage.distractionLevel)
+            put("app_name", usage.appName ?: "")
+            usage.durationSec?.let { put("duration_sec", it) }
         }
-        return sendDataAndAwait(json.toByteArray())
+
+        val root = org.json.JSONObject().apply {
+            put("cmd", "phone_sync")
+            put("data", data)
+        }
+
+        return sendDataAndAwait(root.toString().toByteArray(Charsets.UTF_8))
     }
 
     @SuppressLint("MissingPermission")
     override suspend fun getConsoleData(): Result<ByteArray> {
-        return sendDataAndAwait(byteArrayOf(0x09))
+        val json = """{"cmd":"get_console_data"}"""
+        return sendDataAndAwait(json.toByteArray(Charsets.UTF_8))
     }
 
     private fun handleNotification(data: ByteArray) {
         if (data.isEmpty()) return
 
-        when (data[0]) {
-            0x01.toByte() -> {
-                val state = parseState(data)
-                pushEventHandler?.onPushState(state)
-            }
-            0x02.toByte() -> {
-                val alert = parseAlert(data)
-                pushEventHandler?.onPushAlert(alert)
-            }
-            0x03.toByte() -> {
-                val summary = String(data, 1, data.size - 1)
-                pushEventHandler?.onPushSessionEnd(summary)
-            }
-            0x04.toByte() -> {
-                // push_timer_complete
-                val timerComplete = parseTimerComplete(data)
-                pushEventHandler?.onPushTimerComplete(timerComplete)
-            }
-        }
-    }
+        val jsonStr = dataToString(data)
+        logBle("RECV", jsonStr)
 
-    private fun parseTimerComplete(data: ByteArray): TimerComplete {
-        // 解析 timer_complete 数据
-        // 格式: [0x04, elapsed_ms(4bytes), target_duration_ms(4bytes), distraction_count(2bytes), reminder_count(2bytes)]
-        return if (data.size >= 11) {
-            val elapsedMs = ((data[1].toInt() and 0xFF) shl 24) or
-                    ((data[2].toInt() and 0xFF) shl 16) or
-                    ((data[3].toInt() and 0xFF) shl 8) or
-                    (data[4].toInt() and 0xFF)
-            val targetDurationMs = ((data[5].toInt() and 0xFF) shl 24) or
-                    ((data[6].toInt() and 0xFF) shl 16) or
-                    ((data[7].toInt() and 0xFF) shl 8) or
-                    (data[8].toInt() and 0xFF)
-            val distractionCount = ((data[9].toInt() and 0xFF) shl 8) or
-                    (data[10].toInt() and 0xFF)
-            val reminderCount = if (data.size >= 13) {
-                ((data[11].toInt() and 0xFF) shl 8) or (data[12].toInt() and 0xFF)
-            } else 0
-            TimerComplete(elapsedMs.toLong(), targetDurationMs.toLong(), distractionCount, reminderCount)
-        } else {
-            TimerComplete(0, 0, 0, 0)
-        }
-    }
+        try {
+            val json = org.json.JSONObject(jsonStr)
+            val cmd = json.optString("cmd", "")
+            val eventData = json.optJSONObject("data")
 
-    private fun parseState(data: ByteArray): FocusState {
-        val stateByte = if (data.size > 1) data[1] else 0
-        val state = when (stateByte) {
-            0x01.toByte() -> com.edgefocus.app.domain.model.TimerState.RUNNING
-            0x02.toByte() -> com.edgefocus.app.domain.model.TimerState.PAUSED
-            0x03.toByte() -> com.edgefocus.app.domain.model.TimerState.BREAK
-            else -> com.edgefocus.app.domain.model.TimerState.IDLE
+            when {
+                cmd == "push_state" && eventData != null -> {
+                    val stateInt = eventData.optInt("focus_state", 0)
+                    val state = when (stateInt) {
+                        1 -> com.edgefocus.app.domain.model.TimerState.RUNNING
+                        6 -> com.edgefocus.app.domain.model.TimerState.PAUSED
+                        else -> com.edgefocus.app.domain.model.TimerState.IDLE
+                    }
+                    val focusState = FocusState(state = state)
+                    pushEventHandlers.forEach { it.onPushState(focusState) }
+                }
+                cmd == "push_alert" && eventData != null -> {
+                    val level = eventData.optInt("level", 0)
+                    val type = if (level >= 2) AlertType.DISTRACTION else AlertType.SESSION_END
+                    val message = eventData.optString("message", "Alert")
+                    val alert = AlertInfo(alertId = "alert_${System.currentTimeMillis()}", type = type, message = message)
+                    pushEventHandlers.forEach { it.onPushAlert(alert) }
+                }
+                cmd == "push_session_end" && eventData != null -> {
+                    val summary = eventData.toString()
+                    pushEventHandlers.forEach { it.onPushSessionEnd(summary) }
+                }
+                cmd == "push_timer_complete" && eventData != null -> {
+                    val timerComplete = TimerComplete(
+                        elapsedMs = eventData.optLong("elapsed_ms", 0),
+                        targetDurationMs = eventData.optLong("target_duration_ms", 0),
+                        distractionCount = eventData.optInt("distraction_count", 0),
+                        reminderCount = eventData.optInt("reminder_count", 0)
+                    )
+                    pushEventHandlers.forEach { it.onPushTimerComplete(timerComplete) }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to parse push event: ${e.message}")
         }
-        return FocusState(state = state)
-    }
-
-    private fun parseAlert(data: ByteArray): AlertInfo {
-        val alertId = "alert_${System.currentTimeMillis()}"
-        val type = if (data.size > 1 && data[1] == 0x01.toByte()) {
-            AlertType.DISTRACTION
-        } else {
-            AlertType.SESSION_END
-        }
-        val message = if (data.size > 2) String(data, 2, data.size - 2) else "Alert"
-        return AlertInfo(alertId = alertId, type = type, message = message)
     }
 }

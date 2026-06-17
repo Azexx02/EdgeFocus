@@ -13,6 +13,7 @@ import com.edgefocus.app.ControlPanelActivity
 import com.edgefocus.app.presentation.ui.components.BottomNavigationBar
 import com.edgefocus.app.presentation.ui.dashboard.DashboardScreen
 import com.edgefocus.app.presentation.ui.home.HomeScreen
+import com.edgefocus.app.presentation.ui.settings.BleConnectScreen
 import com.edgefocus.app.presentation.ui.settings.DistractionAppsScreen
 import com.edgefocus.app.presentation.ui.settings.SettingsScreen
 import com.edgefocus.app.presentation.ui.settings.TestScreen
@@ -22,6 +23,7 @@ sealed class Screen(val route: String) {
     data object Dashboard : Screen("dashboard")
     data object Settings : Screen("settings")
     data object DistractionApps : Screen("distraction_apps")
+    data object BleConnect : Screen("ble_connect")
     data object Test : Screen("test")
 }
 
@@ -56,6 +58,9 @@ fun NavigationGraph() {
                     onNavigateToDistractionApps = {
                         navController.navigate(Screen.DistractionApps.route)
                     },
+                    onNavigateToBleConnect = {
+                        navController.navigate(Screen.BleConnect.route)
+                    },
                     onNavigateToTest = {
                         navController.navigate(Screen.Test.route)
                     }
@@ -63,6 +68,11 @@ fun NavigationGraph() {
             }
             composable(Screen.DistractionApps.route) {
                 DistractionAppsScreen(
+                    onBack = { navController.popBackStack() }
+                )
+            }
+            composable(Screen.BleConnect.route) {
+                BleConnectScreen(
                     onBack = { navController.popBackStack() }
                 )
             }

@@ -10,4 +10,7 @@ interface ISessionRepository {
     suspend fun insertSession(session: Session)
     suspend fun updateSession(session: Session)
     suspend fun deleteSession(id: String)
+    suspend fun updateFeedback(id: String, feedback: String)
+    suspend fun getUnsyncedSessions(): List<Session>
+    suspend fun markSynced(id: String)
 }

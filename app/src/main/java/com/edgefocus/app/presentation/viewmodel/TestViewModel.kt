@@ -4,11 +4,14 @@ import android.app.Application
 import android.content.pm.PackageManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.edgefocus.app.data.remote.AppEvent
+import com.edgefocus.app.data.remote.AppEventLog
 import com.edgefocus.app.data.remote.BleManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -39,15 +42,21 @@ data class BleLog(
 
 data class TestUiState(
     val simulateBleConnected: Boolean = false,
+    val simulateDeviceResponse: Boolean = false,
+    val simulateAutoCountdown: Boolean = false,
+    val simulateBoardInSession: Boolean = false,
+    val simDurationMinutes: Int = 25,
     val bleLogs: List<BleLog> = emptyList(),
+    val appLogs: List<AppEvent> = emptyList(),
     val installedApps: List<InstalledApp> = emptyList(),
-    val distractionLevels: Map<String, Int> = emptyMap() // packageName -> level
+    val distractionLevels: Map<String, Int> = emptyMap()
 )
 
 @HiltViewModel
 class TestViewModel @Inject constructor(
     application: Application,
-    private val bleManager: BleManager
+    private val bleManager: BleManager,
+    private val appEventLog: AppEventLog
 ) : AndroidViewModel(application) {
 
     private val _uiState = MutableStateFlow(TestUiState())
@@ -57,7 +66,23 @@ class TestViewModel @Inject constructor(
 
     init {
         val simulateBle = prefs.getBoolean("simulate_ble", false)
-        _uiState.value = _uiState.value.copy(simulateBleConnected = simulateBle)
+        val simulateResponse = prefs.getBoolean("simulate_device_response", false)
+        val simulateAutoCountdown = prefs.getBoolean("simulate_auto_countdown", false)
+        val simulateBoardInSession = prefs.getBoolean("simulate_board_in_session", false)
+        val simDuration = prefs.getInt("simulate_duration", 25)
+        _uiState.value = _uiState.value.copy(
+            simulateBleConnected = simulateBle,
+            simulateDeviceResponse = simulateResponse,
+            simulateAutoCountdown = simulateAutoCountdown,
+            simulateBoardInSession = simulateBoardInSession,
+            simDurationMinutes = simDuration
+        )
+        bleManager.setSimulatedConnected(simulateBle)
+        bleManager.setSimulateDeviceResponse(simulateResponse)
+        bleManager.setSimulateAutoCountdown(simulateAutoCountdown)
+        bleManager.setSimulateBoardInSession(simulateBoardInSession)
+        bleManager.setSimDuration(simDuration)
+        bleManager.setAppEventLog(appEventLog)
 
         loadInstalledApps()
         loadDistractionLevels()
@@ -66,12 +91,48 @@ class TestViewModel @Inject constructor(
         bleManager.setBleLogListener { direction, content ->
             addBleLog(direction, content)
         }
+
+        // 观察应用事件日志
+        viewModelScope.launch {
+            appEventLog.events.collect { events ->
+                _uiState.update { it.copy(appLogs = events) }
+            }
+        }
     }
 
     fun toggleSimulateBle() {
         val newValue = !_uiState.value.simulateBleConnected
         _uiState.value = _uiState.value.copy(simulateBleConnected = newValue)
         prefs.edit().putBoolean("simulate_ble", newValue).apply()
+        bleManager.setSimulatedConnected(newValue)
+    }
+
+    fun toggleSimulateDeviceResponse() {
+        val newValue = !_uiState.value.simulateDeviceResponse
+        _uiState.value = _uiState.value.copy(simulateDeviceResponse = newValue)
+        prefs.edit().putBoolean("simulate_device_response", newValue).apply()
+        bleManager.setSimulateDeviceResponse(newValue)
+    }
+
+    fun toggleSimulateAutoCountdown() {
+        val newValue = !_uiState.value.simulateAutoCountdown
+        _uiState.value = _uiState.value.copy(simulateAutoCountdown = newValue)
+        prefs.edit().putBoolean("simulate_auto_countdown", newValue).apply()
+        bleManager.setSimulateAutoCountdown(newValue)
+    }
+
+    fun toggleSimulateBoardInSession() {
+        val newValue = !_uiState.value.simulateBoardInSession
+        _uiState.value = _uiState.value.copy(simulateBoardInSession = newValue)
+        prefs.edit().putBoolean("simulate_board_in_session", newValue).apply()
+        bleManager.setSimulateBoardInSession(newValue)
+    }
+
+    fun setSimDuration(minutes: Int) {
+        val clamped = minutes.coerceIn(1, 120)
+        _uiState.value = _uiState.value.copy(simDurationMinutes = clamped)
+        prefs.edit().putInt("simulate_duration", clamped).apply()
+        bleManager.setSimDuration(clamped)
     }
 
     fun addBleLog(direction: String, content: String) {
@@ -119,7 +180,6 @@ class TestViewModel @Inject constructor(
         viewModelScope.launch {
             try {
                 val pm = getApplication<Application>().packageManager
-                val myPackageName = getApplication<Application>().packageName
 
                 // 方法1：通过launcher intent获取
                 val intent = android.content.Intent(android.content.Intent.ACTION_MAIN).apply {
@@ -131,7 +191,7 @@ class TestViewModel @Inject constructor(
 
                 resolveInfos.forEach { resolveInfo ->
                     val packageName = resolveInfo.activityInfo.packageName
-                    if (packageName != myPackageName && !apps.containsKey(packageName)) {
+                    if (!packageName.startsWith("com.edgefocus.app") && !apps.containsKey(packageName)) {
                         val appName = resolveInfo.loadLabel(pm).toString()
                         apps[packageName] = InstalledApp(
                             packageName = packageName,
@@ -146,7 +206,7 @@ class TestViewModel @Inject constructor(
                     val installedApps = pm.getInstalledApplications(PackageManager.GET_META_DATA)
                     installedApps.forEach { appInfo ->
                         val packageName = appInfo.packageName
-                        if (packageName != myPackageName && !apps.containsKey(packageName)) {
+                        if (!packageName.startsWith("com.edgefocus.app") && !apps.containsKey(packageName)) {
                             // 检查是否有启动器activity
                             val launchIntent = pm.getLaunchIntentForPackage(packageName)
                             if (launchIntent != null) {
