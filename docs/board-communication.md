@@ -87,7 +87,7 @@ EdgeFocus 设备 (Central)  ←──BLE GATT──→  BLE Band (Peripheral)
 - Service UUID: `0000FF00-0000-1000-8000-00805F9B34FB`
 - Write (手机→板): `0000FF01-...`
 - Notify (板→手机): `0000FF02-...`
-- 连接后手机请求 MTU 517；板端至少应协商到 MTU 247
+- 连接后手机请求 MTU 517；板端必须支持协商到 MTU 517
 - 初次绑定时，App 只展示“广播名称匹配 + 广播包包含 FF00 Service UUID”的设备；绑定后按稳定 MAC 地址精确重连
 
 ### 2.1 板端广播与识别要求
@@ -188,6 +188,7 @@ EdgeFocus 设备 (Central)  ←──BLE GATT──→  BLE Band (Peripheral)
   "status": "success",
   "data": {
     "active": true,
+    "session_id": "session_1710000000000",
     "focus_state": 1,
     "elapsed_ms": 1205000,
     "remaining_ms": 295000,
@@ -202,6 +203,7 @@ EdgeFocus 设备 (Central)  ←──BLE GATT──→  BLE Band (Peripheral)
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `active` | bool | 当前是否有活跃会话（手机据此判断是否需要同步） |
+| `session_id` | string | 板端会话唯一 ID；手机中途接入时用于关联同一会话 |
 | `focus_state` | int | FocusState 枚举（0-7） |
 | `elapsed_ms` | int64 | 已进行毫秒数，无会话时=0 |
 | `remaining_ms` | int64 | 剩余毫秒数（手机用于同步倒计时） |
@@ -296,15 +298,70 @@ EdgeFocus 设备 (Central)  ←──BLE GATT──→  BLE Band (Peripheral)
 {
   "status":"success",
   "data":{
+    "session_id":"session_1710000000000",
     "total_duration": 2700,
     "focus_duration": 2250,
     "distraction_count": 4,
-    "reminder_count": 2
+    "reminder_count": 2,
+    "phone_distraction_count": 1,
+    "feedback":"just_right"
   }
 }
 ```
 
-### 4.7 `get_console_data` — 查询控制台数据
+### 4.7 `get_session_history` — 分页查询权威会话记录
+
+手机每次只请求一条，保证响应可放入单个 MTU 517 Notify：
+
+```json
+{"cmd":"get_session_history","data":{"cursor":"opaque_cursor","limit":1}}
+```
+
+首次请求省略 `cursor`。板端按结束时间从新到旧返回，并生成不透明游标：
+
+```json
+{
+  "status":"success",
+  "data":{
+    "sessions":[{
+      "session_id":"session_1710000000000",
+      "start_time_ms":1710000000000,
+      "end_time_ms":1710002700000,
+      "total_duration":2700,
+      "focus_duration":2250,
+      "distraction_count":4,
+      "reminder_count":2,
+      "phone_distraction_count":1,
+      "feedback":"just_right"
+    }],
+    "next_cursor":"opaque_cursor_2",
+    "has_more":true
+  }
+}
+```
+
+游标必须稳定指向下一条记录，同一页重试返回相同结果。App 以 `session_id` 覆盖本地缓存，因此板端修改后的报告和反馈可以纠正手机缓存。板端即使收到大于 1 的 `limit` 也应暂时按 1 截断，直到双方实现跨 Notify 分片协议。
+
+### 4.8 `get_preferences` — 查询设备当前设置
+
+**手机发送：** `{"cmd":"get_preferences"}`
+
+```json
+{
+  "status":"success",
+  "data":{
+    "system_mode":0,
+    "away_timeout_min":15,
+    "vibration_strength":0.5,
+    "led_brightness":75,
+    "reminder_sensitivity":0.5
+  }
+}
+```
+
+控制面板在成功读取前禁用设置操作，避免 App 默认值覆盖设备真实配置。字段范围必须与 `update_preferences` 完全一致。
+
+### 4.9 `get_console_data` — 查询控制台数据
 
 **手机发送：** `{"cmd":"get_console_data"}`
 
@@ -325,16 +382,6 @@ EdgeFocus 设备 (Central)  ←──BLE GATT──→  BLE Band (Peripheral)
 **触发时机：** FocusState 发生切换时
 
 **手机处理：** 更新 UI 状态显示
-
-### `push_alert` — 干预提醒
-
-```json
-{"cmd":"push_alert","data":{"level":2,"message":"学习期间手机正在使用，先放到一边吧。"}}
-```
-
-**触发时机：** ReminderPolicy 生成干预命令时
-
-**手机处理：** 控制面板打开时显示提醒弹窗（其他页面不显示）。用户可点击"已了解"发送 `reminder_ack`。
 
 ### `push_session_end` — 会话结束
 
@@ -477,7 +524,7 @@ EdgeFocus 设备 (Central)  ←──BLE GATT──→  BLE Band (Peripheral)
 5. 手机每 1-2 秒轮询 get_current_state 同步板端时间
 6. 手机每 1 秒检测前台应用 → phone_sync 上报当前 app
 7. 板端 EventDetector 判断分心 → distraction_count++
-8. 板端推送 push_alert → 手机显示提醒
+8. 板端通过设备自身的声音、灯光或振动执行提醒，并累加 `reminder_count`
 9. 计时器完成 → 板端推送 push_timer_complete → 手机记录会话
 ```
 
@@ -485,8 +532,8 @@ EdgeFocus 设备 (Central)  ←──BLE GATT──→  BLE Band (Peripheral)
 
 ```
 1. 手机打开，BLE 连接
-2. 连接后自动检测 useEdgeFocusBoard 设置
-3. 调用 get_current_state → 板端返回 active=true + elapsed_ms
+2. 首页 EdgeFocus 模式按设置检测；NFC 控制面板始终按 EdgeFocus 模式检测
+3. 调用 get_current_state → 板端返回 active=true + session_id + focus_state + elapsed_ms
 4. 手机计算 remaining = target - elapsed → 同步倒计时
 5. 启动 boardSync（每 2 秒轮询 get_current_state 校准）
 6. 启动 phoneSync 上报前台应用
@@ -496,7 +543,7 @@ EdgeFocus 设备 (Central)  ←──BLE GATT──→  BLE Band (Peripheral)
 
 ```
 1. 板端推送 push_state(RUNNING)
-2. 手机检测到 IDLE + EdgeFocus 模式
+2. 手机检测到 IDLE/FINISHED + EdgeFocus 模式；若原为 PAUSED，则直接恢复并重新同步
 3. 调用 get_current_state → 同步板端时间
 4. 启动倒计时 + phoneSync 上报
 ```
@@ -520,7 +567,7 @@ EdgeFocus 设备 (Central)  ←──BLE GATT──→  BLE Band (Peripheral)
 | 前台应用检测+上报 | ✅ | phone_sync |
 | 会话控制 | ✅ | session_control |
 | 状态轮询 | ✅ | get_current_state |
-| 推送事件接收 | ✅ | push_state/push_alert/push_session_end/push_timer_complete |
+| 推送事件接收 | ✅ | push_state/push_session_end/push_timer_complete |
 | BLE 设备绑定（MAC） | ✅ | — |
 | 模拟模式 | ✅ | — |
 | 统计页数据 | ⏳ | get_today_summary, get_last_report |
@@ -537,7 +584,7 @@ EdgeFocus 设备 (Central)  ←──BLE GATT──→  BLE Band (Peripheral)
 |------|--------|----------|----------|
 | BLE 请求/响应模型 | 🔴 高 | App 端已改为请求带 `id`，写入成功只代表传输确认 | 板端必须通过 Notify 返回同 `id` 的 JSON 响应；无 `id` 的 Notify 只按 push 事件处理 |
 | UUID 对齐 | 🔴 高 | App 端已改为 `FF00/FF01/FF02` | 双方统一使用 `0000FF00` Service、`0000FF01` Write、`0000FF02` Notify |
-| MTU 协商 | 🔴 高 | App 端在 GATT 连接成功后请求 MTU=517 | 板端至少支持 MTU 247；`phone_sync` 完整 JSON 约 145 字节，MTU 128 不足以单包承载 |
+| MTU 协商 | 🔴 高 | App 端在 GATT 连接成功后请求 MTU=517 | 板端必须支持 MTU 517；`get_session_history` 的单条完整记录依赖最多 514 字节有效载荷 |
 | 绑定后连接判断 | 🟡 中 | App 端要求用户先绑定特定设备再使用，因此连接判断必须以已绑定 MAC 为准 | 绑定流程必须保证 MAC 保存到本地设置，并在 BLE 层连接/重连前恢复 `targetMacAddress` |
 | `update_preferences` 数据类型 | 🟡 中 | App 端已按 key 转换数值类型 | `system_mode`、`away_timeout_min`、`led_brightness` 发送数字；`vibration_strength`、`reminder_sensitivity` 发送浮点数 |
 | 会话保存时机 | 🔴 高 | EdgeFocus 模式下若 App 提前用本地计时结果保存 Session，会和板端权威数据冲突 | EdgeFocus 模式优先用 `push_timer_complete`、`push_session_end` 或 `session_control(action=end)` 响应报告保存；手动停止必须保存 Session，若板端没有及时给报告则 App 用本地数据兜底保存为未同步 |
@@ -548,12 +595,53 @@ EdgeFocus 模式下，用户会话的权威生命周期在板端：App 可以发
 
 | 交互 | 板端要求 | App 端用途 |
 |------|----------|------------|
-| `session_control(start)` 响应 | 必须返回 `success`、`remaining_ms`、`target_duration_ms`；如果板端有会话 ID，也必须返回 `session_id` | App 根据板端时间启动倒计时，避免本地时间和板端不同步 |
-| `get_current_state` 响应 | 必须返回 `active`、`focus_state`、`elapsed_ms`、`remaining_ms`、`target_duration_ms`、`distraction_count`、`reminder_count` | App 连接后判断板端是否已有会话，并进行 1-2 秒周期校准 |
+| `session_control(start)` 响应 | 必须返回 `success`、`session_id`、`remaining_ms`、`target_duration_ms` | App 根据板端会话 ID 和时间启动倒计时，避免本地与板端生成两份记录 |
+| `get_current_state` 响应 | 必须返回 `active`、`session_id`、`focus_state`、`elapsed_ms`、`remaining_ms`、`target_duration_ms`、`distraction_count`、`reminder_count` | App 连接后判断板端是否已有会话，并进行 1-2 秒周期校准 |
 | `push_timer_complete` | 时间到时主动推送，字段包含 `elapsed_ms`、`target_duration_ms`、`distraction_count`、`reminder_count` | App 触发完成态、停止监控、保存会话；优先级高于 `push_session_end` |
 | `push_session_end` | 会话结束并生成报告后推送，字段必须包含 `total_duration`、`focus_duration`、`distraction_count`、`reminder_count`；如果板端统计手机干扰和会话 ID，也必须包含 `phone_distraction_count`、`session_id` | App 保存板端权威 Session；手动停止也依赖此事件收尾 |
 | `phone_sync` 响应 | 必须返回 `focus_state`、`action_taken`，可返回 `distraction_count`、`reminder_count` | App 展示板端处理后的状态；注意 `phone_sync` 本身不等于分心结论 |
-| `reminder_ack` 响应 | 必须返回 `cooling_ms` | App 控制面板提醒弹窗确认后进入冷却提示 |
+| `session_feedback` | 按 `session_id` 更新持久化会话的反馈；只接受 `too_much`、`too_little`、`just_right`，重复写入必须幂等 | 用户修改单次会话反馈；断连或失败时 App 持久化排队并在重连后重试 |
+| `get_session_history` | 从持久化存储按游标返回权威会话；当前每页固定 1 条 | App 补回未打开手机期间产生的会话，并校正本地缓存 |
+| `get_preferences` | 返回当前已持久化的全部可调设备设置 | 控制面板先读取后允许修改，避免默认值误覆盖 |
+
+#### 10.2.1 `session_feedback` — 保存会话反馈
+
+手机发送：
+
+```json
+{"cmd":"session_feedback","data":{"session_id":"session_1710000000000","feedback":"just_right"}}
+```
+
+板端必须在成功写入持久化存储后才返回：
+
+```json
+{"status":"success","id":12,"data":{"success":true}}
+```
+
+每个 EdgeFocus 会话创建时，板端应将反馈默认初始化为 `just_right`（适中）。用户不操作即保留该值；之后 App 发送 `too_much`、`too_little` 或 `just_right` 时覆盖同一会话字段。未知 `session_id` 或非法反馈值必须返回明确错误，不得悄悄创建孤立记录。
+
+#### 10.2.2 板端权威记录与持久化要求
+
+板端不是临时计算节点，而是 EdgeFocus 模式的最终权威数据源。以下数据不能只保存在 RAM 中：
+
+| 记录类别 | 至少保存的内容 |
+|----------|----------------|
+| 会话主记录 | `session_id`、开始/结束时间、目标时长、实际时长、专注时长、最终状态、结束原因（自然完成/手机结束/板端结束/异常中断） |
+| 会话统计 | `distraction_count`、`reminder_count`、`phone_distraction_count`、专注评分或其他最终统计 |
+| 状态与关键事件 | 暂停/恢复、离座、分心判定、实际提醒、手机干扰输入等事件的时间点或可还原的时间段摘要 |
+| 手机使用摘要 | 会话内各 `app_name` 的使用时长及 App 上报的类别/干扰等级；分类结论仍以 App 上报字段为准 |
+| 用户反馈 | 默认 `just_right`，以及后续通过 `session_feedback` 写入的修改值和更新时间 |
+| 设备设置 | 振动、LED、提醒灵敏度、离座超时、系统模式等最后一次有效配置 |
+
+持久化规则：
+
+1. `session_control(start)` 成功前先生成全局唯一且稳定的 `session_id`，创建会话记录后再向 App 返回成功。
+2. 开始、暂停、恢复、计数变化和结束时都要写入检查点；长会话还应周期性落盘，避免掉电丢失整段数据。
+3. 会话结束时先冻结统计并原子写入最终报告，再发送 `push_timer_complete`/`push_session_end`。不得先通知 App、后尝试保存。
+4. 重启后必须从持久化记录恢复未结束会话，或将无法恢复的会话以“异常中断”收口；不能把历史和计数清零后伪装成新会话。
+5. `get_current_state`、`get_today_summary`、`get_last_report` 以及未来的历史查询必须读取同一份持久化数据，不能各自维护互相冲突的缓存。
+6. 相同 `session_id` 的重复开始、结束、反馈和重试请求必须幂等。App 本地 Session 只是显示缓存和断连兜底，不能反向覆盖板端已有的权威报告。
+7. 存储空间有限时可压缩或汇总高频原始事件，但必须保留会话主记录、最终报告、反馈和可解释关键事件；清理策略应按时间/容量明确实现，不能在重启时无条件清空。
 
 ### 10.3 桌面/后台状态不要依赖 Launcher 包名
 
@@ -569,7 +657,7 @@ Android 不保证桌面一定会以 Launcher 包名出现在 UsageEvents 中。A
 
 ```json
 {"status":"success","id":12,"data":{}}   // 普通响应：必须带回请求 id
-{"cmd":"push_alert","data":{}}           // 主动推送：无 status/id，使用 cmd=push_xxx
+{"cmd":"push_state","data":{}}           // 主动推送：无 status/id，使用 cmd=push_xxx
 ```
 
 App 端处理规则：
@@ -578,7 +666,7 @@ App 端处理规则：
 - `cmd` 以 `push_` 开头：广播给 PushEventHandler。
 - 既无 `status` 又无 `push_`：记录协议错误日志，不崩溃。
 
-当前 App 按“一次 CharacteristicChanged 对应一份完整 UTF-8 JSON”解析，不做跨 Notify 拼包。板端每条响应或推送必须控制在协商 MTU 的单包有效载荷（MTU-3）内；若未来数据超过该上限，双方必须先在本文约定长度前缀或分片字段后再实现，不能直接把半段 JSON 发给 App。
+当前 App 按“一次 CharacteristicChanged 对应一份完整 UTF-8 JSON”解析，不做跨 Notify 拼包。板端必须支持并与 App 协商 MTU 517；每条响应或推送仍须控制在单包有效载荷（最多 514 字节）内。`get_session_history` 因此固定每页 1 条。若未来数据超过该上限，双方必须先在本文约定长度前缀或分片字段后再实现，不能直接把半段 JSON 发给 App。
 
 ---
 
@@ -586,12 +674,13 @@ App 端处理规则：
 
 板端代码改造时建议先按下面顺序落地，避免 UI、摄像头检测、提醒策略和 BLE 协议互相抢状态：
 
-1. 先实现 BLE GATT 基础层：`FF00` Service、`FF01` Write、`FF02` Notify、CCCD 通知订阅。App 请求 MTU 517，板端至少协商到 MTU 247。
+1. 先实现 BLE GATT 基础层：`FF00` Service、`FF01` Write、`FF02` Notify、CCCD 通知订阅。App 请求 MTU 517，板端必须支持协商到 MTU 517，保证单条历史记录可以完整返回。
 2. 再实现统一消息分发：解析 `cmd` 和 `id`，所有普通命令必须通过 Notify 返回同 `id` 响应。
 3. 再实现会话状态机：`IDLE -> RUNNING -> PAUSED -> RUNNING -> ENDING -> IDLE`。`ENDING` 阶段必须生成报告，再发 `push_session_end`。
 4. 再接入 `get_current_state`：任何时刻都能返回 `active`、`focus_state`、`elapsed_ms`、`remaining_ms`、`target_duration_ms`。
 5. 再接入 `phone_sync`：只更新手机使用输入，不直接等同于最终分心结论。
-6. 最后接入提醒和硬件控制：`push_alert`、`reminder_ack`、`update_preferences`。
+6. 接入会话持久化、历史统计和 `session_feedback`，所有查询都读取同一份权威记录。
+7. 最后接入提醒和硬件控制：板端自行执行提醒并维护 `reminder_count`，手机通过 `update_preferences` 调整策略参数。
 
 ### 10.6 信号冲突处理规则
 
@@ -621,9 +710,13 @@ App 在每次 AppMonitorService 开始时都会重置上报去重键。因此新
 | 所有普通响应回显请求 `id` | 🔴 高 | App 通过 `id` 匹配挂起命令；无 `id` 的 `status` 响应会被忽略 |
 | CCCD/Notify 订阅成功后再视为可通信 | 🔴 高 | App 只有收到通知订阅成功后才认为 CONNECTED |
 | `session_control(start)` 明确返回 `data.success` | 🔴 高 | `success=false` 时 App 保持 IDLE，不启动本地倒计时 |
+| 会话 ID 与记录持久化 | 🔴 高 | `start`、当前状态、最终报告和反馈必须使用同一个稳定 `session_id`，重启后不可丢失 |
 | `session_control(end)` 必须收口报告 | 🔴 高 | 响应可直接带报告，或随后 `push_session_end`；否则 App 超时兜底为未同步 |
 | `push_session_end` 字段对齐（total_duration, focus_duration 等） | 🟡 中 | 手机端保存会话记录依赖 |
 | `get_today_summary` / `get_last_report` 实现 | 🟢 低 | 统计页数据展示 |
+| `get_session_history` 游标分页 | 🔴 高 | App 必须补回未打开手机期间由板端独立产生的会话；当前固定每页 1 条 |
+| `get_preferences` | 🟡 中 | 控制面板必须先读取板端实际设置再允许修改 |
+| `session_feedback` 持久化与幂等更新 | 🟡 中 | 默认适中；App 断连后会重试用户修改 |
 | 硬件控制接口（振动/LED/提醒灵敏度） | 🟡 中 | 控制面板设置页需要调用 |
 | 离座超时通过 `update_preferences` 发送 | 🟡 中 | 手机端调整后需同步到板端 |
 | 系统模式通过 `update_preferences` 发送 | 🟡 中 | 静音/正常模式切换需同步到板端 |
@@ -646,12 +739,6 @@ App 在每次 AppMonitorService 开始时都会重置上报去重键。因此新
 | `led_brightness` | int | 0-100 | LED 亮度百分比 |
 | `reminder_sensitivity` | float | 0.0-1.0 | 提醒灵敏度（越高越容易触发） |
 
-### 提醒反馈流程
+### 提醒执行流程
 
-```
-板端 ──── push_alert ────→ 手机（显示提醒弹窗）
-手机 ──── reminder_ack ────→ 板端（用户点击"已了解"）
-板端 ←──── {"status":"success","data":{"cooling_ms":...}} ──── 手机
-```
-
-手机收到 `push_alert` 后弹窗，用户点击"已了解"按钮 → 发送 `reminder_ack` → 板端进入冷却期。
+提醒由板端 ReminderPolicy 决策并通过设备自身的声音、灯光或振动执行。每次实际执行后板端累加 `reminder_count`；手机只展示该统计并调整提醒策略参数，不显示提醒弹窗，也不参与提醒确认或冷却状态机。

@@ -76,7 +76,7 @@ fun HomeScreen(
 
     val canStart = when {
         useBoard && (uiState.timerState == TimerState.IDLE ||
-            uiState.timerState == TimerState.FINISHED) -> isConnected
+            uiState.timerState == TimerState.FINISHED) -> isConnected && !uiState.isSyncingWithBoard
         else -> true
     }
 
@@ -272,7 +272,18 @@ fun HomeScreen(
             }
         }
 
-        if (useBoard && !isConnected && uiState.timerState == TimerState.IDLE) {
+        if (useBoard && uiState.isSyncingWithBoard &&
+            (uiState.timerState == TimerState.IDLE || uiState.timerState == TimerState.FINISHED)
+        ) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "Waiting for EdgeFocus to confirm the session",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        } else if (useBoard && !isConnected &&
+            (uiState.timerState == TimerState.IDLE || uiState.timerState == TimerState.FINISHED)
+        ) {
             Spacer(modifier = Modifier.height(8.dp))
             Text(
                 text = "Connect device to use EdgeFocus mode",

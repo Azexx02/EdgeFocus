@@ -28,6 +28,7 @@ data class TimerUiState(
     val completedSessions: Int = 0,
     val sessionMode: SessionMode = SessionMode.LOCAL,
     val isBoardConnected: Boolean = false,
+    val isSyncingWithBoard: Boolean = false,
     val distractionCount: Int = 0,
     val reminderCount: Int = 0,
     val phoneDistractionCount: Int = 0
@@ -94,6 +95,7 @@ class HomeViewModel @Inject constructor(
                         completedSessions = sharedState.completedSessions,
                         sessionMode = sharedState.sessionMode,
                         isBoardConnected = sharedState.isBoardConnected,
+                        isSyncingWithBoard = sharedState.isSyncingWithBoard,
                         distractionCount = sharedState.distractionCount,
                         reminderCount = sharedState.reminderCount,
                         phoneDistractionCount = sharedState.phoneDistractionCount
@@ -102,13 +104,19 @@ class HomeViewModel @Inject constructor(
 
                 // 板端同步启动会话时，自动启动 AppMonitorService
                 if ((prevTimerState == TimerState.IDLE || prevTimerState == TimerState.FINISHED) &&
-                    sharedState.timerState == TimerState.RUNNING
+                    (sharedState.timerState == TimerState.RUNNING ||
+                        sharedState.timerState == TimerState.PAUSED)
                     && sharedState.sessionMode == SessionMode.EDGEFOCUS) {
                     currentSessionId = sharedState.sessionId ?: currentSessionId ?: "session_${System.currentTimeMillis()}"
                     sessionStartTime = sharedState.sessionStartTime.takeIf { it > 0L }
                         ?: sessionStartTime.takeIf { it > 0L }
                         ?: System.currentTimeMillis()
                     hasSavedCurrentSession = false
+                }
+
+                if (prevTimerState != TimerState.RUNNING &&
+                    sharedState.timerState == TimerState.RUNNING &&
+                    sharedState.sessionMode == SessionMode.EDGEFOCUS) {
                     startAppMonitor()
                 }
 
@@ -228,7 +236,7 @@ class HomeViewModel @Inject constructor(
                     } else {
                         ui.phoneDistractionCount
                     },
-                    feedback = null,
+                    feedback = "just_right",
                     boardSessionId = if (isEdgeFocus) sessionId else null,
                     source = if (isEdgeFocus) "EDGEFOCUS" else "LOCAL",
                     synced = isEdgeFocus && hasBoardReport

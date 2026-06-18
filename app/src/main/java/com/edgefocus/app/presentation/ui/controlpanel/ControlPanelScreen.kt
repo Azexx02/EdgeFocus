@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -25,7 +26,6 @@ import androidx.compose.material.icons.filled.BluetoothConnected
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -51,6 +51,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.foundation.verticalScroll
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.edgefocus.app.data.remote.ConnectionState
 import com.edgefocus.app.domain.model.TimerState
@@ -208,60 +209,71 @@ private fun TimerPage(
             )
         }
 
-        // Right: 3 buttons horizontal — Stop | Play | Pause
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(16.dp),
-            verticalAlignment = Alignment.CenterVertically
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            // Stop (small)
-            OutlinedIconButton(
-                onClick = { viewModel.stopSession() },
-                modifier = Modifier.size(56.dp),
-                enabled = uiState.timerState == TimerState.RUNNING ||
-                    uiState.timerState == TimerState.PAUSED
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Icon(
-                    Icons.Default.Stop,
-                    contentDescription = "Stop",
-                    modifier = Modifier.size(28.dp)
-                )
+                OutlinedIconButton(
+                    onClick = { viewModel.stopSession() },
+                    modifier = Modifier.size(56.dp),
+                    enabled = uiState.timerState == TimerState.RUNNING ||
+                        uiState.timerState == TimerState.PAUSED
+                ) {
+                    Icon(Icons.Default.Stop, contentDescription = "Stop", modifier = Modifier.size(28.dp))
+                }
+
+                FilledIconButton(
+                    onClick = {
+                        when (uiState.timerState) {
+                            TimerState.RUNNING -> viewModel.pauseSession()
+                            TimerState.PAUSED -> viewModel.resumeSession()
+                            else -> viewModel.startSession()
+                        }
+                    },
+                    modifier = Modifier.size(80.dp),
+                    enabled = uiState.timerState == TimerState.RUNNING ||
+                        uiState.timerState == TimerState.PAUSED ||
+                        (uiState.isBoardConnected && !uiState.isSyncingWithBoard),
+                    colors = IconButtonDefaults.filledIconButtonColors(
+                        containerColor = MaterialTheme.colorScheme.primary
+                    )
+                ) {
+                    Icon(
+                        if (isRunning) Icons.Default.Pause else Icons.Default.PlayArrow,
+                        contentDescription = if (isRunning) "Pause" else "Start",
+                        tint = Color.White,
+                        modifier = Modifier.size(40.dp)
+                    )
+                }
+
+                OutlinedIconButton(
+                    onClick = { viewModel.pauseSession() },
+                    modifier = Modifier.size(56.dp),
+                    enabled = isRunning
+                ) {
+                    Icon(Icons.Default.Pause, contentDescription = "Pause", modifier = Modifier.size(28.dp))
+                }
             }
 
-            // Play (large, primary)
-            FilledIconButton(
-                onClick = {
-                    when (uiState.timerState) {
-                        TimerState.RUNNING -> viewModel.pauseSession()
-                        TimerState.PAUSED -> viewModel.resumeSession()
-                        else -> viewModel.startSession()
-                    }
-                },
-                modifier = Modifier.size(80.dp),
-                enabled = uiState.timerState == TimerState.RUNNING ||
-                    uiState.timerState == TimerState.PAUSED ||
-                    uiState.isBoardConnected,
-                colors = IconButtonDefaults.filledIconButtonColors(
-                    containerColor = MaterialTheme.colorScheme.primary
-                )
+            if (uiState.isSyncingWithBoard &&
+                (uiState.timerState == TimerState.IDLE || uiState.timerState == TimerState.FINISHED)
             ) {
-                Icon(
-                    if (isRunning) Icons.Default.Pause else Icons.Default.PlayArrow,
-                    contentDescription = if (isRunning) "Pause" else "Start",
-                    tint = Color.White,
-                    modifier = Modifier.size(40.dp)
+                Text(
+                    text = "正在等待 EdgeFocus 确认",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-            }
-
-            // Pause (small)
-            OutlinedIconButton(
-                onClick = { viewModel.pauseSession() },
-                modifier = Modifier.size(56.dp),
-                enabled = isRunning
+            } else if (!uiState.isBoardConnected &&
+                (uiState.timerState == TimerState.IDLE || uiState.timerState == TimerState.FINISHED)
             ) {
-                Icon(
-                    Icons.Default.Pause,
-                    contentDescription = "Pause",
-                    modifier = Modifier.size(28.dp)
+                Text(
+                    text = "请先连接已绑定的 EdgeFocus 设备",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
                 )
             }
         }
@@ -325,7 +337,7 @@ private fun StatsPage(
                     StatRow("计划专注", "${uiState.selectedDuration} 分钟")
                     StatRow("剩余时间", TimeUtils.formatTime(uiState.timeRemaining))
                     StatRow("已进行", TimeUtils.formatTime(
-                        uiState.selectedDuration * 60 * 1000L - uiState.timeRemaining
+                        (uiState.totalTime - uiState.timeRemaining).coerceAtLeast(0L)
                     ))
                 }
             }
@@ -340,7 +352,7 @@ private fun StatsPage(
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text("会话统计", style = MaterialTheme.typography.titleMedium)
                     Spacer(modifier = Modifier.height(8.dp))
-                    StatRow("已完成会话", "${uiState.completedSessions}")
+                    StatRow("提醒次数", "${uiState.reminderCount}")
                 }
             }
         }
@@ -397,9 +409,29 @@ private fun SettingsPage(
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .verticalScroll(rememberScrollState())
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        if (!uiState.isBoardConnected) {
+            Text(
+                "连接已绑定的 EdgeFocus 后才能调整设备设置",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error
+            )
+        } else if (!uiState.arePreferencesLoaded) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("尚未读取设备设置", style = MaterialTheme.typography.bodySmall)
+                OutlinedButton(onClick = viewModel::refreshBoardPreferences) {
+                    Text("重新读取")
+                }
+            }
+        }
+
         // Row 1: System mode + Home mode
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -419,6 +451,7 @@ private fun SettingsPage(
                         FilledIconButton(
                             onClick = { viewModel.setSystemMode(0) },
                             modifier = Modifier.weight(1f),
+                            enabled = uiState.isBoardConnected && uiState.arePreferencesLoaded,
                             colors = IconButtonDefaults.filledIconButtonColors(
                                 containerColor = if (uiState.systemMode == com.edgefocus.app.presentation.viewmodel.SystemMode.NORMAL)
                                     MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
@@ -431,6 +464,7 @@ private fun SettingsPage(
                         FilledIconButton(
                             onClick = { viewModel.setSystemMode(1) },
                             modifier = Modifier.weight(1f),
+                            enabled = uiState.isBoardConnected && uiState.arePreferencesLoaded,
                             colors = IconButtonDefaults.filledIconButtonColors(
                                 containerColor = if (uiState.systemMode == com.edgefocus.app.presentation.viewmodel.SystemMode.SILENT)
                                     MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
@@ -469,6 +503,7 @@ private fun SettingsPage(
                     Switch(
                         checked = uiState.homeMode,
                         onCheckedChange = { viewModel.setHomeMode(it) },
+                        enabled = uiState.isBoardConnected && uiState.arePreferencesLoaded,
                         colors = SwitchDefaults.colors(
                             checkedTrackColor = MaterialTheme.colorScheme.primary
                         )
@@ -492,8 +527,13 @@ private fun SettingsPage(
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text("提醒灵敏度", style = MaterialTheme.typography.titleMedium)
                     Spacer(modifier = Modifier.height(8.dp))
-                    HardwareSlider("灵敏度", uiState.reminderSensitivity) {
-                        viewModel.setReminderSensitivity(it)
+                    HardwareSlider(
+                        "灵敏度",
+                        uiState.reminderSensitivity,
+                        uiState.isBoardConnected && uiState.arePreferencesLoaded,
+                        onValueChangeFinished = viewModel::commitReminderSensitivity
+                    ) {
+                        viewModel.setReminderSensitivity(it, persist = false)
                     }
                 }
             }
@@ -511,8 +551,52 @@ private fun SettingsPage(
                     Text("${uiState.awayTimeout} 分钟", style = MaterialTheme.typography.bodyMedium)
                     Slider(
                         value = uiState.awayTimeout.toFloat(),
-                        onValueChange = { viewModel.setAwayTimeout(it.toInt()) },
-                        valueRange = 5f..60f
+                        onValueChange = { viewModel.setAwayTimeout(it.toInt(), persist = false) },
+                        onValueChangeFinished = viewModel::commitAwayTimeout,
+                        valueRange = 5f..60f,
+                        enabled = uiState.isBoardConnected && uiState.arePreferencesLoaded
+                    )
+                }
+            }
+        }
+
+        // Row 3: Vibration strength + LED brightness
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Card(
+                modifier = Modifier.weight(1f),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("振动强度", style = MaterialTheme.typography.titleMedium)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    HardwareSlider(
+                        "强度",
+                        uiState.vibrationStrength,
+                        uiState.isBoardConnected && uiState.arePreferencesLoaded,
+                        onValueChangeFinished = viewModel::commitVibrationStrength
+                    ) {
+                        viewModel.setVibrationStrength(it, persist = false)
+                    }
+                }
+            }
+
+            Card(
+                modifier = Modifier.weight(1f),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("LED 亮度", style = MaterialTheme.typography.titleMedium)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    StatRow("亮度", "${uiState.ledBrightness}%")
+                    Slider(
+                        value = uiState.ledBrightness.toFloat(),
+                        onValueChange = { viewModel.setLedBrightness(it.toInt(), persist = false) },
+                        onValueChangeFinished = viewModel::commitLedBrightness,
+                        valueRange = 0f..100f,
+                        enabled = uiState.isBoardConnected && uiState.arePreferencesLoaded
                     )
                 }
             }
@@ -521,7 +605,13 @@ private fun SettingsPage(
 }
 
 @Composable
-private fun HardwareSlider(label: String, value: Float, onValueChange: (Float) -> Unit) {
+private fun HardwareSlider(
+    label: String,
+    value: Float,
+    enabled: Boolean = true,
+    onValueChangeFinished: () -> Unit = {},
+    onValueChange: (Float) -> Unit
+) {
     Column(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -537,7 +627,9 @@ private fun HardwareSlider(label: String, value: Float, onValueChange: (Float) -
         Slider(
             value = value,
             onValueChange = onValueChange,
-            valueRange = 0f..1f
+            onValueChangeFinished = onValueChangeFinished,
+            valueRange = 0f..1f,
+            enabled = enabled
         )
     }
 }

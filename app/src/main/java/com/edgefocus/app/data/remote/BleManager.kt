@@ -11,8 +11,6 @@ import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
 import android.content.Context
 import android.util.Log
-import com.edgefocus.app.domain.model.AlertInfo
-import com.edgefocus.app.domain.model.AlertType
 import com.edgefocus.app.domain.model.DeviceStatus
 import com.edgefocus.app.domain.model.FocusState
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -596,6 +594,36 @@ class BleManager @Inject constructor(
     }
 
     @SuppressLint("MissingPermission")
+    override suspend fun getSessionHistory(cursor: String?, limit: Int): Result<ByteArray> {
+        if (simulatedConnected) {
+            return Result.success(
+                """{"status":"success","data":{"sessions":[],"has_more":false}}"""
+                    .toByteArray(Charsets.UTF_8)
+            )
+        }
+        val root = org.json.JSONObject().apply {
+            put("cmd", "get_session_history")
+            put("data", org.json.JSONObject().apply {
+                cursor?.takeIf { it.isNotBlank() }?.let { put("cursor", it) }
+                put("limit", limit.coerceIn(1, 100))
+            })
+        }
+        return sendDataAndAwait(root.toString().toByteArray(Charsets.UTF_8))
+    }
+
+    @SuppressLint("MissingPermission")
+    override suspend fun getPreferences(): Result<ByteArray> {
+        if (simulatedConnected) {
+            return Result.success(
+                """{"status":"success","data":{"system_mode":0,"away_timeout_min":15,"vibration_strength":0.5,"led_brightness":75,"reminder_sensitivity":0.5}}"""
+                    .toByteArray(Charsets.UTF_8)
+            )
+        }
+        val json = """{"cmd":"get_preferences"}"""
+        return sendDataAndAwait(json.toByteArray(Charsets.UTF_8))
+    }
+
+    @SuppressLint("MissingPermission")
     override suspend fun sessionControl(action: String, targetDurationMin: Int?): Result<ByteArray> {
         // 模拟设备回复
         if (simulatedConnected && simulateDeviceResponse) {
@@ -663,9 +691,15 @@ class BleManager @Inject constructor(
     }
 
     @SuppressLint("MissingPermission")
-    override suspend fun reminderAck(alertId: String): Result<ByteArray> {
-        val json = """{"cmd":"reminder_ack"}"""
-        return sendDataAndAwait(json.toByteArray(Charsets.UTF_8))
+    override suspend fun sessionFeedback(sessionId: String, feedback: String): Result<ByteArray> {
+        val root = org.json.JSONObject().apply {
+            put("cmd", "session_feedback")
+            put("data", org.json.JSONObject().apply {
+                put("session_id", sessionId)
+                put("feedback", feedback)
+            })
+        }
+        return sendDataAndAwait(root.toString().toByteArray(Charsets.UTF_8))
     }
 
     @SuppressLint("MissingPermission")
@@ -732,15 +766,6 @@ class BleManager @Inject constructor(
                     }
                     val focusState = FocusState(state = state)
                     pushEventHandlers.forEach { it.onPushState(focusState) }
-                }
-                cmd == "push_alert" && eventData != null -> {
-                    val message = eventData.optString("message", "Alert")
-                    val alert = AlertInfo(
-                        alertId = "alert_${System.currentTimeMillis()}",
-                        type = AlertType.DISTRACTION,
-                        message = message
-                    )
-                    pushEventHandlers.forEach { it.onPushAlert(alert) }
                 }
                 cmd == "push_session_end" && eventData != null -> {
                     val summary = eventData.toString()

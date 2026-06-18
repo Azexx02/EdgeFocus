@@ -8,20 +8,14 @@ import com.edgefocus.app.data.SessionMode
 import com.edgefocus.app.data.TimerStateHolder
 import com.edgefocus.app.data.local.entity.Session
 import com.edgefocus.app.data.remote.BleManager
-import com.edgefocus.app.data.remote.PushEventHandler
-import com.edgefocus.app.domain.model.AlertInfo
-import com.edgefocus.app.domain.model.FocusState
 import com.edgefocus.app.domain.model.TimerState
 import com.edgefocus.app.domain.repository.ISessionRepository
 import com.edgefocus.app.domain.repository.ISettingsRepository
 import com.edgefocus.app.service.AppMonitorService
 import com.edgefocus.app.util.TimeUtils
 import dagger.hilt.android.lifecycle.HiltViewModel
-import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -44,14 +38,15 @@ data class ControlPanelUiState(
     val awayTimeout: Int = 15,
     val reminderSensitivity: Float = 0.5f,
     val nfcStatus: NfcStatus = NfcStatus.CHECKING,
-    val completedSessions: Int = 0,
-    val totalFocusMinutes: Int = 0,
     val distractionCount: Int = 0,
+    val reminderCount: Int = 0,
     val phoneDistractionCount: Int = 0,
     val vibrationStrength: Float = 0.5f,
     val ledBrightness: Int = 75,
     val homeMode: Boolean = false,
-    val isBoardConnected: Boolean = false
+    val isBoardConnected: Boolean = false,
+    val isSyncingWithBoard: Boolean = false,
+    val arePreferencesLoaded: Boolean = false
 )
 
 @HiltViewModel
@@ -66,39 +61,14 @@ class ControlPanelViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(ControlPanelUiState())
     val uiState: StateFlow<ControlPanelUiState> = _uiState.asStateFlow()
 
-    private val _alertEvent = MutableSharedFlow<AlertInfo>()
-    val alertEvent: SharedFlow<AlertInfo> = _alertEvent.asSharedFlow()
-
     private var currentSessionId: String? = null
     private var sessionStartTime: Long = 0L
     private var hasSavedCurrentSession = false
     private var isAppMonitorRunning = false
 
-    private val pushEventHandler = object : PushEventHandler {
-        override fun onPushState(state: FocusState) {}
-
-        override fun onPushAlert(alert: AlertInfo) {
-            viewModelScope.launch {
-                _alertEvent.emit(alert)
-            }
-            if (alert.type == com.edgefocus.app.domain.model.AlertType.DISTRACTION) {
-                _uiState.update { it.copy(distractionCount = it.distractionCount + 1) }
-            }
-        }
-
-        override fun onPushSessionEnd(summary: String) {}
-
-        override fun onPushTimerComplete(timerComplete: com.edgefocus.app.data.remote.TimerComplete) {
-            _uiState.update {
-                it.copy(
-                    distractionCount = timerComplete.distractionCount,
-                    phoneDistractionCount = it.phoneDistractionCount
-                )
-            }
-        }
-    }
-
     init {
+        timerStateHolder.enterControlPanelMode()
+
         viewModelScope.launch {
             settingsRepository.getSettings().collect { settings ->
                 settings?.let {
@@ -112,25 +82,34 @@ class ControlPanelViewModel @Inject constructor(
 
         viewModelScope.launch {
             var prevTimerState = TimerState.IDLE
+            var wasBoardConnected = false
             timerStateHolder.state.collect { sharedState ->
                 _uiState.update { state ->
                     state.copy(
                         timerState = sharedState.timerState,
                         timeRemaining = sharedState.timeRemaining,
                         totalTime = sharedState.totalTime,
-                        completedSessions = sharedState.completedSessions,
                         selectedDuration = sharedState.targetDurationMinutes,
-                        isBoardConnected = sharedState.isBoardConnected
+                        isBoardConnected = sharedState.isBoardConnected,
+                        isSyncingWithBoard = sharedState.isSyncingWithBoard,
+                        distractionCount = sharedState.distractionCount,
+                        reminderCount = sharedState.reminderCount,
+                        phoneDistractionCount = sharedState.phoneDistractionCount
                     )
                 }
 
                 if ((prevTimerState == TimerState.IDLE || prevTimerState == TimerState.FINISHED) &&
-                    sharedState.timerState == TimerState.RUNNING) {
+                    (sharedState.timerState == TimerState.RUNNING ||
+                        sharedState.timerState == TimerState.PAUSED)) {
                     currentSessionId = sharedState.sessionId ?: currentSessionId ?: "session_${System.currentTimeMillis()}"
                     sessionStartTime = sharedState.sessionStartTime.takeIf { it > 0L }
                         ?: sessionStartTime.takeIf { it > 0L }
                         ?: System.currentTimeMillis()
                     hasSavedCurrentSession = false
+                }
+
+                if (prevTimerState != TimerState.RUNNING &&
+                    sharedState.timerState == TimerState.RUNNING) {
                     startAppMonitor()
                 }
 
@@ -138,24 +117,23 @@ class ControlPanelViewModel @Inject constructor(
                     saveFinishedSession()
                     stopAppMonitor()
                 }
+                if (sharedState.isBoardConnected && !wasBoardConnected) {
+                    viewModelScope.launch { loadBoardPreferences() }
+                } else if (!sharedState.isBoardConnected && wasBoardConnected) {
+                    _uiState.update { it.copy(arePreferencesLoaded = false) }
+                }
+                wasBoardConnected = sharedState.isBoardConnected
                 prevTimerState = sharedState.timerState
             }
         }
 
         checkNfcStatus()
 
-        bleManager.setPushEventHandler(pushEventHandler)
     }
 
     fun updateSelectedDuration(minutes: Int) {
         val clamped = minutes.coerceIn(5, 120)
         _uiState.update { it.copy(selectedDuration = clamped) }
-    }
-
-    fun acknowledgeReminder(alertId: String) {
-        viewModelScope.launch {
-            bleManager.reminderAck(alertId)
-        }
     }
 
     fun setSystemMode(mode: Int) {
@@ -164,43 +142,95 @@ class ControlPanelViewModel @Inject constructor(
             1 -> SystemMode.SILENT
             else -> SystemMode.NORMAL
         }
-        _uiState.update { it.copy(systemMode = newMode) }
+        _uiState.update { it.copy(systemMode = newMode, homeMode = false) }
         sendPreferences("system_mode", mode.toString())
     }
 
-    fun setVibrationStrength(value: Float) {
+    fun setVibrationStrength(value: Float, persist: Boolean = true) {
         val clamped = value.coerceIn(0f, 1f)
         _uiState.update { it.copy(vibrationStrength = clamped) }
-        sendPreferences("vibration_strength", clamped.toString())
+        if (persist) sendPreferences("vibration_strength", clamped.toString())
     }
 
-    fun setLedBrightness(value: Int) {
+    fun setLedBrightness(value: Int, persist: Boolean = true) {
         val clamped = value.coerceIn(0, 100)
         _uiState.update { it.copy(ledBrightness = clamped) }
-        sendPreferences("led_brightness", clamped.toString())
+        if (persist) sendPreferences("led_brightness", clamped.toString())
     }
 
-    fun setReminderSensitivity(value: Float) {
+    fun setReminderSensitivity(value: Float, persist: Boolean = true) {
         val clamped = value.coerceIn(0f, 1f)
         _uiState.update { it.copy(reminderSensitivity = clamped) }
-        sendPreferences("reminder_sensitivity", clamped.toString())
+        if (persist) sendPreferences("reminder_sensitivity", clamped.toString())
     }
 
-    fun setAwayTimeout(minutes: Int) {
+    fun setAwayTimeout(minutes: Int, persist: Boolean = true) {
         val clamped = minutes.coerceIn(5, 60)
         _uiState.update { it.copy(awayTimeout = clamped) }
-        sendPreferences("away_timeout_min", clamped.toString())
+        if (persist) sendPreferences("away_timeout_min", clamped.toString())
     }
 
     fun setHomeMode(enabled: Boolean) {
-        _uiState.update { it.copy(homeMode = enabled) }
+        _uiState.update {
+            it.copy(homeMode = enabled, systemMode = if (enabled) SystemMode.NORMAL else it.systemMode)
+        }
         val mode = if (enabled) 2 else 0
         sendPreferences("system_mode", mode.toString())
     }
 
     private fun sendPreferences(key: String, value: String) {
+        if (!_uiState.value.isBoardConnected || !_uiState.value.arePreferencesLoaded) return
         viewModelScope.launch {
-            bleManager.updatePreferences(key, value)
+            val result = bleManager.updatePreferences(key, value)
+            if (result.isFailure) loadBoardPreferences()
+        }
+    }
+
+    fun commitReminderSensitivity() {
+        sendPreferences("reminder_sensitivity", _uiState.value.reminderSensitivity.toString())
+    }
+
+    fun commitAwayTimeout() {
+        sendPreferences("away_timeout_min", _uiState.value.awayTimeout.toString())
+    }
+
+    fun commitVibrationStrength() {
+        sendPreferences("vibration_strength", _uiState.value.vibrationStrength.toString())
+    }
+
+    fun commitLedBrightness() {
+        sendPreferences("led_brightness", _uiState.value.ledBrightness.toString())
+    }
+
+    fun refreshBoardPreferences() {
+        if (!_uiState.value.isBoardConnected) return
+        viewModelScope.launch { loadBoardPreferences() }
+    }
+
+    private suspend fun loadBoardPreferences() {
+        _uiState.update { it.copy(arePreferencesLoaded = false) }
+        val response = bleManager.getPreferences().getOrNull() ?: return
+        val data = runCatching {
+            org.json.JSONObject(String(response, Charsets.UTF_8)).getJSONObject("data")
+        }.getOrNull() ?: return
+        if (!bleManager.isConnected()) return
+        val systemMode = data.optInt("system_mode", 0)
+        _uiState.update {
+            it.copy(
+                systemMode = if (systemMode == 1) SystemMode.SILENT else SystemMode.NORMAL,
+                homeMode = systemMode == 2,
+                awayTimeout = data.optInt("away_timeout_min", it.awayTimeout).coerceIn(5, 60),
+                reminderSensitivity = data.optDouble(
+                    "reminder_sensitivity",
+                    it.reminderSensitivity.toDouble()
+                ).toFloat().coerceIn(0f, 1f),
+                vibrationStrength = data.optDouble(
+                    "vibration_strength",
+                    it.vibrationStrength.toDouble()
+                ).toFloat().coerceIn(0f, 1f),
+                ledBrightness = data.optInt("led_brightness", it.ledBrightness).coerceIn(0, 100),
+                arePreferencesLoaded = true
+            )
         }
     }
 
@@ -259,7 +289,7 @@ class ControlPanelViewModel @Inject constructor(
                     } else {
                         state.phoneDistractionCount
                     },
-                    feedback = null,
+                    feedback = "just_right",
                     boardSessionId = if (isEdgeFocus) sessionId else null,
                     source = if (isEdgeFocus) "EDGEFOCUS" else "LOCAL",
                     synced = isEdgeFocus && hasBoardReport
@@ -295,7 +325,7 @@ class ControlPanelViewModel @Inject constructor(
     }
 
     override fun onCleared() {
-        bleManager.removePushEventHandler(pushEventHandler)
+        timerStateHolder.leaveControlPanelMode()
         super.onCleared()
     }
 

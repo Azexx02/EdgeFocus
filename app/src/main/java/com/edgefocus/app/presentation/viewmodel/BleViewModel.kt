@@ -9,7 +9,6 @@ import com.edgefocus.app.data.remote.ConnectionState
 import com.edgefocus.app.data.remote.PhoneUsage
 import com.edgefocus.app.data.remote.PushEventHandler
 import com.edgefocus.app.data.remote.TimerComplete
-import com.edgefocus.app.domain.model.AlertInfo
 import com.edgefocus.app.domain.model.DeviceStatus
 import com.edgefocus.app.domain.model.FocusState
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -48,19 +47,9 @@ class BleViewModel @Inject constructor(
     private val _timerCompleteEvent = MutableSharedFlow<TimerComplete>()
     val timerCompleteEvent: SharedFlow<TimerComplete> = _timerCompleteEvent.asSharedFlow()
 
-    private val _alertEvent = MutableSharedFlow<AlertInfo>()
-    val alertEvent: SharedFlow<AlertInfo> = _alertEvent.asSharedFlow()
-
     private val pushEventHandler = object : PushEventHandler {
         override fun onPushState(state: FocusState) {
             Log.d(TAG, "Push state: $state")
-        }
-
-        override fun onPushAlert(alert: AlertInfo) {
-            Log.d(TAG, "Push alert: $alert")
-            viewModelScope.launch {
-                _alertEvent.emit(alert)
-            }
         }
 
         override fun onPushSessionEnd(summary: String) {
