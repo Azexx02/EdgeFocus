@@ -1,4 +1,4 @@
-﻿package com.edgefocus.app.data.remote
+package com.edgefocus.app.data.remote
 
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
@@ -46,7 +46,7 @@ class BleManager @Inject constructor(
     companion object {
         private const val TAG = "BleManager"
         private const val WRITE_TIMEOUT_MS = 5000L
-        private const val REQUESTED_MTU = 128
+        private const val REQUESTED_MTU = 517
         private val DEVICE_NAME_FILTERS = listOf("EdgeFocus", "ESP32")
 
         val SERVICE_UUID: UUID = UUID.fromString("0000ff00-0000-1000-8000-00805f9b34fb")
@@ -96,7 +96,6 @@ class BleManager @Inject constructor(
     private var simulateBoardInSession = false
     private var appEventLog: AppEventLog? = null
 
-    // 妯℃嫙璁℃椂鍣ㄧ姸鎬?
     private var simStartTime = 0L
     private var simDurationMs = 25 * 60 * 1000L
     @Volatile
@@ -117,10 +116,10 @@ class BleManager @Inject constructor(
         simulatedConnected = value
         if (value) {
             _connectionState.value = ConnectionState.CONNECTED
-            appEventLog?.log("BLE_CONNECT", "妯℃嫙杩炴帴宸插惎鐢?)
+            appEventLog?.log("BLE_CONNECT", "模拟连接已启用")
         } else {
             _connectionState.value = ConnectionState.DISCONNECTED
-            appEventLog?.log("BLE_DISCONNECT", "妯℃嫙杩炴帴宸插叧闂?)
+            appEventLog?.log("BLE_DISCONNECT", "模拟连接已关闭")
         }
     }
 
@@ -140,7 +139,7 @@ class BleManager @Inject constructor(
         simulateBoardInSession = value
         simSessionActive = value
         if (value) {
-            simStartTime = 0L // 鏉跨宸插湪浼氳瘽涓紝涓嶉渶瑕佸€掕鏃惰捣鐐?
+            simStartTime = 0L
         }
     }
 
@@ -160,6 +159,12 @@ class BleManager @Inject constructor(
         this.bleLogListener = listener
     }
 
+    fun removeBleLogListener(listener: (direction: String, content: String) -> Unit) {
+        if (bleLogListener === listener) {
+            bleLogListener = null
+        }
+    }
+
     private fun logBle(direction: String, content: String) {
         Log.d(TAG, "BLE $direction: $content")
         bleLogListener?.invoke(direction, content)
@@ -168,10 +173,14 @@ class BleManager @Inject constructor(
     private val scanCallback = object : ScanCallback() {
         @SuppressLint("MissingPermission")
         override fun onScanResult(callbackType: Int, result: ScanResult) {
+            if (_connectionState.value == ConnectionState.CONNECTING ||
+                _connectionState.value == ConnectionState.CONNECTED) {
+                return
+            }
+
             val deviceName = result.device.name ?: ""
             val deviceAddress = result.device.address
 
-            // 濡傛灉璁惧畾浜嗙洰鏍?MAC锛屽彧杩炴帴璇?MAC
             if (targetMacAddress.isNotEmpty()) {
                 if (deviceAddress == targetMacAddress) {
                     Log.d(TAG, "Found target MAC: $deviceAddress")
@@ -182,12 +191,12 @@ class BleManager @Inject constructor(
                 return
             }
 
-            // 鍚﹀垯鎸夎澶囧悕杩囨护
+            // 否则按设备名过滤
             if (DEVICE_NAME_FILTERS.none { deviceName.contains(it, ignoreCase = true) }) {
                 return
             }
 
-            // 娣诲姞鍒板彂鐜板垪琛紙涓嶈嚜鍔ㄨ繛鎺ワ級
+            // 添加到发现列表（不自动连接）
             val current = _discoveredDevices.value.toMutableList()
             if (current.none { it.address == deviceAddress }) {
                 current.add(DiscoveredDevice(deviceName, deviceAddress))
@@ -224,6 +233,7 @@ class BleManager @Inject constructor(
             } else if (newState == BluetoothGatt.STATE_DISCONNECTED) {
                 Log.d(TAG, "Disconnected from GATT server (status: $status)")
                 _connectionState.value = ConnectionState.DISCONNECTED
+                gatt.close()
                 synchronized(writeLock) {
                     bluetoothGatt = null
                     writeCharacteristic = null
@@ -523,6 +533,10 @@ class BleManager @Inject constructor(
 
     @SuppressLint("MissingPermission")
     fun connectToDiscoveredDevice(address: String) {
+        if (_connectionState.value == ConnectionState.CONNECTING ||
+            _connectionState.value == ConnectionState.CONNECTED) {
+            return
+        }
         val device = bluetoothAdapter?.getRemoteDevice(address) ?: return
         bluetoothAdapter?.bluetoothLeScanner?.stopScan(scanCallback)
         _connectionState.value = ConnectionState.CONNECTING
@@ -576,7 +590,7 @@ class BleManager @Inject constructor(
 
     @SuppressLint("MissingPermission")
     override suspend fun sessionControl(action: String, targetDurationMin: Int?): Result<ByteArray> {
-        // 妯℃嫙璁惧鍥炲
+        // 模拟设备回复
         if (simulatedConnected && simulateDeviceResponse) {
             val actionName = when (action) {
                 "start" -> "start"
@@ -705,18 +719,20 @@ class BleManager @Inject constructor(
                 cmd == "push_state" && eventData != null -> {
                     val stateInt = eventData.optInt("focus_state", 0)
                     val state = when (stateInt) {
-                        1 -> com.edgefocus.app.domain.model.TimerState.RUNNING
                         6 -> com.edgefocus.app.domain.model.TimerState.PAUSED
+                        in 0..5, 7 -> com.edgefocus.app.domain.model.TimerState.RUNNING
                         else -> com.edgefocus.app.domain.model.TimerState.IDLE
                     }
                     val focusState = FocusState(state = state)
                     pushEventHandlers.forEach { it.onPushState(focusState) }
                 }
                 cmd == "push_alert" && eventData != null -> {
-                    val level = eventData.optInt("level", 0)
-                    val type = if (level >= 2) AlertType.DISTRACTION else AlertType.SESSION_END
                     val message = eventData.optString("message", "Alert")
-                    val alert = AlertInfo(alertId = "alert_${System.currentTimeMillis()}", type = type, message = message)
+                    val alert = AlertInfo(
+                        alertId = "alert_${System.currentTimeMillis()}",
+                        type = AlertType.DISTRACTION,
+                        message = message
+                    )
                     pushEventHandlers.forEach { it.onPushAlert(alert) }
                 }
                 cmd == "push_session_end" && eventData != null -> {

@@ -5,6 +5,8 @@ import android.app.AppOpsManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.nfc.NdefMessage
+import android.nfc.NfcAdapter
 import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
@@ -63,10 +65,30 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun handleNfcIntent(intent: Intent?) {
-        if (intent?.data?.host == "controlpanel") {
+        if (intent == null) return
+
+        val opensControlPanel = intent.data?.let {
+            it.scheme == "edgefocus" && it.host == "controlpanel"
+        } == true || containsControlPanelNdef(intent)
+
+        if (opensControlPanel) {
             startActivity(Intent(this, ControlPanelActivity::class.java))
             finish()
         }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun containsControlPanelNdef(intent: Intent): Boolean {
+        if (intent.action != NfcAdapter.ACTION_NDEF_DISCOVERED) return false
+
+        return intent.getParcelableArrayExtra(NfcAdapter.EXTRA_NDEF_MESSAGES)
+            ?.filterIsInstance<NdefMessage>()
+            ?.flatMap { it.records.asIterable() }
+            ?.any { record ->
+                val uri = record.toUri()
+                (uri?.scheme == "edgefocus" && uri.host == "controlpanel") ||
+                    String(record.payload, Charsets.UTF_8).contains("edgefocus://controlpanel")
+            } == true
     }
 
     private fun requestPermissions() {

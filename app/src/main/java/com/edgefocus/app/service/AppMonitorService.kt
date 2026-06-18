@@ -25,9 +25,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import javax.inject.Inject
 
 @AndroidEntryPoint
@@ -82,6 +85,7 @@ class AppMonitorService : Service() {
     lateinit var settingsDao: SettingsDao
 
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val monitoringMutex = Mutex()
     private var monitoringJob: Job? = null
     private var currentPackageName: String? = null
     private var currentStartTime: Long = 0L
@@ -119,15 +123,24 @@ class AppMonitorService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START_MONITORING -> {
-                sessionId = intent.getStringExtra("session_id")
-                startMonitoring()
+                val requestedSessionId = intent.getStringExtra("session_id")
+                serviceScope.launch {
+                    monitoringMutex.withLock {
+                        sessionId = requestedSessionId
+                        startMonitoring()
+                    }
+                }
             }
             ACTION_STOP_MONITORING -> {
-                stopMonitoring()
-                stopSelf()
+                serviceScope.launch {
+                    monitoringMutex.withLock {
+                        stopMonitoringAndPersist()
+                    }
+                    stopSelf(startId)
+                }
             }
         }
-        return START_STICKY
+        return START_REDELIVER_INTENT
     }
 
     override fun onBind(intent: android.content.Intent?): android.os.IBinder? {
@@ -136,7 +149,8 @@ class AppMonitorService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
-        stopMonitoring()
+        monitoringJob?.cancel()
+        monitoringJob = null
         serviceScope.cancel()
     }
 
@@ -168,21 +182,21 @@ class AppMonitorService : Service() {
 
         monitoringJob = serviceScope.launch {
             while (isActive) {
-                checkDistractionNotifications()
+                try {
+                    checkDistractionNotifications()
+                } catch (e: Exception) {
+                    Log.e(TAG, "Foreground monitoring iteration failed", e)
+                }
                 delay(POLL_INTERVAL_MS)
             }
         }
         updateNotification("正在监控前台应用...")
     }
 
-    private fun stopMonitoring() {
-        monitoringJob?.cancel()
+    private suspend fun stopMonitoringAndPersist() {
+        monitoringJob?.cancelAndJoin()
         monitoringJob = null
-        serviceScope.launch {
-            recordCurrentAppUsage()
-        }
-        currentPackageName = null
-        currentStartTime = 0L
+        closeCurrentAppUsage()
         lastBleReportedKey = null
         Log.d(TAG, "Monitoring stopped")
     }

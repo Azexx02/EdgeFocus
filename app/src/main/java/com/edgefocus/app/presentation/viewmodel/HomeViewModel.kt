@@ -1,4 +1,4 @@
-﻿package com.edgefocus.app.presentation.viewmodel
+package com.edgefocus.app.presentation.viewmodel
 
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
@@ -62,13 +62,13 @@ class HomeViewModel @Inject constructor(
     private var isAppMonitorRunning = false
 
     init {
-        // 鍔犺浇璁剧疆
+        // 加载设置
         viewModelScope.launch {
             settingsRepository.getSettings().collect { settings ->
                 settings?.let {
                     workDurationMinutes = it.pomodoroDuration
 
-                    // 绌洪棽鐘舵€佹椂鏇存柊鏄剧ず鏃堕棿
+                    // 空闲状态时更新显示时间
                     if (_uiState.value.timerState == TimerState.IDLE) {
                         val workDuration = TimeUtils.minutesToMillis(workDurationMinutes)
                         _uiState.update { state ->
@@ -82,7 +82,6 @@ class HomeViewModel @Inject constructor(
             }
         }
 
-        // 浠?TimerStateHolder 鍚屾鐘舵€?
         viewModelScope.launch {
             var prevTimerState = TimerState.IDLE
             timerStateHolder.state.collect { sharedState ->
@@ -101,8 +100,9 @@ class HomeViewModel @Inject constructor(
                     )
                 }
 
-                // 鏉跨鍚屾鍚姩浼氳瘽鏃讹紝鑷姩鍚姩 AppMonitorService
-                if (prevTimerState == TimerState.IDLE && sharedState.timerState == TimerState.RUNNING
+                // 板端同步启动会话时，自动启动 AppMonitorService
+                if ((prevTimerState == TimerState.IDLE || prevTimerState == TimerState.FINISHED) &&
+                    sharedState.timerState == TimerState.RUNNING
                     && sharedState.sessionMode == SessionMode.EDGEFOCUS) {
                     currentSessionId = sharedState.sessionId ?: currentSessionId ?: "session_${System.currentTimeMillis()}"
                     sessionStartTime = sharedState.sessionStartTime.takeIf { it > 0L }
@@ -126,8 +126,7 @@ class HomeViewModel @Inject constructor(
     }
 
     /**
-     * 鍚姩 EdgeFocus 妯″紡浼氳瘽
-     * 蹇呴』宸茶繛鎺ヨ澶?
+     * 启动 EdgeFocus 模式会话
      */
     fun startEdgeFocusSession() {
         if (!timerStateHolder.isBoardConnected()) {
@@ -141,8 +140,7 @@ class HomeViewModel @Inject constructor(
     }
 
     /**
-     * 鍚姩鏈湴妯″紡浼氳瘽
-     * 涓嶉渶瑕佽繛鎺ヨ澶?
+     * 启动本地模式会话
      */
     fun startLocalSession() {
         currentSessionId = "session_${System.currentTimeMillis()}"
@@ -153,7 +151,7 @@ class HomeViewModel @Inject constructor(
     }
 
     /**
-     * 鏍规嵁璁剧疆鑷姩閫夋嫨妯″紡鍚姩
+     * 根据设置自动选择模式启动
      */
     fun startTimer(useBoard: Boolean) {
         val currentState = _uiState.value.timerState
@@ -179,7 +177,7 @@ class HomeViewModel @Inject constructor(
     fun stopTimer() {
         val isLocalMode = _uiState.value.sessionMode == SessionMode.LOCAL
 
-        // 鏈湴妯″紡鎵嬪姩鍋滄鏃剁洿鎺ヤ繚瀛橈紱EdgeFocus 妯″紡绛夊緟鏉跨 push_session_end
+        // 本地模式手动停止时直接保存；EdgeFocus 模式等待板端 push_session_end
         if (isLocalMode && _uiState.value.timerState == TimerState.RUNNING && sessionStartTime > 0) {
             handleSessionFinished()
             stopAppMonitor()
@@ -204,7 +202,6 @@ class HomeViewModel @Inject constructor(
         val hasBoardReport = timerStateHolder.hasBoardSessionReport()
         val sessionId = currentSessionId ?: return
 
-        // EdgeFocus 妯″紡锛氬鏋滄湁鏉跨鏁版嵁灏变繚瀛橈紝鍚﹀垯绛?push_session_end
         // Local mode saves immediately; EdgeFocus waits until the board report marks the session finished.
         if (!isEdgeFocus || ui.timerState == TimerState.FINISHED) {
             val elapsedSeconds = if (isEdgeFocus && timerStateHolder.getBoardTotalDuration() > 0) {
@@ -274,8 +271,4 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    override fun onCleared() {
-        super.onCleared()
-        stopAppMonitor()
-    }
 }

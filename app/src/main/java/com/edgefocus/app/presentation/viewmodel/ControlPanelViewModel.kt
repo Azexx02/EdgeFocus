@@ -50,7 +50,8 @@ data class ControlPanelUiState(
     val phoneDistractionCount: Int = 0,
     val vibrationStrength: Float = 0.5f,
     val ledBrightness: Int = 75,
-    val homeMode: Boolean = false
+    val homeMode: Boolean = false,
+    val isBoardConnected: Boolean = false
 )
 
 @HiltViewModel
@@ -98,7 +99,6 @@ class ControlPanelViewModel @Inject constructor(
     }
 
     init {
-        // 加载设置
         viewModelScope.launch {
             settingsRepository.getSettings().collect { settings ->
                 settings?.let {
@@ -110,7 +110,6 @@ class ControlPanelViewModel @Inject constructor(
             }
         }
 
-        // 从 TimerStateHolder 同步状态
         viewModelScope.launch {
             var prevTimerState = TimerState.IDLE
             timerStateHolder.state.collect { sharedState ->
@@ -120,11 +119,13 @@ class ControlPanelViewModel @Inject constructor(
                         timeRemaining = sharedState.timeRemaining,
                         totalTime = sharedState.totalTime,
                         completedSessions = sharedState.completedSessions,
-                        selectedDuration = sharedState.targetDurationMinutes
+                        selectedDuration = sharedState.targetDurationMinutes,
+                        isBoardConnected = sharedState.isBoardConnected
                     )
                 }
 
-                if (prevTimerState == TimerState.IDLE && sharedState.timerState == TimerState.RUNNING) {
+                if ((prevTimerState == TimerState.IDLE || prevTimerState == TimerState.FINISHED) &&
+                    sharedState.timerState == TimerState.RUNNING) {
                     currentSessionId = sharedState.sessionId ?: currentSessionId ?: "session_${System.currentTimeMillis()}"
                     sessionStartTime = sharedState.sessionStartTime.takeIf { it > 0L }
                         ?: sessionStartTime.takeIf { it > 0L }
@@ -143,7 +144,6 @@ class ControlPanelViewModel @Inject constructor(
 
         checkNfcStatus()
 
-        // 监听 BLE 推送的走神事件
         bleManager.setPushEventHandler(pushEventHandler)
     }
 
@@ -215,6 +215,10 @@ class ControlPanelViewModel @Inject constructor(
 
     fun pauseSession() {
         timerStateHolder.pauseSession()
+    }
+
+    fun resumeSession() {
+        timerStateHolder.resumeSession()
     }
 
     fun stopSession() {
@@ -292,7 +296,6 @@ class ControlPanelViewModel @Inject constructor(
 
     override fun onCleared() {
         bleManager.removePushEventHandler(pushEventHandler)
-        stopAppMonitor()
         super.onCleared()
     }
 

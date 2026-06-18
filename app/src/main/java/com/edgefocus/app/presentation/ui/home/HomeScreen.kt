@@ -63,13 +63,20 @@ fun HomeScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val settings by settingsViewModel.settings.collectAsState()
-    val effectiveConnectionState = bleViewModel.getEffectiveConnectionState()
+    val connectionState by bleViewModel.connectionState.collectAsState()
+    val effectiveConnectionState = if (bleViewModel.isSimulatingBle()) {
+        bleViewModel.getEffectiveConnectionState()
+    } else {
+        connectionState
+    }
 
     val useBoard = settings.useEdgeFocusBoard
-    val isConnected = bleViewModel.isConnected()
+    val isConnected = effectiveConnectionState == ConnectionState.CONNECTED &&
+        bleViewModel.isConnected()
 
     val canStart = when {
-        useBoard && uiState.timerState == TimerState.IDLE -> isConnected
+        useBoard && (uiState.timerState == TimerState.IDLE ||
+            uiState.timerState == TimerState.FINISHED) -> isConnected
         else -> true
     }
 

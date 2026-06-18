@@ -247,6 +247,7 @@ object AppCategorizer {
 
     private fun isBackgroundEvent(eventType: Int): Boolean {
         return eventType == android.app.usage.UsageEvents.Event.ACTIVITY_PAUSED ||
+            eventType == android.app.usage.UsageEvents.Event.ACTIVITY_STOPPED ||
             eventType == android.app.usage.UsageEvents.Event.MOVE_TO_BACKGROUND
     }
 

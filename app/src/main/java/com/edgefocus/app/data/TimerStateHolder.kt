@@ -1,4 +1,4 @@
-﻿package com.edgefocus.app.data
+package com.edgefocus.app.data
 
 import android.util.Log
 import com.edgefocus.app.data.local.dao.SettingsDao
@@ -26,8 +26,8 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 enum class SessionMode {
-    LOCAL,    // 鏈湴妯″紡锛氫笉涓庤澶囧悓姝?
-    EDGEFOCUS // EdgeFocus妯″紡锛氳澶囦负鏍稿績锛屾墜鏈哄悓姝?
+    LOCAL,
+    EDGEFOCUS
 }
 
 data class SharedTimerState(
@@ -45,7 +45,7 @@ data class SharedTimerState(
     val phoneDistractionCount: Int = 0,
     val sessionId: String? = null,
     val sessionStartTime: Long = 0L,
-    // 鏉跨鎺ㄩ€佺殑浼氳瘽缁撴潫鏁版嵁
+    // 板端推送的会话结束数据
     val boardTotalDuration: Int? = null,
     val boardFocusDuration: Int? = null,
     val boardSessionDistractionCount: Int? = null,
@@ -63,7 +63,7 @@ class TimerStateHolder @Inject constructor(
         private const val TAG = "TimerStateHolder"
         private const val LOCAL_TICK_INTERVAL = 1000L
         private const val BOARD_SYNC_INTERVAL = 2000L
-        private const val CALIBRATION_THRESHOLD_MS = 5000L // 5绉掑樊寮傞槇鍊?
+        private const val CALIBRATION_THRESHOLD_MS = 5000L
         private const val MANUAL_STOP_REPORT_TIMEOUT_MS = 10_000L
     }
 
@@ -75,14 +75,12 @@ class TimerStateHolder @Inject constructor(
     private var boardSyncJob: Job? = null
 
     init {
-        // 鐩戝惉璁剧疆鍙樺寲锛屽疄鏃舵洿鏂版ā寮?
         scope.launch {
             settingsDao.getSettings().collect { settings ->
                 settings?.let {
                     val mode = if (it.useEdgeFocusBoard) SessionMode.EDGEFOCUS else SessionMode.LOCAL
                     if (_state.value.sessionMode != mode && _state.value.timerState == TimerState.IDLE) {
                         _state.update { state -> state.copy(sessionMode = mode) }
-                        // 璁剧疆鍙樻洿鍚庯紝濡傛灉宸茶繛鎺ヤ笖鍒囨崲鍒?EdgeFocus锛屾鏌ユ澘绔細璇?
                         if (mode == SessionMode.EDGEFOCUS && bleManager.isConnected()) {
                             scope.launch { checkBoardSession() }
                         }
@@ -91,46 +89,44 @@ class TimerStateHolder @Inject constructor(
             }
         }
 
-        // 鐩戝惉鏉跨杩炴帴鐘舵€?
         scope.launch {
             bleManager.connectionState.collect { connectionState ->
                 val isConnected = connectionState == ConnectionState.CONNECTED
                 _state.update { it.copy(isBoardConnected = isConnected) }
 
-                // 杩炴帴鏃讹紝鏍规嵁璁剧疆鍐冲畾妯″紡
+                // 连接时，根据设置决定模式
                 if (isConnected && _state.value.timerState == TimerState.IDLE) {
                     val settings = settingsDao.getSettingsOnce()
                     val mode = if (settings?.useEdgeFocusBoard == true) SessionMode.EDGEFOCUS else SessionMode.LOCAL
                     _state.update { it.copy(sessionMode = mode) }
-                    appEventLog.log("BLE_CONNECT", "妯″紡: $mode")
+                    appEventLog.log("BLE_CONNECT", "模式: $mode")
 
-                    // EdgeFocus妯″紡涓嬶紝妫€鏌ユ澘绔槸鍚︽湁杩涜涓殑浼氳瘽
+                    // EdgeFocus模式下，检查板端是否有进行中的会话
                     if (mode == SessionMode.EDGEFOCUS) {
                         checkBoardSession()
                     }
                 }
 
-                // 杩愯涓繛鎺ワ紝鍚姩鍚屾
+                // 运行中连接，启动同步
                 if (isConnected && _state.value.sessionMode == SessionMode.EDGEFOCUS
                     && _state.value.timerState == TimerState.RUNNING) {
                     startBoardSync()
                 }
 
-                // 鏂紑杩炴帴鏃跺仠姝㈠悓姝ヤ换鍔★紙鏈湴缁х画鍊掕鏃讹級
+                // 断开连接时停止同步任务（本地继续倒计时）
                 if (!isConnected) {
                     stopBoardSync()
                 }
             }
         }
 
-        // 鍦烘櫙3锛氱洃鍚澘绔帹閫佷簨浠讹紙鏉跨涓诲姩鍙戣捣浼氳瘽鏃堕€氱煡鎵嬫満锛?
         bleManager.setPushEventHandler(object : PushEventHandler {
             override fun onPushState(state: FocusState) {
-                // 鏉跨鐘舵€佸彉鍖栵紝濡傛灉鏉跨鍦ㄨ繍琛屼笖鎵嬫満绌洪棽锛屽悓姝ユ澘绔椂闂?
                 if (state.state == com.edgefocus.app.domain.model.TimerState.RUNNING
-                    && _state.value.timerState == TimerState.IDLE
+                    && (_state.value.timerState == TimerState.IDLE ||
+                        _state.value.timerState == TimerState.FINISHED)
                     && _state.value.sessionMode == SessionMode.EDGEFOCUS) {
-                    appEventLog.log("PUSH_STATE", "鏉跨杩涘叆涓撴敞锛岃嚜鍔ㄥ悓姝?)
+                    appEventLog.log("PUSH_STATE", "板端进入专注，自动同步")
                     scope.launch { checkBoardSession() }
                 }
             }
@@ -170,15 +166,12 @@ class TimerStateHolder @Inject constructor(
         })
     }
 
-    // ==================== 浼氳瘽鎺у埗 ====================
+    // ==================== 会话控制 ====================
 
     /**
-     * 鍚姩 EdgeFocus 妯″紡浼氳瘽
-     * 蹇呴』宸茶繛鎺ヨ澶囨墠鑳借皟鐢?
+     * 启动 EdgeFocus 模式会话
      * 
-     * 鍘熷垯锛欵dgeFocus 璁惧鏄牳蹇冿紝鎵嬫満鏄仴鎺у櫒
-     * 閫昏緫锛氬厛閫氱煡鏉跨寮€濮嬶紝绛夊緟鏉跨鍝嶅簲鍚庢墠璁剧疆鐘舵€?
-     * 鏈湴璁℃椂鍙槸淇濆簳锛岄槻姝腑閫旇摑鐗欐柇杩?
+     * 原则：EdgeFocus 设备是核心，手机是遥控器
      */
     fun startEdgeFocusSession(
         targetDurationMinutes: Int,
@@ -190,7 +183,7 @@ class TimerStateHolder @Inject constructor(
             return
         }
 
-        // 鍏堣缃熀纭€鐘舵€侊紙涓嶅惎鍔ㄥ€掕鏃讹級
+        // 先设置基础状态（不启动倒计时）
         val totalTimeMs = TimeUtils.minutesToMillis(targetDurationMinutes)
         _state.update {
             it.copy(
@@ -209,13 +202,13 @@ class TimerStateHolder @Inject constructor(
             )
         }
 
-        // 閫氱煡鏉跨寮€濮嬩細璇濓紝绛夊緟鍝嶅簲
+        // 通知板端开始会话，等待响应
         scope.launch {
             try {
                 appEventLog.log("SESSION_CONTROL", "start, duration=${targetDurationMinutes}min")
                 val result = bleManager.sessionControl("start", targetDurationMinutes)
                 result.onSuccess { data ->
-                    // 鏉跨鍝嶅簲鎴愬姛
+                    // 板端响应成功
                     val json = String(data, Charsets.UTF_8)
                     val jsonObj = JSONObject(json)
                     val responseData = jsonObj.optJSONObject("data")
@@ -236,7 +229,7 @@ class TimerStateHolder @Inject constructor(
                     val boardTargetMs = responseData?.optLong("target_duration_ms", 0) ?: 0
                     
                     if (boardRemainingMs > 0 && boardTargetMs > 0) {
-                        // 鏉跨鏈夋椂闂存暟鎹紝璺熼殢鏉跨
+                        // 板端有时间数据，跟随板端
                         Log.d(TAG, "Board responded with time: remaining=${boardRemainingMs}ms, target=${boardTargetMs}ms")
                         _state.update {
                             it.copy(
@@ -248,7 +241,7 @@ class TimerStateHolder @Inject constructor(
                             )
                         }
                     } else {
-                        // 鏉跨鏃犳椂闂存暟鎹紝浣跨敤鏈湴鏃堕棿
+                        // 板端无时间数据，使用本地时间
                         Log.d(TAG, "Board responded without time, using local time")
                         _state.update {
                             it.copy(
@@ -261,13 +254,11 @@ class TimerStateHolder @Inject constructor(
                         }
                     }
                     
-                    // 鍚姩鏉跨鍚屾鍜屾湰鍦板€掕鏃?
                     startBoardSync()
                     startLocalCountdown()
                     
                 }.onFailure { error ->
                     Log.e(TAG, "Failed to start session on board: ${error.message}")
-                    // 鏉跨閫氫俊澶辫触锛屽洖閫€鍒扮┖闂茬姸鎬?
                     _state.update {
                         it.copy(
                             timerState = TimerState.IDLE,
@@ -277,7 +268,6 @@ class TimerStateHolder @Inject constructor(
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Error starting session on board: ${e.message}")
-                // 寮傚父锛屽洖閫€鍒扮┖闂茬姸鎬?
                 _state.update {
                     it.copy(
                         timerState = TimerState.IDLE,
@@ -291,8 +281,7 @@ class TimerStateHolder @Inject constructor(
     }
 
     /**
-     * 鍚姩鏈湴妯″紡浼氳瘽
-     * 涓嶉渶瑕佽繛鎺ヨ澶?
+     * 启动本地模式会话
      */
     fun startLocalSession(
         targetDurationMinutes: Int,
@@ -323,60 +312,77 @@ class TimerStateHolder @Inject constructor(
             )
         }
 
-        // 鍙惎鍔ㄦ湰鍦板€掕鏃?
         startLocalCountdown()
 
         Log.d(TAG, "Local session started: duration=${targetDurationMinutes}min")
     }
 
     fun pauseSession() {
-        localCountdownJob?.cancel()
-        boardSyncJob?.cancel()
-
-        _state.update { it.copy(timerState = TimerState.PAUSED) }
-
-        // EdgeFocus妯″紡涓嬮€氱煡鏉跨
         if (_state.value.sessionMode == SessionMode.EDGEFOCUS && bleManager.isConnected()) {
             appEventLog.log("SESSION_CONTROL", "pause")
-            scope.launch { bleManager.sessionControl("pause") }
+            scope.launch {
+                val result = bleManager.sessionControl("pause")
+                result.onSuccess { data ->
+                    val success = try {
+                        JSONObject(String(data, Charsets.UTF_8))
+                            .optJSONObject("data")
+                            ?.optBoolean("success", false) == true
+                    } catch (e: Exception) {
+                        false
+                    }
+                    if (success) {
+                        applyPausedState()
+                    } else {
+                        Log.e(TAG, "Board rejected session pause")
+                    }
+                }.onFailure { error ->
+                    Log.e(TAG, "Failed to pause session on board: ${error.message}")
+                }
+            }
+        } else {
+            applyPausedState()
         }
     }
 
+    private fun applyPausedState() {
+        localCountdownJob?.cancel()
+        boardSyncJob?.cancel()
+        _state.update { it.copy(timerState = TimerState.PAUSED) }
+    }
+
     fun resumeSession() {
-        // EdgeFocus妯″紡涓嬶紝鍏堥€氱煡鏉跨锛岀瓑鍝嶅簲鍚庡啀鎭㈠
+        // EdgeFocus模式下，先通知板端，等响应后再恢复
         if (_state.value.sessionMode == SessionMode.EDGEFOCUS && bleManager.isConnected()) {
             appEventLog.log("SESSION_CONTROL", "resume")
             scope.launch {
                 try {
                     val result = bleManager.sessionControl("resume")
                     result.onSuccess { data ->
-                        // 鏉跨鍝嶅簲鎴愬姛锛屾鏌?success 瀛楁
                         val json = String(data, Charsets.UTF_8)
                         val jsonObj = JSONObject(json)
                         val responseData = jsonObj.optJSONObject("data")
                         val success = responseData?.optBoolean("success", false) ?: false
                         
                         if (success) {
-                            // 鏉跨鎭㈠鎴愬姛锛屾仮澶嶆湰鍦板€掕鏃跺拰鏉跨鍚屾
+                            // 板端恢复成功，恢复本地倒计时和板端同步
                             Log.d(TAG, "Board resume successful")
                             _state.update { it.copy(timerState = TimerState.RUNNING) }
                             startLocalCountdown()
                             startBoardSync()
                         } else {
-                            // 鏉跨鎭㈠澶辫触
+                            // 板端恢复失败
                             val message = responseData?.optString("message", "unknown error") ?: "unknown error"
                             Log.e(TAG, "Board resume failed: $message")
                         }
                     }.onFailure { error ->
                         Log.e(TAG, "Failed to resume session on board: ${error.message}")
-                        // 鏉跨閫氫俊澶辫触锛屼笉鎭㈠
+                        // 板端通信失败，不恢复
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Error resuming session on board: ${e.message}")
                 }
             }
         } else {
-            // 鏈湴妯″紡锛岀洿鎺ユ仮澶?
             _state.update { it.copy(timerState = TimerState.RUNNING) }
             startLocalCountdown()
         }
@@ -386,35 +392,39 @@ class TimerStateHolder @Inject constructor(
         localCountdownJob?.cancel()
         boardSyncJob?.cancel()
 
-        // EdgeFocus妯″紡涓嬮€氱煡鏉跨
-        if (_state.value.sessionMode == SessionMode.EDGEFOCUS && bleManager.isConnected()) {
-            appEventLog.log("SESSION_CONTROL", "stop")
+        if (_state.value.sessionMode == SessionMode.EDGEFOCUS) {
             _state.update { it.copy(isSyncingWithBoard = false) }
-            scope.launch {
-                val result = bleManager.sessionControl("stop")
-                result.onSuccess { data ->
-                    var finishedByReport = false
-                    try {
-                        val response = JSONObject(String(data, Charsets.UTF_8))
-                        val report = response.optJSONObject("data")
-                        if (report != null && report.has("total_duration")) {
-                            finishFromBoardReport(report)
-                            finishedByReport = true
+            if (bleManager.isConnected()) {
+                appEventLog.log("SESSION_CONTROL", "stop")
+                scope.launch {
+                    val result = bleManager.sessionControl("stop")
+                    result.onSuccess { data ->
+                        var finishedByReport = false
+                        try {
+                            val response = JSONObject(String(data, Charsets.UTF_8))
+                            val report = response.optJSONObject("data")
+                            if (report != null && report.has("total_duration")) {
+                                finishFromBoardReport(report)
+                                finishedByReport = true
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Failed to parse stop response: ${e.message}")
                         }
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Failed to parse stop response: ${e.message}")
-                    }
-                    if (!finishedByReport) {
-                        delay(MANUAL_STOP_REPORT_TIMEOUT_MS)
-                        if (_state.value.timerState != TimerState.FINISHED) {
-                            Log.w(TAG, "Board stop report timeout, saving with local fallback")
-                            completeSession()
+                        if (!finishedByReport) {
+                            delay(MANUAL_STOP_REPORT_TIMEOUT_MS)
+                            if (_state.value.timerState != TimerState.FINISHED) {
+                                Log.w(TAG, "Board stop report timeout, saving with local fallback")
+                                completeSession()
+                            }
                         }
+                    }.onFailure { error ->
+                        Log.e(TAG, "Failed to stop session on board: ${error.message}")
+                        completeSession()
                     }
-                }.onFailure { error ->
-                    Log.e(TAG, "Failed to stop session on board: ${error.message}")
-                    completeSession()
                 }
+            } else {
+                appEventLog.log("SESSION_CONTROL", "stop while disconnected, using local fallback")
+                completeSession()
             }
             return
         }
@@ -452,8 +462,7 @@ class TimerStateHolder @Inject constructor(
     }
 
     /**
-     * 鍚屾鏈湴浼氳瘽璁板綍缁欒澶?
-     * 鐢ㄤ簬鏈湴妯″紡缁撴潫鍚庡皢璁板綍鍚屾
+     * 用于本地模式结束后将记录同步
      */
     suspend fun syncSessionToBoard(durationSeconds: Int) {
         if (bleManager.isConnected()) {
@@ -490,7 +499,6 @@ class TimerStateHolder @Inject constructor(
         }
     }
 
-    // ==================== 妫€鏌ヨ澶囦細璇?====================
 
     private suspend fun checkBoardSession() {
         try {
@@ -505,7 +513,7 @@ class TimerStateHolder @Inject constructor(
                 val targetDurationMs = stateData.optLong("target_duration_ms", 0)
 
                 if (isActive && remainingMs > 0) {
-                    // 璁惧鏈夎繘琛屼腑鐨勪細璇濓紝鍚屾
+                    // 设备有进行中的会话，同步
                     Log.d(TAG, "Board has active session, syncing: remaining=${remainingMs}ms")
                     _state.update {
                         val syncedSessionId = it.sessionId ?: "session_${System.currentTimeMillis()}"
@@ -525,7 +533,6 @@ class TimerStateHolder @Inject constructor(
                     startLocalCountdown()
                     startBoardSync()
                 } else {
-                    // 璁惧绌洪棽锛岀瓑寰呯敤鎴锋搷浣?
                     Log.d(TAG, "Board is idle, waiting for user action")
                 }
             }
@@ -534,7 +541,6 @@ class TimerStateHolder @Inject constructor(
         }
     }
 
-    // ==================== 鏈湴鍊掕鏃?====================
 
     private fun startLocalCountdown() {
         localCountdownJob?.cancel()
@@ -548,7 +554,6 @@ class TimerStateHolder @Inject constructor(
                 }
             }
 
-            // 鏃堕棿鍒?
             if (_state.value.timeRemaining <= 0 && _state.value.timerState == TimerState.RUNNING) {
                 if (_state.value.sessionMode == SessionMode.LOCAL || !bleManager.isConnected()) {
                     completeSession()
@@ -560,7 +565,7 @@ class TimerStateHolder @Inject constructor(
         }
     }
 
-    // ==================== 鏉跨鍚屾 ====================
+    // ==================== 板端同步 ====================
 
     private fun startBoardSync() {
         boardSyncJob?.cancel()
@@ -584,7 +589,6 @@ class TimerStateHolder @Inject constructor(
     private fun stopBoardSync() {
         boardSyncJob?.cancel()
         _state.update { it.copy(isSyncingWithBoard = false) }
-        // 鏈湴缁х画鍊掕鏃?
     }
 
     private fun calibrateFromBoard(jsonString: String) {
@@ -610,7 +614,6 @@ class TimerStateHolder @Inject constructor(
                 val localRemaining = _state.value.timeRemaining
                 val diff = kotlin.math.abs(localRemaining - boardRemainingMs)
 
-                // 宸紓瓒呰繃闃堝€硷紝鐢ㄦ澘绔暟鎹牎鍑?
                 if (diff > CALIBRATION_THRESHOLD_MS) {
                     Log.d(TAG, "Calibrating: local=${localRemaining}ms, board=${boardRemainingMs}ms, diff=${diff}ms")
                     _state.update {
@@ -621,14 +624,12 @@ class TimerStateHolder @Inject constructor(
                     }
                 }
 
-                // 鏉跨鎶ュ憡鏃堕棿鍒?
             }
         } catch (e: Exception) {
             Log.e(TAG, "Calibrate failed: ${e.message}")
         }
     }
 
-    // ==================== 鐘舵€佹煡璇?====================
 
     fun getCurrentTimerState(): TimerState = _state.value.timerState
     fun getCurrentSessionType(): SessionType = _state.value.sessionType

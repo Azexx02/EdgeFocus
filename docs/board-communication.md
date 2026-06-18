@@ -87,7 +87,7 @@ EdgeFocus 设备 (Central)  ←──BLE GATT──→  BLE Band (Peripheral)
 - Service UUID: `0000FF00-0000-1000-8000-00805F9B34FB`
 - Write (手机→板): `0000FF01-...`
 - Notify (板→手机): `0000FF02-...`
-- 连接后手机请求 MTU ≥ 128
+- 连接后手机请求 MTU 517；板端至少应协商到 MTU 247
 - 手机通过设备名称过滤（`EdgeFocus`/`ESP32`），用户可手动绑定 MAC 地址
 
 ---
@@ -186,6 +186,8 @@ EdgeFocus 设备 (Central)  ←──BLE GATT──→  BLE Band (Peripheral)
 | `calibration_completed` | bool | 校准是否完成 |
 
 **手机轮询频率：** 1-2 秒，用于实时同步倒计时和显示状态。
+
+**会话活跃判定：** `focus_state=0..5` 或 `7` 都表示会话仍在运行，只有 `6` 表示暂停。板端推送正常专注态时必须发送 `0=FOCUSED`，App 会将这些业务状态统一映射为计时器 RUNNING，而不是只把某一个干扰状态当作 RUNNING。
 
 **⚠️ 手机依赖 `remaining_ms` 和 `target_duration_ms` 来同步倒计时，请板端确保返回。**
 
@@ -510,7 +512,7 @@ EdgeFocus 设备 (Central)  ←──BLE GATT──→  BLE Band (Peripheral)
 |------|--------|----------|----------|
 | BLE 请求/响应模型 | 🔴 高 | App 端已改为请求带 `id`，写入成功只代表传输确认 | 板端必须通过 Notify 返回同 `id` 的 JSON 响应；无 `id` 的 Notify 只按 push 事件处理 |
 | UUID 对齐 | 🔴 高 | App 端已改为 `FF00/FF01/FF02` | 双方统一使用 `0000FF00` Service、`0000FF01` Write、`0000FF02` Notify |
-| MTU 协商 | 🟡 中 | App 端已在 GATT 连接成功后请求 MTU=128 | 板端必须支持 MTU ≥ 128；如协商失败，响应 JSON 仍尽量控制在短包范围内 |
+| MTU 协商 | 🔴 高 | App 端在 GATT 连接成功后请求 MTU=517 | 板端至少支持 MTU 247；`phone_sync` 完整 JSON 约 145 字节，MTU 128 不足以单包承载 |
 | 绑定后连接判断 | 🟡 中 | App 端要求用户先绑定特定设备再使用，因此连接判断必须以已绑定 MAC 为准 | 绑定流程必须保证 MAC 保存到本地设置，并在 BLE 层连接/重连前恢复 `targetMacAddress` |
 | `update_preferences` 数据类型 | 🟡 中 | App 端已按 key 转换数值类型 | `system_mode`、`away_timeout_min`、`led_brightness` 发送数字；`vibration_strength`、`reminder_sensitivity` 发送浮点数 |
 | 会话保存时机 | 🔴 高 | EdgeFocus 模式下若 App 提前用本地计时结果保存 Session，会和板端权威数据冲突 | EdgeFocus 模式优先用 `push_timer_complete`、`push_session_end` 或 `session_control(action=end)` 响应报告保存；手动停止必须保存 Session，若板端没有及时给报告则 App 用本地数据兜底保存为未同步 |
@@ -551,13 +553,15 @@ App 端处理规则：
 - `cmd` 以 `push_` 开头：广播给 PushEventHandler。
 - 既无 `status` 又无 `push_`：记录协议错误日志，不崩溃。
 
+当前 App 按“一次 CharacteristicChanged 对应一份完整 UTF-8 JSON”解析，不做跨 Notify 拼包。板端每条响应或推送必须控制在协商 MTU 的单包有效载荷（MTU-3）内；若未来数据超过该上限，双方必须先在本文约定长度前缀或分片字段后再实现，不能直接把半段 JSON 发给 App。
+
 ---
 
 ### 10.5 板端会话状态机实现顺序
 
 板端代码改造时建议先按下面顺序落地，避免 UI、摄像头检测、提醒策略和 BLE 协议互相抢状态：
 
-1. 先实现 BLE GATT 基础层：`FF00` Service、`FF01` Write、`FF02` Notify、CCCD 通知订阅、MTU >= 128。
+1. 先实现 BLE GATT 基础层：`FF00` Service、`FF01` Write、`FF02` Notify、CCCD 通知订阅。App 请求 MTU 517，板端至少协商到 MTU 247。
 2. 再实现统一消息分发：解析 `cmd` 和 `id`，所有普通命令必须通过 Notify 返回同 `id` 响应。
 3. 再实现会话状态机：`IDLE -> RUNNING -> PAUSED -> RUNNING -> ENDING -> IDLE`。`ENDING` 阶段必须生成报告，再发 `push_session_end`。
 4. 再接入 `get_current_state`：任何时刻都能返回 `active`、`focus_state`、`elapsed_ms`、`remaining_ms`、`target_duration_ms`。

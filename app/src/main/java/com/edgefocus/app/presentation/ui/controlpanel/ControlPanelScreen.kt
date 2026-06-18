@@ -217,7 +217,8 @@ private fun TimerPage(
             OutlinedIconButton(
                 onClick = { viewModel.stopSession() },
                 modifier = Modifier.size(56.dp),
-                enabled = uiState.timerState != TimerState.IDLE
+                enabled = uiState.timerState == TimerState.RUNNING ||
+                    uiState.timerState == TimerState.PAUSED
             ) {
                 Icon(
                     Icons.Default.Stop,
@@ -229,10 +230,16 @@ private fun TimerPage(
             // Play (large, primary)
             FilledIconButton(
                 onClick = {
-                    if (isRunning) viewModel.pauseSession()
-                    else viewModel.startSession()
+                    when (uiState.timerState) {
+                        TimerState.RUNNING -> viewModel.pauseSession()
+                        TimerState.PAUSED -> viewModel.resumeSession()
+                        else -> viewModel.startSession()
+                    }
                 },
                 modifier = Modifier.size(80.dp),
+                enabled = uiState.timerState == TimerState.RUNNING ||
+                    uiState.timerState == TimerState.PAUSED ||
+                    uiState.isBoardConnected,
                 colors = IconButtonDefaults.filledIconButtonColors(
                     containerColor = MaterialTheme.colorScheme.primary
                 )
