@@ -46,6 +46,7 @@ class MainActivity : ComponentActivity() {
 
         // NFC / Deep Link: edgefocus://controlpanel
         handleNfcIntent(intent)
+        intent = null
 
         setContent {
             EdgeFocusTheme {

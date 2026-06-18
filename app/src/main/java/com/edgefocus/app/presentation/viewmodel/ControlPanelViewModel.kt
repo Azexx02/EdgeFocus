@@ -220,15 +220,7 @@ class ControlPanelViewModel @Inject constructor(
                 systemMode = if (systemMode == 1) SystemMode.SILENT else SystemMode.NORMAL,
                 homeMode = systemMode == 2,
                 awayTimeout = data.optInt("away_timeout_min", it.awayTimeout).coerceIn(5, 60),
-                reminderSensitivity = data.optDouble(
-                    "reminder_sensitivity",
-                    it.reminderSensitivity.toDouble()
-                ).toFloat().coerceIn(0f, 1f),
-                vibrationStrength = data.optDouble(
-                    "vibration_strength",
-                    it.vibrationStrength.toDouble()
-                ).toFloat().coerceIn(0f, 1f),
-                ledBrightness = data.optInt("led_brightness", it.ledBrightness).coerceIn(0, 100),
+                reminderSensitivity = data.optDouble("reminder_sensitivity", it.reminderSensitivity.toDouble()).toFloat().coerceIn(0f, 1f),
                 arePreferencesLoaded = true
             )
         }

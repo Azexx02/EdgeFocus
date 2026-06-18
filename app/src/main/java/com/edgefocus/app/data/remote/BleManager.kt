@@ -691,6 +691,12 @@ class BleManager @Inject constructor(
     }
 
     @SuppressLint("MissingPermission")
+    override suspend fun reminderAck(alertId: String): Result<ByteArray> {
+        val json = """{"cmd":"reminder_ack"}"""
+        return sendDataAndAwait(json.toByteArray(Charsets.UTF_8))
+    }
+
+    @SuppressLint("MissingPermission")
     override suspend fun sessionFeedback(sessionId: String, feedback: String): Result<ByteArray> {
         val root = org.json.JSONObject().apply {
             put("cmd", "session_feedback")

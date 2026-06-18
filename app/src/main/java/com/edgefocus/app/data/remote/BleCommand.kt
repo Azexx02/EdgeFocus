@@ -18,6 +18,7 @@ interface BleCommand {
     suspend fun sessionControl(action: String, targetDurationMin: Int? = null): Result<ByteArray>
     suspend fun updatePreferences(key: String, value: String): Result<ByteArray>
     suspend fun sessionFeedback(sessionId: String, feedback: String): Result<ByteArray>
+    suspend fun reminderAck(alertId: String): Result<ByteArray>
     suspend fun phoneSync(usage: PhoneUsage): Result<ByteArray>
     suspend fun getConsoleData(): Result<ByteArray>
 }
