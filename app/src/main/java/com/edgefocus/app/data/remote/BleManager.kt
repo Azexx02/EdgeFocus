@@ -178,7 +178,7 @@ class BleManager @Inject constructor(
                 return
             }
 
-            val deviceName = result.device.name ?: ""
+            val deviceName = result.scanRecord?.deviceName ?: result.device.name.orEmpty()
             val deviceAddress = result.device.address
 
             if (targetMacAddress.isNotEmpty()) {
@@ -191,8 +191,15 @@ class BleManager @Inject constructor(
                 return
             }
 
-            // 否则按设备名过滤
-            if (DEVICE_NAME_FILTERS.none { deviceName.contains(it, ignoreCase = true) }) {
+            val hasExpectedName = DEVICE_NAME_FILTERS.any {
+                deviceName.contains(it, ignoreCase = true)
+            }
+            val advertisesEdgeFocusService = result.scanRecord
+                ?.serviceUuids
+                ?.any { it.uuid == SERVICE_UUID } == true
+
+            // Initial binding requires both the product name and the advertised GATT service.
+            if (!hasExpectedName || !advertisesEdgeFocusService) {
                 return
             }
 

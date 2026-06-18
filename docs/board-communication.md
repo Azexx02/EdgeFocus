@@ -88,7 +88,32 @@ EdgeFocus 设备 (Central)  ←──BLE GATT──→  BLE Band (Peripheral)
 - Write (手机→板): `0000FF01-...`
 - Notify (板→手机): `0000FF02-...`
 - 连接后手机请求 MTU 517；板端至少应协商到 MTU 247
-- 手机通过设备名称过滤（`EdgeFocus`/`ESP32`），用户可手动绑定 MAC 地址
+- 初次绑定时，App 只展示“广播名称匹配 + 广播包包含 FF00 Service UUID”的设备；绑定后按稳定 MAC 地址精确重连
+
+### 2.1 板端广播与识别要求
+
+板端必须作为 **BLE Peripheral / GATT Server** 发送可连接的低功耗蓝牙广播。仅开启经典蓝牙、仅修改系统蓝牙名称，或者只在连接后的 GATT 表中创建服务，都不足以被 App 识别。
+
+初次绑定列表采用以下两个条件的交集：
+
+1. 广播 Local Name 包含 `EdgeFocus`（推荐使用 `EdgeFocus` 或 `EdgeFocus-XXXX`）；当前为兼容开发固件也接受包含 `ESP32` 的名称。
+2. Advertising Data 或 Scan Response 的 Service UUID 列表中包含 `0000FF00-0000-1000-8000-00805F9B34FB`。不能只创建 FF00 GATT Service 而不在广播数据中声明它。
+
+板端最低广播要求：
+
+| 项目 | 必须值/行为 |
+|------|-------------|
+| BLE 角色 | Peripheral + GATT Server |
+| 广播类型 | Connectable、Scannable |
+| Local Name | `EdgeFocus` 或 `EdgeFocus-XXXX`（开发期兼容 `ESP32`） |
+| 广播 Service UUID | `0000FF00-0000-1000-8000-00805F9B34FB` |
+| 地址策略 | 使用稳定的 Public Address 或 Static Random Address；禁止使用会轮换的 RPA |
+| 广播持续性 | 未连接时持续广播；断连后恢复广播 |
+| 建议广播间隔 | 100-500 ms，兼顾发现速度和功耗 |
+
+用户确认绑定后，App 保存设备 MAC。后续扫描优先按该 MAC 精确识别并自动连接，不再依赖名称；因此板端固件升级和重启后必须保持 BLE 地址稳定。若板端启用地址隐私导致 MAC 轮换，App 会把它视为另一台设备，原绑定将无法重连。
+
+另一台手机即使把“系统蓝牙名称”改成 EdgeFocus，通常也不会出现在列表，因为手机默认不是发送上述可连接 BLE 广播的 Peripheral，而且不会广播 FF00 Service UUID。名称本身不是设备认证；FF00 广播用于产品类型筛选，已绑定 MAC 用于后续锁定具体设备。
 
 ---
 
