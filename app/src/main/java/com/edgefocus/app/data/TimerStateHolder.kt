@@ -6,7 +6,6 @@ import com.edgefocus.app.data.remote.AppEventLog
 import com.edgefocus.app.data.remote.BleManager
 import com.edgefocus.app.data.remote.ConnectionState
 import com.edgefocus.app.data.remote.PushEventHandler
-import com.edgefocus.app.domain.model.AlertInfo
 import com.edgefocus.app.domain.model.FocusState
 import com.edgefocus.app.domain.model.SessionType
 import com.edgefocus.app.domain.model.TimerState
@@ -26,8 +25,8 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 enum class SessionMode {
-    LOCAL,    // 本地模式：不与设备同步
-    EDGEFOCUS // EdgeFocus模式：设备为核心，手机同步
+    LOCAL,
+    EDGEFOCUS
 }
 
 data class SharedTimerState(
@@ -43,11 +42,14 @@ data class SharedTimerState(
     val distractionCount: Int = 0,
     val reminderCount: Int = 0,
     val phoneDistractionCount: Int = 0,
+    val sessionId: String? = null,
+    val sessionStartTime: Long = 0L,
     // 板端推送的会话结束数据
     val boardTotalDuration: Int? = null,
     val boardFocusDuration: Int? = null,
     val boardSessionDistractionCount: Int? = null,
-    val boardSessionReminderCount: Int? = null
+    val boardSessionReminderCount: Int? = null,
+    val boardSessionPhoneDistractionCount: Int? = null
 )
 
 @Singleton
@@ -60,7 +62,8 @@ class TimerStateHolder @Inject constructor(
         private const val TAG = "TimerStateHolder"
         private const val LOCAL_TICK_INTERVAL = 1000L
         private const val BOARD_SYNC_INTERVAL = 2000L
-        private const val CALIBRATION_THRESHOLD_MS = 5000L // 5秒差异阈值
+        private const val CALIBRATION_THRESHOLD_MS = 5000L
+        private const val MANUAL_STOP_REPORT_TIMEOUT_MS = 10_000L
     }
 
     private val _state = MutableStateFlow(SharedTimerState())
@@ -69,16 +72,20 @@ class TimerStateHolder @Inject constructor(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var localCountdownJob: Job? = null
     private var boardSyncJob: Job? = null
+    @Volatile
+    private var isControlPanelActive = false
 
     init {
-        // 监听设置变化，实时更新模式
         scope.launch {
             settingsDao.getSettings().collect { settings ->
                 settings?.let {
-                    val mode = if (it.useEdgeFocusBoard) SessionMode.EDGEFOCUS else SessionMode.LOCAL
+                    val mode = if (isControlPanelActive || it.useEdgeFocusBoard) {
+                        SessionMode.EDGEFOCUS
+                    } else {
+                        SessionMode.LOCAL
+                    }
                     if (_state.value.sessionMode != mode && _state.value.timerState == TimerState.IDLE) {
                         _state.update { state -> state.copy(sessionMode = mode) }
-                        // 设置变更后，如果已连接且切换到 EdgeFocus，检查板端会话
                         if (mode == SessionMode.EDGEFOCUS && bleManager.isConnected()) {
                             scope.launch { checkBoardSession() }
                         }
@@ -87,7 +94,6 @@ class TimerStateHolder @Inject constructor(
             }
         }
 
-        // 监听板端连接状态
         scope.launch {
             bleManager.connectionState.collect { connectionState ->
                 val isConnected = connectionState == ConnectionState.CONNECTED
@@ -96,7 +102,11 @@ class TimerStateHolder @Inject constructor(
                 // 连接时，根据设置决定模式
                 if (isConnected && _state.value.timerState == TimerState.IDLE) {
                     val settings = settingsDao.getSettingsOnce()
-                    val mode = if (settings?.useEdgeFocusBoard == true) SessionMode.EDGEFOCUS else SessionMode.LOCAL
+                    val mode = if (isControlPanelActive || settings?.useEdgeFocusBoard == true) {
+                        SessionMode.EDGEFOCUS
+                    } else {
+                        SessionMode.LOCAL
+                    }
                     _state.update { it.copy(sessionMode = mode) }
                     appEventLog.log("BLE_CONNECT", "模式: $mode")
 
@@ -119,32 +129,37 @@ class TimerStateHolder @Inject constructor(
             }
         }
 
-        // 场景3：监听板端推送事件（板端主动发起会话时通知手机）
         bleManager.setPushEventHandler(object : PushEventHandler {
             override fun onPushState(state: FocusState) {
-                // 板端状态变化，如果板端在运行且手机空闲，同步板端时间
-                if (state.state == com.edgefocus.app.domain.model.TimerState.RUNNING
-                    && _state.value.timerState == TimerState.IDLE
-                    && _state.value.sessionMode == SessionMode.EDGEFOCUS) {
-                    appEventLog.log("PUSH_STATE", "板端进入专注，自动同步")
-                    scope.launch { checkBoardSession() }
+                if (_state.value.sessionMode != SessionMode.EDGEFOCUS) return
+
+                when (state.state) {
+                    TimerState.RUNNING -> {
+                        if (_state.value.timerState == TimerState.IDLE ||
+                            _state.value.timerState == TimerState.FINISHED) {
+                            appEventLog.log("PUSH_STATE", "板端开始专注，拉取完整状态")
+                            scope.launch { checkBoardSession() }
+                        } else if (_state.value.timerState == TimerState.PAUSED) {
+                            appEventLog.log("PUSH_STATE", "板端恢复专注")
+                            _state.update { it.copy(timerState = TimerState.RUNNING) }
+                            startLocalCountdown()
+                            startBoardSync()
+                        }
+                    }
+                    TimerState.PAUSED -> {
+                        if (_state.value.timerState == TimerState.RUNNING) {
+                            appEventLog.log("PUSH_STATE", "板端暂停专注")
+                            applyPausedState()
+                        }
+                    }
+                    else -> Unit
                 }
             }
-            override fun onPushAlert(alert: AlertInfo) {}
             override fun onPushSessionEnd(summary: String) {
                 appEventLog.log("PUSH_SESSION_END", summary)
                 try {
                     val json = JSONObject(summary)
-                    _state.update {
-                        it.copy(
-                            timerState = TimerState.FINISHED,
-                            isSyncingWithBoard = false,
-                            boardTotalDuration = json.optInt("total_duration", 0),
-                            boardFocusDuration = json.optInt("focus_duration", 0),
-                            boardSessionDistractionCount = json.optInt("distraction_count", 0),
-                            boardSessionReminderCount = json.optInt("reminder_count", 0)
-                        )
-                    }
+                    finishFromBoardReport(json)
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to parse push_session_end: ${e.message}")
                     _state.update { it.copy(timerState = TimerState.FINISHED, isSyncingWithBoard = false) }
@@ -153,9 +168,22 @@ class TimerStateHolder @Inject constructor(
             override fun onPushTimerComplete(timerComplete: com.edgefocus.app.data.remote.TimerComplete) {
                 appEventLog.log("PUSH_TIMER_COMPLETE", "distraction=${timerComplete.distractionCount}, reminder=${timerComplete.reminderCount}")
                 _state.update {
+                    val completedSessions = if (it.timerState == TimerState.FINISHED) {
+                        it.completedSessions
+                    } else {
+                        it.completedSessions + 1
+                    }
                     it.copy(
+                        timerState = TimerState.FINISHED,
+                        completedSessions = completedSessions,
+                        isSyncingWithBoard = false,
+                        timeRemaining = 0L,
+                        boardTotalDuration = (timerComplete.targetDurationMs / 1000).toInt(),
+                        boardFocusDuration = (timerComplete.elapsedMs / 1000).toInt(),
                         distractionCount = timerComplete.distractionCount,
-                        reminderCount = timerComplete.reminderCount
+                        reminderCount = timerComplete.reminderCount,
+                        boardSessionDistractionCount = timerComplete.distractionCount,
+                        boardSessionReminderCount = timerComplete.reminderCount
                     )
                 }
             }
@@ -166,15 +194,20 @@ class TimerStateHolder @Inject constructor(
 
     /**
      * 启动 EdgeFocus 模式会话
-     * 必须已连接设备才能调用
      * 
      * 原则：EdgeFocus 设备是核心，手机是遥控器
-     * 逻辑：先通知板端开始，等待板端响应后才设置状态
-     * 本地计时只是保底，防止中途蓝牙断连
      */
-    fun startEdgeFocusSession(targetDurationMinutes: Int) {
+    fun startEdgeFocusSession(
+        targetDurationMinutes: Int,
+        sessionId: String = "session_${System.currentTimeMillis()}",
+        sessionStartTime: Long = System.currentTimeMillis()
+    ) {
         if (!bleManager.isConnected()) {
             Log.w(TAG, "Cannot start EdgeFocus session: device not connected")
+            return
+        }
+        if (_state.value.isSyncingWithBoard) {
+            Log.w(TAG, "Ignoring duplicate EdgeFocus start while board request is pending")
             return
         }
 
@@ -183,7 +216,17 @@ class TimerStateHolder @Inject constructor(
         _state.update {
             it.copy(
                 sessionMode = SessionMode.EDGEFOCUS,
-                isSyncingWithBoard = true
+                isSyncingWithBoard = true,
+                distractionCount = 0,
+                reminderCount = 0,
+                phoneDistractionCount = 0,
+                sessionId = sessionId,
+                sessionStartTime = sessionStartTime,
+                boardTotalDuration = null,
+                boardFocusDuration = null,
+                boardSessionDistractionCount = null,
+                boardSessionReminderCount = null,
+                boardSessionPhoneDistractionCount = null
             )
         }
 
@@ -197,9 +240,26 @@ class TimerStateHolder @Inject constructor(
                     val json = String(data, Charsets.UTF_8)
                     val jsonObj = JSONObject(json)
                     val responseData = jsonObj.optJSONObject("data")
+                    val success = responseData?.optBoolean("success", true) ?: true
+
+                    if (!success) {
+                        Log.e(TAG, "Board rejected session start")
+                        _state.update {
+                            it.copy(
+                                timerState = TimerState.IDLE,
+                                isSyncingWithBoard = false
+                            )
+                        }
+                        return@onSuccess
+                    }
                     
                     val boardRemainingMs = responseData?.optLong("remaining_ms", 0) ?: 0
                     val boardTargetMs = responseData?.optLong("target_duration_ms", 0) ?: 0
+                    val boardSessionId = responseData?.optString("session_id").orEmpty()
+
+                    if (boardSessionId.isNotBlank()) {
+                        _state.update { it.copy(sessionId = boardSessionId) }
+                    }
                     
                     if (boardRemainingMs > 0 && boardTargetMs > 0) {
                         // 板端有时间数据，跟随板端
@@ -227,28 +287,23 @@ class TimerStateHolder @Inject constructor(
                         }
                     }
                     
-                    // 启动板端同步和本地倒计时
                     startBoardSync()
                     startLocalCountdown()
                     
                 }.onFailure { error ->
                     Log.e(TAG, "Failed to start session on board: ${error.message}")
-                    // 板端通信失败，回退到空闲状态
                     _state.update {
                         it.copy(
                             timerState = TimerState.IDLE,
-                            sessionMode = SessionMode.LOCAL,
                             isSyncingWithBoard = false
                         )
                     }
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Error starting session on board: ${e.message}")
-                // 异常，回退到空闲状态
                 _state.update {
                     it.copy(
                         timerState = TimerState.IDLE,
-                        sessionMode = SessionMode.LOCAL,
                         isSyncingWithBoard = false
                     )
                 }
@@ -260,9 +315,12 @@ class TimerStateHolder @Inject constructor(
 
     /**
      * 启动本地模式会话
-     * 不需要连接设备
      */
-    fun startLocalSession(targetDurationMinutes: Int) {
+    fun startLocalSession(
+        targetDurationMinutes: Int,
+        sessionId: String = "session_${System.currentTimeMillis()}",
+        sessionStartTime: Long = System.currentTimeMillis()
+    ) {
         val totalTimeMs = TimeUtils.minutesToMillis(targetDurationMinutes)
 
         _state.update {
@@ -273,27 +331,83 @@ class TimerStateHolder @Inject constructor(
                 totalTime = totalTimeMs,
                 targetDurationMinutes = targetDurationMinutes,
                 sessionMode = SessionMode.LOCAL,
-                isSyncingWithBoard = false
+                isSyncingWithBoard = false,
+                distractionCount = 0,
+                reminderCount = 0,
+                phoneDistractionCount = 0,
+                sessionId = sessionId,
+                sessionStartTime = sessionStartTime,
+                boardTotalDuration = null,
+                boardFocusDuration = null,
+                boardSessionDistractionCount = null,
+                boardSessionReminderCount = null,
+                boardSessionPhoneDistractionCount = null
             )
         }
 
-        // 只启动本地倒计时
         startLocalCountdown()
 
         Log.d(TAG, "Local session started: duration=${targetDurationMinutes}min")
     }
 
     fun pauseSession() {
-        localCountdownJob?.cancel()
-        boardSyncJob?.cancel()
-
-        _state.update { it.copy(timerState = TimerState.PAUSED) }
-
-        // EdgeFocus模式下通知板端
         if (_state.value.sessionMode == SessionMode.EDGEFOCUS && bleManager.isConnected()) {
             appEventLog.log("SESSION_CONTROL", "pause")
-            scope.launch { bleManager.sessionControl("pause") }
+            scope.launch {
+                val result = bleManager.sessionControl("pause")
+                result.onSuccess { data ->
+                    val success = try {
+                        JSONObject(String(data, Charsets.UTF_8))
+                            .optJSONObject("data")
+                            ?.optBoolean("success", false) == true
+                    } catch (e: Exception) {
+                        false
+                    }
+                    if (success) {
+                        applyPausedState()
+                    } else {
+                        Log.e(TAG, "Board rejected session pause")
+                    }
+                }.onFailure { error ->
+                    Log.e(TAG, "Failed to pause session on board: ${error.message}")
+                }
+            }
+        } else {
+            applyPausedState()
         }
+    }
+
+    fun enterControlPanelMode() {
+        isControlPanelActive = true
+        if (_state.value.timerState == TimerState.IDLE ||
+            _state.value.timerState == TimerState.FINISHED) {
+            _state.update { it.copy(sessionMode = SessionMode.EDGEFOCUS) }
+        }
+        if (bleManager.isConnected()) {
+            scope.launch { checkBoardSession() }
+        }
+    }
+
+    fun leaveControlPanelMode() {
+        isControlPanelActive = false
+        if (_state.value.timerState == TimerState.IDLE ||
+            _state.value.timerState == TimerState.FINISHED) {
+            scope.launch {
+                val settings = settingsDao.getSettingsOnce()
+                val mode = if (settings?.useEdgeFocusBoard == true) {
+                    SessionMode.EDGEFOCUS
+                } else {
+                    SessionMode.LOCAL
+                }
+                _state.update { it.copy(sessionMode = mode) }
+            }
+        }
+    }
+
+    private fun applyPausedState() {
+        localCountdownJob?.cancel()
+        boardSyncJob?.cancel()
+        _state.update { it.copy(timerState = TimerState.PAUSED) }
     }
 
     fun resumeSession() {
@@ -304,7 +418,6 @@ class TimerStateHolder @Inject constructor(
                 try {
                     val result = bleManager.sessionControl("resume")
                     result.onSuccess { data ->
-                        // 板端响应成功，检查 success 字段
                         val json = String(data, Charsets.UTF_8)
                         val jsonObj = JSONObject(json)
                         val responseData = jsonObj.optJSONObject("data")
@@ -330,7 +443,6 @@ class TimerStateHolder @Inject constructor(
                 }
             }
         } else {
-            // 本地模式，直接恢复
             _state.update { it.copy(timerState = TimerState.RUNNING) }
             startLocalCountdown()
         }
@@ -340,10 +452,41 @@ class TimerStateHolder @Inject constructor(
         localCountdownJob?.cancel()
         boardSyncJob?.cancel()
 
-        // EdgeFocus模式下通知板端
-        if (_state.value.sessionMode == SessionMode.EDGEFOCUS && bleManager.isConnected()) {
-            appEventLog.log("SESSION_CONTROL", "stop")
-            scope.launch { bleManager.sessionControl("stop") }
+        if (_state.value.sessionMode == SessionMode.EDGEFOCUS) {
+            _state.update { it.copy(isSyncingWithBoard = false) }
+            if (bleManager.isConnected()) {
+                appEventLog.log("SESSION_CONTROL", "stop")
+                scope.launch {
+                    val result = bleManager.sessionControl("stop")
+                    result.onSuccess { data ->
+                        var finishedByReport = false
+                        try {
+                            val response = JSONObject(String(data, Charsets.UTF_8))
+                            val report = response.optJSONObject("data")
+                            if (report != null && report.has("total_duration")) {
+                                finishFromBoardReport(report)
+                                finishedByReport = true
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Failed to parse stop response: ${e.message}")
+                        }
+                        if (!finishedByReport) {
+                            delay(MANUAL_STOP_REPORT_TIMEOUT_MS)
+                            if (_state.value.timerState != TimerState.FINISHED) {
+                                Log.w(TAG, "Board stop report timeout, saving with local fallback")
+                                completeSession()
+                            }
+                        }
+                    }.onFailure { error ->
+                        Log.e(TAG, "Failed to stop session on board: ${error.message}")
+                        completeSession()
+                    }
+                }
+            } else {
+                appEventLog.log("SESSION_CONTROL", "stop while disconnected, using local fallback")
+                completeSession()
+            }
+            return
         }
 
         val targetDurationMinutes = _state.value.targetDurationMinutes
@@ -365,8 +508,13 @@ class TimerStateHolder @Inject constructor(
         localCountdownJob?.cancel()
 
         _state.update {
+            val completedSessions = if (it.timerState == TimerState.FINISHED) {
+                it.completedSessions
+            } else {
+                it.completedSessions + 1
+            }
             it.copy(
-                completedSessions = it.completedSessions + 1,
+                completedSessions = completedSessions,
                 timerState = TimerState.FINISHED,
                 isSyncingWithBoard = false
             )
@@ -374,24 +522,43 @@ class TimerStateHolder @Inject constructor(
     }
 
     /**
-     * 同步本地会话记录给设备
      * 用于本地模式结束后将记录同步
      */
-    suspend fun syncSessionToBoard(durationMinutes: Int) {
+    suspend fun syncSessionToBoard(durationSeconds: Int) {
         if (bleManager.isConnected()) {
             val usage = com.edgefocus.app.data.remote.PhoneUsage(
                 isInUse = false,
                 appCategory = "other",
                 distractionLevel = 3,
                 appName = "local_session_sync",
-                durationSec = durationMinutes * 60
+                durationSec = durationSeconds
             )
             bleManager.phoneSync(usage)
-            Log.d(TAG, "Local session synced to board: duration=${durationMinutes}min")
+            Log.d(TAG, "Local session synced to board: duration=${durationSeconds}s")
         }
     }
 
-    // ==================== 检查设备会话 ====================
+    private fun finishFromBoardReport(report: JSONObject) {
+        _state.update {
+            val completedSessions = if (it.timerState == TimerState.FINISHED) {
+                it.completedSessions
+            } else {
+                it.completedSessions + 1
+            }
+            it.copy(
+                timerState = TimerState.FINISHED,
+                isSyncingWithBoard = false,
+                completedSessions = completedSessions,
+                timeRemaining = 0L,
+                boardTotalDuration = report.optInt("total_duration", 0),
+                boardFocusDuration = report.optInt("focus_duration", 0),
+                boardSessionDistractionCount = report.optInt("distraction_count", 0),
+                boardSessionReminderCount = report.optInt("reminder_count", 0),
+                boardSessionPhoneDistractionCount = report.optInt("phone_distraction_count", it.phoneDistractionCount)
+            )
+        }
+    }
+
 
     private suspend fun checkBoardSession() {
         try {
@@ -402,27 +569,44 @@ class TimerStateHolder @Inject constructor(
                 val stateData = jsonObj.getJSONObject("data")
 
                 val isActive = stateData.optBoolean("active", false)
+                val focusState = stateData.optInt("focus_state", 0)
+                val elapsedMs = stateData.optLong("elapsed_ms", 0)
                 val remainingMs = stateData.optLong("remaining_ms", 0)
                 val targetDurationMs = stateData.optLong("target_duration_ms", 0)
+                val distractionCount = stateData.optInt("distraction_count", 0)
+                val reminderCount = stateData.optInt("reminder_count", 0)
 
                 if (isActive && remainingMs > 0) {
                     // 设备有进行中的会话，同步
                     Log.d(TAG, "Board has active session, syncing: remaining=${remainingMs}ms")
                     _state.update {
+                        val boardSessionId = stateData.optString("session_id")
+                        val syncedSessionId = boardSessionId.takeIf { id -> id.isNotBlank() }
+                            ?: it.sessionId
+                            ?: "session_${System.currentTimeMillis()}"
+                        val effectiveElapsedMs = elapsedMs.takeIf { value -> value > 0L }
+                            ?: (targetDurationMs - remainingMs).coerceAtLeast(0L)
+                        val syncedSessionStartTime = it.sessionStartTime.takeIf { time -> time > 0L }
+                            ?: (System.currentTimeMillis() - effectiveElapsedMs)
                         it.copy(
-                            timerState = TimerState.RUNNING,
+                            timerState = if (focusState == 6) TimerState.PAUSED else TimerState.RUNNING,
                             sessionType = SessionType.WORK,
                             timeRemaining = remainingMs,
                             totalTime = if (targetDurationMs > 0) targetDurationMs else it.totalTime,
                             targetDurationMinutes = if (targetDurationMs > 0) (targetDurationMs / 60000).toInt() else it.targetDurationMinutes,
                             sessionMode = SessionMode.EDGEFOCUS,
-                            isSyncingWithBoard = true
+                            isSyncingWithBoard = true,
+                            sessionId = syncedSessionId,
+                            sessionStartTime = syncedSessionStartTime,
+                            distractionCount = distractionCount,
+                            reminderCount = reminderCount
                         )
                     }
-                    startLocalCountdown()
-                    startBoardSync()
+                    if (focusState != 6) {
+                        startLocalCountdown()
+                        startBoardSync()
+                    }
                 } else {
-                    // 设备空闲，等待用户操作
                     Log.d(TAG, "Board is idle, waiting for user action")
                 }
             }
@@ -431,7 +615,6 @@ class TimerStateHolder @Inject constructor(
         }
     }
 
-    // ==================== 本地倒计时 ====================
 
     private fun startLocalCountdown() {
         localCountdownJob?.cancel()
@@ -445,9 +628,13 @@ class TimerStateHolder @Inject constructor(
                 }
             }
 
-            // 时间到
             if (_state.value.timeRemaining <= 0 && _state.value.timerState == TimerState.RUNNING) {
-                completeSession()
+                if (_state.value.sessionMode == SessionMode.LOCAL || !bleManager.isConnected()) {
+                    completeSession()
+                } else {
+                    appEventLog.log("TIMER_ZERO", "EdgeFocus mode waits for board completion push")
+                    _state.update { it.copy(timeRemaining = 0L) }
+                }
             }
         }
     }
@@ -476,7 +663,6 @@ class TimerStateHolder @Inject constructor(
     private fun stopBoardSync() {
         boardSyncJob?.cancel()
         _state.update { it.copy(isSyncingWithBoard = false) }
-        // 本地继续倒计时
     }
 
     private fun calibrateFromBoard(jsonString: String) {
@@ -486,12 +672,37 @@ class TimerStateHolder @Inject constructor(
 
             val boardRemainingMs = data.optLong("remaining_ms", 0)
             val boardTargetDurationMs = data.optLong("target_duration_ms", 0)
+            val boardDistractionCount = data.optInt(
+                "distraction_count",
+                _state.value.distractionCount
+            )
+            val boardReminderCount = data.optInt(
+                "reminder_count",
+                _state.value.reminderCount
+            )
 
-            if (boardRemainingMs > 0 && boardTargetDurationMs > 0) {
+            _state.update {
+                it.copy(
+                    distractionCount = boardDistractionCount,
+                    reminderCount = boardReminderCount
+                )
+            }
+
+            if (boardTargetDurationMs > 0) {
+                if (boardRemainingMs <= 0) {
+                    appEventLog.log("BOARD_TIME_ZERO", "Waiting for board report push")
+                    _state.update {
+                        it.copy(
+                            timeRemaining = 0L,
+                            totalTime = boardTargetDurationMs
+                        )
+                    }
+                    return
+                }
+
                 val localRemaining = _state.value.timeRemaining
                 val diff = kotlin.math.abs(localRemaining - boardRemainingMs)
 
-                // 差异超过阈值，用板端数据校准
                 if (diff > CALIBRATION_THRESHOLD_MS) {
                     Log.d(TAG, "Calibrating: local=${localRemaining}ms, board=${boardRemainingMs}ms, diff=${diff}ms")
                     _state.update {
@@ -502,17 +713,12 @@ class TimerStateHolder @Inject constructor(
                     }
                 }
 
-                // 板端报告时间到
-                if (boardRemainingMs <= 0) {
-                    completeSession()
-                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Calibrate failed: ${e.message}")
         }
     }
 
-    // ==================== 状态查询 ====================
 
     fun getCurrentTimerState(): TimerState = _state.value.timerState
     fun getCurrentSessionType(): SessionType = _state.value.sessionType
@@ -525,8 +731,13 @@ class TimerStateHolder @Inject constructor(
     fun isSyncingWithBoard(): Boolean = _state.value.isSyncingWithBoard
     fun getPhoneDistractionCount(): Int = _state.value.phoneDistractionCount
 
+    fun getBoardTotalDuration(): Int = _state.value.boardTotalDuration ?: 0
+    fun getBoardFocusDuration(): Int = _state.value.boardFocusDuration ?: 0
     fun getBoardSessionDistractionCount(): Int = _state.value.boardSessionDistractionCount ?: 0
     fun getBoardSessionReminderCount(): Int = _state.value.boardSessionReminderCount ?: 0
+    fun getBoardSessionPhoneDistractionCount(): Int = _state.value.boardSessionPhoneDistractionCount
+        ?: _state.value.phoneDistractionCount
+    fun hasBoardSessionReport(): Boolean = _state.value.boardTotalDuration != null
 
     fun incrementPhoneDistraction() {
         _state.update { it.copy(phoneDistractionCount = it.phoneDistractionCount + 1) }

@@ -59,6 +59,10 @@ class TestViewModel @Inject constructor(
     private val appEventLog: AppEventLog
 ) : AndroidViewModel(application) {
 
+    private val bleLogListener: (String, String) -> Unit = { direction, content ->
+        addBleLog(direction, content)
+    }
+
     private val _uiState = MutableStateFlow(TestUiState())
     val uiState: StateFlow<TestUiState> = _uiState.asStateFlow()
 
@@ -88,9 +92,7 @@ class TestViewModel @Inject constructor(
         loadDistractionLevels()
         loadBleLogs()
 
-        bleManager.setBleLogListener { direction, content ->
-            addBleLog(direction, content)
-        }
+        bleManager.setBleLogListener(bleLogListener)
 
         // 观察应用事件日志
         viewModelScope.launch {
@@ -98,6 +100,11 @@ class TestViewModel @Inject constructor(
                 _uiState.update { it.copy(appLogs = events) }
             }
         }
+    }
+
+    override fun onCleared() {
+        bleManager.removeBleLogListener(bleLogListener)
+        super.onCleared()
     }
 
     fun toggleSimulateBle() {

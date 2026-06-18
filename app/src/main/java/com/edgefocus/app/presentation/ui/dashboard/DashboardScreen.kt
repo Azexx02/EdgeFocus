@@ -263,19 +263,17 @@ fun DashboardScreen(
                         DetailRow("会话 ID", session.boardSessionId)
                     }
 
-                    if (session.feedback != null) {
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = when (session.feedback) {
-                                "too_much" -> "已标记：提醒过多"
-                                "too_little" -> "已标记：提醒过少"
-                                "just_right" -> "已标记：适中"
-                                else -> "已反馈"
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = when (session.feedback ?: "just_right") {
+                            "too_much" -> "已标记：提醒过多"
+                            "too_little" -> "已标记：提醒过少"
+                            "just_right" -> "已标记：适中"
+                            else -> "已反馈"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
                 }
             },
             confirmButton = {

@@ -1,6 +1,5 @@
 package com.edgefocus.app.data.remote
 
-import com.edgefocus.app.domain.model.AlertInfo
 import com.edgefocus.app.domain.model.FocusState
 
 data class TimerComplete(
@@ -12,7 +11,6 @@ data class TimerComplete(
 
 interface PushEventHandler {
     fun onPushState(state: FocusState)
-    fun onPushAlert(alert: AlertInfo)
     fun onPushSessionEnd(summary: String)
     fun onPushTimerComplete(timerComplete: TimerComplete)
 }

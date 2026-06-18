@@ -63,13 +63,20 @@ fun HomeScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val settings by settingsViewModel.settings.collectAsState()
-    val effectiveConnectionState = bleViewModel.getEffectiveConnectionState()
+    val connectionState by bleViewModel.connectionState.collectAsState()
+    val effectiveConnectionState = if (bleViewModel.isSimulatingBle()) {
+        bleViewModel.getEffectiveConnectionState()
+    } else {
+        connectionState
+    }
 
     val useBoard = settings.useEdgeFocusBoard
-    val isConnected = bleViewModel.isConnected()
+    val isConnected = effectiveConnectionState == ConnectionState.CONNECTED &&
+        bleViewModel.isConnected()
 
     val canStart = when {
-        useBoard && uiState.timerState == TimerState.IDLE -> isConnected
+        useBoard && (uiState.timerState == TimerState.IDLE ||
+            uiState.timerState == TimerState.FINISHED) -> isConnected && !uiState.isSyncingWithBoard
         else -> true
     }
 
@@ -265,7 +272,18 @@ fun HomeScreen(
             }
         }
 
-        if (useBoard && !isConnected && uiState.timerState == TimerState.IDLE) {
+        if (useBoard && uiState.isSyncingWithBoard &&
+            (uiState.timerState == TimerState.IDLE || uiState.timerState == TimerState.FINISHED)
+        ) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = "Waiting for EdgeFocus to confirm the session",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        } else if (useBoard && !isConnected &&
+            (uiState.timerState == TimerState.IDLE || uiState.timerState == TimerState.FINISHED)
+        ) {
             Spacer(modifier = Modifier.height(8.dp))
             Text(
                 text = "Connect device to use EdgeFocus mode",

@@ -27,17 +27,3 @@ data class SessionReport(
     val focusScore: Float,
     val notes: String = ""
 )
-
-data class AlertInfo(
-    val alertId: String,
-    val type: AlertType,
-    val message: String,
-    val timestamp: Long = System.currentTimeMillis()
-)
-
-enum class AlertType {
-    DISTRACTION,
-    BREAK_REMINDER,
-    SESSION_END,
-    LOW_BATTERY
-}

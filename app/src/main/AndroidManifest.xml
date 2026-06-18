@@ -18,6 +18,7 @@
     <!-- Foreground Service Permission -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- App Usage Stats Permission -->
@@ -67,6 +68,21 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="edgefocus" android:host="controlpanel" />
             </intent-filter>
+            <intent-filter>
+                <action android:name="android.nfc.action.NDEF_DISCOVERED" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data
+                    android:scheme="edgefocus"
+                    android:host="controlpanel" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="edgefocus"
+                    android:host="controlpanel" />
+            </intent-filter>
         </activity>
 
         <!-- Control Panel Activity (Landscape) -->
@@ -85,7 +101,11 @@
         <service
             android:name=".service.AppMonitorService"
             android:foregroundServiceType="specialUse"
-            android:exported="false" />
+            android:exported="false">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Active focus session app-usage monitoring and distraction reminders" />
+        </service>
 
     </application>
 
