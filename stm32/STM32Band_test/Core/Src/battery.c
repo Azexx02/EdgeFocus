@@ -27,3 +27,19 @@ uint16_t battery_read_mv(void)
     uint32_t mv_bat = mv_pin * VOLTAGE_DIVIDER_NUM / VOLTAGE_DIVIDER_DEN;
     return (uint16_t)mv_bat;
 }
+
+uint8_t battery_percent_from_mv(uint16_t mv)
+{
+    if (mv >= 4200U) {
+        return 100U;
+    }
+    if (mv <= 3300U) {
+        return 0U;
+    }
+    return (uint8_t)(((uint32_t)(mv - 3300U) * 100U) / 900U);
+}
+
+uint8_t battery_read_percent(void)
+{
+    return battery_percent_from_mv(battery_read_mv());
+}

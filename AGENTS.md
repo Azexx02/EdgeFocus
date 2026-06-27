@@ -8,15 +8,16 @@ BLE wristband firmware. This is an extension of `C:\Users\Aze\Desktop\BoardCode`
 
 | Directory | Role | Toolchain | Status |
 |-----------|------|-----------|--------|
-| `stm32/stm32BLE_Band/` | **Main production firmware** | STM32CubeIDE | Bare CubeMX scaffold, awaiting driver integration |
-| `stm32/STM32Band_test/` | **Test harness** for module validation | CMake + Ninja + GCC ARM | OLED + motor working, BLE pending |
+| `stm32/STM32Band_test/` | **Main firmware and test harness** | CMake + Ninja + GCC ARM | OLED, motor, battery, power, button, BLE integrated |
+| `stm32/Drivers/` | Reusable STM32 modules | C / STM32 HAL | Source of truth for portable band modules |
+| `stm32/stm32BLE_Band/` | Archived production scaffold | STM32CubeIDE | Removed after `STM32Band_test` became the main project |
 | `esp32/` | Legacy reference (old hardware) | ESP-IDF + NimBLE | BLE working |
 
 ## Development workflow
 
-1. **Write & validate drivers/tests in `STM32Band_test/`** — this is the fast iteration loop.
-2. **Port proven drivers from `STM32Band_test/driver/` into `stm32BLE_Band/`** — copy `motor.h/c`, `ssd1306.h/c` into `Core/Inc/` and `Core/Src/`.
-3. **If flashing `stm32BLE_Band` fails**, reproduce the issue in `STM32Band_test/` first, fix there, then re-port.
+1. **Develop and validate in `stm32/STM32Band_test/`** — this is now both the fast iteration loop and the flashable main firmware.
+2. **Keep reusable code in `stm32/Drivers/`** — mirror proven modules into `STM32Band_test/driver/` and project `Core/` copies as needed.
+3. **If flashing or hardware behavior fails**, reproduce and fix it in `STM32Band_test/` first.
 4. **Logic & text references** — check `esp32/` for protocol behavior and OLED文案 to keep consistent.
 
 ## ESP32 (`esp32/`) — reference only
@@ -33,7 +34,7 @@ Key files:
 - `esp32/BLE_Signal_Protocol.md` — protocol spec (host interaction, frame format)
 - `esp32/BLE_API.md` — client-side examples (Arduino + ESP-IDF NimBLE)
 
-## STM32 test harness (`stm32/STM32Band_test/`)
+## STM32 main firmware (`stm32/STM32Band_test/`)
 
 CMake project with Ninja + `gcc-arm-none-eabi`.
 
@@ -42,17 +43,16 @@ CMake project with Ninja + `gcc-arm-none-eabi`.
 - **IDE**: STM32CubeIDE — open `.ioc` to regenerate CubeMX config
 
 Key files:
-- `driver/` — **reusable source of truth** (motor.h/c, ssd1306.h/c). Copy into `Core/` before building.
+- `driver/` — project-local copies of reusable modules from `stm32/Drivers/`.
 - `Core/Src/main.c` — CubeMX-generated; user code ONLY in `/* USER CODE BEGIN/END */` blocks.
-- `Core/Src/test_motor_oled.c` — OLED + motor hardware validation
-- `Core/Src/test_ble_response.c` — BLE protocol handler tests (simulated, no real BLE)
+- `Core/Src/test_ble.c` — current band application entry used for firmware bring-up.
+- `Core/Src/test_solder_check.c` — solder/hardware validation path.
 
-## STM32 main firmware (`stm32/stm32BLE_Band/`)
+## Archived STM32 scaffold (`stm32/stm32BLE_Band/`)
 
-STM32CubeIDE project (no CMake). Currently a bare CubeMX scaffold with all peripherals configured but no application code.
+The old CubeIDE scaffold was removed after `STM32Band_test` became the main flashable project.
 
-- Open `stm32BLE_Band.ioc` in STM32CubeIDE to regenerate.
-- Additional hardware vs test project: charging status (PB1), external power validity (PB11), button wake (PB12, EXTI).
+- Additional hardware vs early test project: charging status (PB1), external power validity (PB11), button wake (PB12, EXTI).
 - BLE module: E104-BT52 via UART1 (PA9/PA10, 115200), wake pin PB2, reset pin PB10.
 
 ## Motor driver gotchas (STM32)
@@ -99,6 +99,6 @@ Byte 1-N: type-specific payload
 
 ## STM32CubeMX gotchas
 
-- Regenerate from `.ioc` before editing `main.c` — then re-copy driver files from `driver/` into `Core/`.
-- `driver/` files are the source of truth. `Core/Inc/` and `Core/Src/` are copies that may be stale.
+- Regenerate from `.ioc` before editing `main.c` — then re-copy project-local driver files from `driver/` into `Core/`.
+- `stm32/Drivers/` is the reusable source of truth. `STM32Band_test/driver/` and `Core/` contain project copies.
 - I2C1 configured at 400kHz Fast Mode in both `.ioc` files.

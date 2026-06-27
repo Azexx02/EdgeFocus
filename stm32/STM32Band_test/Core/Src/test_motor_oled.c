@@ -17,14 +17,6 @@ extern I2C_HandleTypeDef hi2c1;
 
 static void delay_ms(uint32_t ms) { HAL_Delay(ms); }
 
-static void show_status(uint8_t page, const char *msg)
-{
-    ssd1306_clear();
-    ssd1306_draw_string(0, 0, "=== MOTOR PWM ===");
-    ssd1306_draw_string(page, 0, msg);
-    ssd1306_update();
-}
-
 // 将 uint32_t 转为 8 位十六进制字符串 "0x12345678"
 static void u32_to_hex(char *buf, uint32_t val)
 {

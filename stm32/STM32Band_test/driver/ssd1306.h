@@ -23,6 +23,8 @@ HAL_StatusTypeDef ssd1306_update(void);
 
 // Protocol display helpers
 void ssd1306_show_countdown(uint16_t minutes);
+void ssd1306_show_countdown_seconds(uint32_t seconds);
+void ssd1306_show_countdown_status(uint32_t seconds, const char *status, const char *battery);
 void ssd1306_show_alert(uint8_t level);
 
 #endif // SSD1306_H

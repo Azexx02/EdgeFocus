@@ -20,9 +20,9 @@
 #include "main.h"
 
 /* Private includes ----------------------------------------------------------*/
-/* USER CODE BEGIN Includes */
-#include "test_motor_oled.h"
-#include "test_hardware.h"
+  /* USER CODE BEGIN Includes */
+#include "test_ble.h"
+#include "motor.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -86,7 +86,7 @@ int main(void)
   HAL_Init();
 
   /* USER CODE BEGIN Init */
-
+  HAL_Delay(200);
   /* USER CODE END Init */
 
   /* Configure the system clock */
@@ -102,8 +102,9 @@ int main(void)
   MX_I2C1_Init();
   MX_USART1_UART_Init();
   MX_TIM16_Init();
+  motor_init();
   /* USER CODE BEGIN 2 */
-  test_hardware_main();
+  test_ble_main();
   /* USER CODE END 2 */
 
   /* Infinite loop */

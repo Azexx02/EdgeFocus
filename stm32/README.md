@@ -2,41 +2,57 @@
 
 基于 STM32G030C8T6 的蓝牙手环，功能与 ESP32-Band 保持一致。
 
+## 当前主工程
+
+`STM32Band_test/` 是当前可刷写的主固件工程，同时保留硬件验证入口。`stm32BLE_Band/` 旧 CubeIDE 脚手架已归档删除，避免继续维护两套主工程。
+
+- 构建目录: `STM32Band_test/build/Debug`
+- 构建命令: `cmake --build build/Debug`
+- 固件产物: `STM32Band_test/build/Debug/STM32Band_test.elf`
+- 可复用模块: `stm32/Drivers/`
+
 ## 当前进度
 
 | 日期 | 任务 | 状态 |
 |------|------|------|
 | 6月11日 | 驱动震动马达 (PA6) + OLED屏幕 (PB6/PB7) | 已完成 |
 | 6月12日 | PWM马达驱动 + BLE协议响应测试 | 已完成 |
-| 待定 | E104-BT52 蓝牙模块通信 (PA9/PA10) | 未开始 |
+| 6月27日 | E104-BT52 蓝牙模块通信 (PA9/PA10) + GATT 协议联调 | 已完成 |
+| 6月27日 | 主逻辑、休眠、按钮、电池、OLED 状态页整合 | 已完成 |
 
 ## 文件结构
 
 ```
 stm32/
-├── driver/                    # 可复用底层驱动（正式开发用）
-│   ├── ssd1306.h             # OLED 驱动头文件
-│   ├── ssd1306.c             # OLED 驱动实现 (含倒计时大字显示)
-│   ├── motor.h               # 马达驱动头文件 (PWM)
-│   └── motor.c               # 马达驱动实现 (TIM16 PWM, 5kHz)
-├── STM32Band_test/
+├── Drivers/                   # 可复用基础模块（源头）
+│   ├── ble_band.h/.c          # BLE 协议到手环行为适配
+│   ├── ble_protocol.h/.c      # BLE 写入帧解析
+│   ├── e104_bt52.h/.c         # E104-BT52 AT/透传配置
+│   ├── main_app.h/.c          # 主应用逻辑
+│   ├── battery.h/.c           # 电池 ADC
+│   ├── button.h/.c            # 按键
+│   ├── power.h/.c             # 充电/外部电源检测
+│   ├── ssd1306.h/.c           # OLED 驱动
+│   └── motor.h/.c             # 马达驱动
+├── STM32Band_test/            # 当前主固件工程
 │   ├── Core/
 │   │   ├── Inc/
 │   │   │   ├── main.h
 │   │   │   ├── ssd1306.h
 │   │   │   ├── motor.h
 │   │   │   ├── test_motor_oled.h
-│   │   │   └── test_ble_response.h
+│   │   │   └── test_ble.h
 │   │   └── Src/
 │   │       ├── main.c
 │   │       ├── ssd1306.c
 │   │       ├── motor.c
 │   │       ├── test_motor_oled.c
-│   │       └── test_ble_response.c  # BLE协议响应测试
+│   │       └── test_ble.c     # 当前主应用入口
+│   ├── driver/                # 从 stm32/Drivers 同步来的工程内副本
 │   └── Drivers/               # STM32 HAL/CMSIS 库
-├── BLE_Signal_Protocol.md     # BLE 信号协议文档
-├── README.md                  # 本文件
-└── doc/                       #引脚定义及相关文档
+├── doc/
+│   └── BLE_Signal_Protocol.md # BLE 信号协议文档
+└── README.md                  # 本文件
 ```
 
 ## CubeMX 配置步骤
@@ -205,9 +221,9 @@ int main(void)
 | 25% duty 不振 | 低于 MOSFET/motor 启动阈值 | 使用 ≥75% duty |
 | 150ms 脉冲感知不到 | 马达启动需要时间 | 脉冲 ≥300ms |
 
-## BLE 协议响应测试
+## BLE 协议与主逻辑
 
-`test_ble_response.c` 按照 `BLE_Signal_Protocol.md` 测试以下功能:
+当前固件通过 E104-BT52 模块作为 BLE 外设，广播名 `EdgefocusBand`，服务 UUID `0x180C`，特征 UUID `0x2A56`。主机写入特征后，固件按 `BLE_Signal_Protocol.md` 处理:
 
 1. **Alert (0x01)** — 三种震动模式
    - 0x01: 连续缓慢短震 (3次, 间隔500ms)
@@ -215,8 +231,9 @@ int main(void)
    - 0x03: 连续快速短振 (3次, 间隔100ms)
 2. **TimeSync (0x02)** — OLED 倒计时显示 (大字 MM:SS)
 3. **Text (0x03)** — OLED 文字显示
+4. **Legacy Alert** — 兼容 1 字节旧版写入，按短振提醒处理
 
-当前未接入 BLE，通过直接调用处理函数模拟协议命令。
+外部电源有效时整机进入休眠；电池供电启动时执行 BLE setup 并等待主机连接。按钮短按熄屏/亮屏，长按触发手动 BLE setup。
 
 ## 与 ESP32-Band 的兼容性
 
@@ -224,7 +241,7 @@ int main(void)
 |------|-----------|-----------|------|
 | OLED 显示 | SSD1306 I2C (GPIO8/9) | SSD1306 I2C (PB6/PB7) | 驱动已移植 |
 | 马达震动 | GPIO4 | PA6 | 驱动已移植 |
-| BLE 服务 | NimBLE (内置) | E104-BT52 (UART) | 待实现 |
+| BLE 服务 | NimBLE (内置) | E104-BT52 (UART) | 已实现 |
 | BLE UUID | 0x180C / 0x2A56 | 0x180C / 0x2A56 | 保持一致 |
 | 连接状态显示 | OLED 实时更新 | OLED 实时更新 | 已实现 |
 | 信号接收震动 | 500ms | 500ms | 已实现 |

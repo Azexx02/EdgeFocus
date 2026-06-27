@@ -10,6 +10,7 @@ set(MX_Defines_Syms
 
 # STM32CubeMX generated include paths
 set(MX_Include_Dirs
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../driver
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Inc
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Drivers/STM32G0xx_HAL_Driver/Inc
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Drivers/STM32G0xx_HAL_Driver/Inc/Legacy
@@ -28,10 +29,16 @@ set(MX_Application_Src
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/ssd1306.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/motor.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/test_motor_oled.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/test_ble_response.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/test_hardware.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/test_solder_check.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/battery.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/button.c
     ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/power.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../Core/Src/test_ble.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../driver/e104_bt52.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../driver/ble_protocol.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../driver/ble_band.c
 )
 
 # STM32 HAL/LL Drivers

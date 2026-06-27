@@ -10,5 +10,7 @@
 void battery_init(ADC_HandleTypeDef *hadc);
 uint16_t battery_read_raw(void);
 uint16_t battery_read_mv(void);
+uint8_t battery_read_percent(void);
+uint8_t battery_percent_from_mv(uint16_t mv);
 
 #endif

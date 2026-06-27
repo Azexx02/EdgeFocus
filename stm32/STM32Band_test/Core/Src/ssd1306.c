@@ -278,40 +278,60 @@ static void _draw_big_char(uint8_t page, uint8_t col, char c)
     else if (c == ':') idx = 10;
     else return;
 
-    for (int i = 0; i < 14; i++) {
+    for (int i = 0; i < 16; i++) {
         if (col + i < SSD1306_WIDTH)
             _buffer[page * SSD1306_WIDTH + col + i] = font16x16[idx][i];
     }
-    for (int i = 0; i < 14; i++) {
+    for (int i = 0; i < 16; i++) {
         if (col + i < SSD1306_WIDTH)
-            _buffer[(page + 1) * SSD1306_WIDTH + col + i] = font16x16[idx][14 + i];
+            _buffer[(page + 1) * SSD1306_WIDTH + col + i] = font16x16[idx][16 + i];
     }
 }
 
-void ssd1306_show_countdown(uint16_t minutes)
+void ssd1306_show_countdown_status(uint32_t seconds, const char *status, const char *battery)
 {
     char buf[6];
-    uint16_t mm = minutes;
-    uint16_t ss = 0;
-    buf[0] = '0' + (mm / 10) % 10;
-    buf[1] = '0' + mm % 10;
+    uint32_t mm = seconds / 60U;
+    uint32_t ss = seconds % 60U;
+
+    if (mm > 99U) {
+        mm = 99U;
+        ss = 59U;
+    }
+
+    buf[0] = (char)('0' + (mm / 10U) % 10U);
+    buf[1] = (char)('0' + mm % 10U);
     buf[2] = ':';
-    buf[3] = '0' + (ss / 10) % 10;
-    buf[4] = '0' + ss % 10;
+    buf[3] = (char)('0' + (ss / 10U) % 10U);
+    buf[4] = (char)('0' + ss % 10U);
     buf[5] = '\0';
 
     ssd1306_clear();
 
-    // 大字居中：5字符 x 14列 = 70，起始列 = (128-70)/2 = 29
-    uint8_t col = 29;
+    // 5 chars x 16 columns = 80 columns, centered on 128 columns.
+    uint8_t col = 24;
     for (int i = 0; i < 5; i++) {
         _draw_big_char(0, col, buf[i]);
-        col += 14;
+        col += 16;
     }
 
-    // 底部小字提示
-    ssd1306_draw_string(3, 40, "min left");
+    if (status != NULL) {
+        ssd1306_draw_string(2, 0, status);
+    }
+    if (battery != NULL) {
+        ssd1306_draw_string(3, 0, battery);
+    }
     ssd1306_update();
+}
+
+void ssd1306_show_countdown_seconds(uint32_t seconds)
+{
+    ssd1306_show_countdown_status(seconds, "Counting", "");
+}
+
+void ssd1306_show_countdown(uint16_t minutes)
+{
+    ssd1306_show_countdown_seconds((uint32_t)minutes * 60U);
 }
 
 void ssd1306_show_alert(uint8_t level)
