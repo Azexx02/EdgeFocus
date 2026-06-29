@@ -8,7 +8,7 @@
 
 | 项目 | 值 |
 |------|-----|
-| 设备广播名 | `ESP32-Band` |
+| 设备广播名 | `EdgefocusBand` |
 | Service UUID | `0x180C` |
 | Characteristic UUID | `0x2A56` |
 | 权限 | Write |
@@ -80,14 +80,14 @@ void handle_alert(uint8_t vibration, uint8_t level) {
         case 0x00: /* no vibration */ break;
         case 0x01:                                 // slow pattern
             for (int i = 0; i < 3; i++) {
-                motor_vibrate(150);
+                motor_vibrate(300);
                 delay(500);
             }
             break;
         case 0x02: motor_vibrate(800); break;      // long buzz
         case 0x03:                                 // pattern
             for (int i = 0; i < 3; i++) {
-                motor_vibrate(150);
+                motor_vibrate(300);
                 delay(100);
             }
             break;

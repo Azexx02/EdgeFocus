@@ -5,6 +5,7 @@ extern TIM_HandleTypeDef htim16;
 #define MOTOR_TIM       htim16
 #define MOTOR_TIM_CH    TIM_CHANNEL_1
 #define MOTOR_TIM_ARR   3199
+#define MOTOR_MIN_PULSE_MS 300U
 
 void motor_init(void)
 {
@@ -61,6 +62,10 @@ void motor_off(void)
 
 void motor_vibrate(uint32_t duration_ms)
 {
+    if (duration_ms > 0U && duration_ms < MOTOR_MIN_PULSE_MS) {
+        duration_ms = MOTOR_MIN_PULSE_MS;
+    }
+
     motor_on();
     HAL_Delay(duration_ms);
     motor_off();

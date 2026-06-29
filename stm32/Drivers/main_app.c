@@ -21,7 +21,7 @@
 #define BUTTON_DEBOUNCE_MS 30U
 #define BUTTON_LONG_PRESS_MS 2000U
 #define EXT_POWER_DEBOUNCE_MS 1000U
-#define BLE_RESUME_IGNORE_MS 1500U
+#define AUTO_CHARGE_SHUTDOWN_ENABLED 1U
 
 extern UART_HandleTypeDef huart1;
 extern I2C_HandleTypeDef hi2c1;
@@ -45,8 +45,6 @@ static uint8_t button_stable;
 static uint32_t button_last_change_tick;
 static uint8_t button_long_handled;
 static uint32_t button_press_start_tick;
-static uint8_t ble_ignore_until_sleep;
-static uint32_t ble_ignore_until_tick;
 static uint8_t ext_power_raw;
 static uint8_t ext_power_stable;
 static uint32_t ext_power_last_change_tick;
@@ -54,13 +52,6 @@ static uint32_t ext_power_last_change_tick;
 static void show4(const char *a, const char *b, const char *c, const char *d);
 static void show_main_page(void);
 static void show_countdown_page(void);
-
-static uint8_t ble_alerts_ignored(void)
-{
-    return (ble_ignore_until_sleep ||
-            (ble_ignore_until_tick != 0U &&
-             (int32_t)(HAL_GetTick() - ble_ignore_until_tick) < 0));
-}
 
 static void init_ext_power_state(void)
 {
@@ -276,24 +267,31 @@ static void on_state_changed(ble_band_state_t state, void *user)
     }
 }
 
-static void buzz_alert(uint8_t pattern)
+static void buzz_alert(uint8_t pattern, uint8_t level)
 {
+    uint32_t pulse_ms = (level >= 3U) ? 500U : 300U;
+
+    motor_init();
+
     switch (pattern) {
         case BLE_PROTOCOL_ALERT_NONE:
             break;
+        case BLE_PROTOCOL_ALERT_LEGACY:
+            motor_vibrate(500U);
+            break;
         case BLE_PROTOCOL_ALERT_LONG:
-            motor_vibrate(800U);
+            motor_vibrate((level >= 3U) ? 1000U : 800U);
             break;
         case BLE_PROTOCOL_ALERT_FAST:
             for (uint8_t i = 0U; i < 3U; i++) {
-                motor_vibrate(150U);
+                motor_vibrate(pulse_ms);
                 HAL_Delay(100U);
             }
             break;
         case BLE_PROTOCOL_ALERT_SLOW:
         default:
             for (uint8_t i = 0U; i < 3U; i++) {
-                motor_vibrate(150U);
+                motor_vibrate(pulse_ms);
                 HAL_Delay(500U);
             }
             break;
@@ -307,7 +305,8 @@ static void on_alert(uint8_t pattern, uint8_t level, void *user)
     uint8_t was_counting = countdown_active;
     (void)user;
 
-    if (charge_sleeping || ble_alerts_ignored() || power_ext_present()) {
+    if (pattern == BLE_PROTOCOL_ALERT_LEGACY) {
+        buzz_alert(pattern, level);
         return;
     }
 
@@ -331,7 +330,7 @@ static void on_alert(uint8_t pattern, uint8_t level, void *user)
     }
 
     show4("BLE Alert", line, message, "motor active");
-    buzz_alert(pattern);
+    buzz_alert(pattern, level);
 
     if (was_counting) {
         show_countdown_page();
@@ -493,14 +492,11 @@ static void enter_charge_shutdown(void)
 {
     countdown_active = 0U;
     charge_sleeping = 1U;
-    ble_ignore_until_sleep = 1U;
     motor_off();
     show4(BAND_DEVICE_NAME, "Charging", "System sleeping", "");
     HAL_Delay(800U);
     ssd1306_display_off();
-    e104_bt52_flush_rx(&band.e104);
     e104_bt52_sleep(&band.e104);
-    e104_bt52_flush_rx(&band.e104);
 }
 
 static void leave_charge_shutdown(void)
@@ -508,11 +504,7 @@ static void leave_charge_shutdown(void)
     charge_sleeping = 0U;
     ssd1306_display_on();
     show4(BAND_DEVICE_NAME, "Waking", "BLE resume", "");
-    e104_bt52_flush_rx(&band.e104);
     e104_bt52_wake(&band.e104);
-    e104_bt52_flush_rx(&band.e104);
-    ble_ignore_until_tick = HAL_GetTick() + BLE_RESUME_IGNORE_MS;
-    ble_ignore_until_sleep = 0U;
     if (!ble_band_is_configured(&band)) {
         setup_failed = 0U;
         setup_anim_frame = 0U;
@@ -527,6 +519,11 @@ static void update_charge_state(void)
 {
     uint32_t now = HAL_GetTick();
 
+    if (!AUTO_CHARGE_SHUTDOWN_ENABLED) {
+        (void)update_ext_power_state();
+        return;
+    }
+
     if ((uint32_t)(now - charge_last_check_tick) < CHARGE_CHECK_MS) {
         return;
     }
@@ -534,7 +531,6 @@ static void update_charge_state(void)
 
     if (update_ext_power_state()) {
         if (!charge_sleeping) {
-            ble_ignore_until_sleep = 1U;
             enter_charge_shutdown();
         }
         return;
@@ -600,7 +596,7 @@ void main_app(void)
     button_last_change_tick = HAL_GetTick();
     init_ext_power_state();
 
-    if (ext_power_stable) {
+    if (AUTO_CHARGE_SHUTDOWN_ENABLED && ext_power_stable) {
         charge_last_check_tick = HAL_GetTick();
         enter_charge_shutdown();
     } else {
@@ -618,7 +614,7 @@ void main_app(void)
 
     while (1) {
         update_charge_state();
-        if (charge_sleeping) {
+        if (AUTO_CHARGE_SHUTDOWN_ENABLED && charge_sleeping) {
             HAL_Delay(CHARGE_SLEEP_LOOP_MS);
             continue;
         }

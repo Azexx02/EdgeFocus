@@ -14,7 +14,7 @@ ble_protocol_result_t ble_protocol_parse(const uint8_t *data,
 
     if (len == 1U) {
         message->type = BLE_PROTOCOL_RESULT_ALERT;
-        message->value.alert.pattern = BLE_PROTOCOL_ALERT_SLOW;
+        message->value.alert.pattern = BLE_PROTOCOL_ALERT_LEGACY;
         message->value.alert.level = BLE_PROTOCOL_LEVEL_DEFAULT;
         return message->type;
     }
@@ -35,14 +35,20 @@ ble_protocol_result_t ble_protocol_parse(const uint8_t *data,
             break;
 
         case BLE_PROTOCOL_TYPE_TEXT:
-            message->type = BLE_PROTOCOL_RESULT_TEXT;
-            message->value.text.data = &data[1];
-            message->value.text.len = len - 1U;
-            return message->type;
+            if (len >= 2U) {
+                message->type = BLE_PROTOCOL_RESULT_TEXT;
+                message->value.text.data = &data[1];
+                message->value.text.len = len - 1U;
+                return message->type;
+            }
+            break;
 
         default:
             break;
     }
 
-    return BLE_PROTOCOL_RESULT_IGNORED;
+    message->type = BLE_PROTOCOL_RESULT_ALERT;
+    message->value.alert.pattern = BLE_PROTOCOL_ALERT_LEGACY;
+    message->value.alert.level = BLE_PROTOCOL_LEVEL_DEFAULT;
+    return message->type;
 }

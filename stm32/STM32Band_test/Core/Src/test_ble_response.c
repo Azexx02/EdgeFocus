@@ -26,7 +26,7 @@ static void handle_alert(uint8_t vibration, uint8_t level)
     switch (vibration) {
         case 0x01: // 连续缓慢短震
             for (int i = 0; i < 3; i++) {
-                motor_vibrate(150);
+                motor_vibrate(300);
                 delay_ms(500);
             }
             break;
@@ -35,7 +35,7 @@ static void handle_alert(uint8_t vibration, uint8_t level)
             break;
         case 0x03: // 连续快速短振
             for (int i = 0; i < 3; i++) {
-                motor_vibrate(150);
+                motor_vibrate(300);
                 delay_ms(100);
             }
             break;
