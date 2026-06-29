@@ -49,10 +49,9 @@ static uint8_t ext_power_raw;
 static uint8_t ext_power_stable;
 static uint32_t ext_power_last_change_tick;
 
-static void show4(const char *a, const char *b, const char *c, const char *d);
-static void show_main_page(void);
-static void show_countdown_page(void);
-
+static void show_ascii_cn_ascii(const char *top, ssd1306_cn_phrase_t phrase, const char *bottom);
+static void show_cn_page(ssd1306_cn_phrase_t phrase);
+static void make_battery_line(char *out, size_t out_size);
 static void init_ext_power_state(void)
 {
     ext_power_raw = power_ext_present();
@@ -122,30 +121,33 @@ static void make_battery_line(char *out, size_t out_size)
 static void show_main_page(void)
 {
     char battery_line[16] = {0};
+    ssd1306_cn_phrase_t state_phrase;
+
     make_battery_line(battery_line, sizeof(battery_line));
 
     switch (ble_band_state(&band)) {
         case BLE_BAND_STATE_CONNECTED:
-            show4(BAND_DEVICE_NAME, "BLE Connected", battery_line, "Waiting signal");
+            state_phrase = SSD1306_CN_CONNECTED;
             break;
         case BLE_BAND_STATE_ADVERTISING:
-            show4(BAND_DEVICE_NAME, "BLE Advertising", battery_line, "Waiting link");
+            state_phrase = SSD1306_CN_ADVERTISING;
             break;
         default:
-            show4(BAND_DEVICE_NAME, "BLE Offline", battery_line, "E104 not ready");
+            state_phrase = SSD1306_CN_OFFLINE;
             break;
     }
+    show_ascii_cn_ascii(BAND_DEVICE_NAME, state_phrase, battery_line);
 }
 
-static const char *ble_status_text(void)
+static ssd1306_cn_phrase_t ble_status_phrase(void)
 {
     switch (ble_band_state(&band)) {
         case BLE_BAND_STATE_CONNECTED:
-            return "BLE Connected";
+            return SSD1306_CN_CONNECTED;
         case BLE_BAND_STATE_ADVERTISING:
-            return "BLE Advertising";
+            return SSD1306_CN_ADVERTISING;
         default:
-            return "BLE Offline";
+            return SSD1306_CN_OFFLINE;
     }
 }
 
@@ -153,34 +155,29 @@ static void show_countdown_page(void)
 {
     char battery_line[16] = {0};
     make_battery_line(battery_line, sizeof(battery_line));
-    ssd1306_show_countdown_status(countdown_seconds, ble_status_text(), battery_line);
+    ssd1306_show_countdown_status_cn(countdown_seconds, ble_status_phrase());
 }
 
-static void show_line(uint8_t row, const char *text)
-{
-    char buf[22];
-    size_t n = strlen(text);
-
-    if (n > 21U) {
-        n = 21U;
-    }
-    memcpy(buf, text, n);
-    buf[n] = '\0';
-    ssd1306_draw_string(row, 0, buf);
-}
-
-static void show4(const char *a, const char *b, const char *c, const char *d)
+static void show_ascii_cn_ascii(const char *top, ssd1306_cn_phrase_t phrase, const char *bottom)
 {
     if (!display_enabled) {
         return;
     }
 
     ssd1306_clear();
-    show_line(0, a);
-    show_line(1, b);
-    show_line(2, c);
-    show_line(3, d);
+    if (top != NULL) {
+        ssd1306_draw_string(0, 0, top);
+    }
+    ssd1306_draw_cn_phrase_center(1, phrase);
+    if (bottom != NULL) {
+        ssd1306_draw_string(3, 0, bottom);
+    }
     ssd1306_update();
+}
+
+static void show_cn_page(ssd1306_cn_phrase_t phrase)
+{
+    show_ascii_cn_ascii(BAND_DEVICE_NAME, phrase, "");
 }
 
 static void set_display_enabled(uint8_t enabled)
@@ -245,7 +242,7 @@ static void show_setup_progress(void)
         "....",
     };
 
-    show4(BAND_DEVICE_NAME, "Linking host", dots[setup_anim_frame], "Please wait");
+    show_ascii_cn_ascii(BAND_DEVICE_NAME, SSD1306_CN_LINKING_HOST, dots[setup_anim_frame]);
     setup_anim_frame = (uint8_t)((setup_anim_frame + 1U) % 4U);
 }
 
@@ -256,21 +253,16 @@ static void on_config_step(const char *cmd,
                            void *user)
 {
     char resp[22];
-    const char *status;
     (void)user;
 
     if (result == BLE_BAND_OK) {
         show_setup_progress();
         return;
-    } else if (result == BLE_BAND_E104_ERROR) {
-        status = "uart/timeout";
-    } else {
-        status = "bad reply";
     }
 
     setup_failed = 1U;
     bytes_to_ascii(response, response_len, resp, sizeof(resp));
-    show4("BLE setup failed", cmd, status, resp);
+    show_ascii_cn_ascii(cmd, (result == BLE_BAND_E104_ERROR) ? SSD1306_CN_UART_TIMEOUT : SSD1306_CN_BAD_REPLY, resp);
 }
 
 static void buzz_alert(uint8_t pattern, uint8_t level)
@@ -307,7 +299,7 @@ static void buzz_alert(uint8_t pattern, uint8_t level)
 static void on_alert(uint8_t pattern, uint8_t level, void *user)
 {
     char line[8];
-    const char *message;
+    ssd1306_cn_phrase_t message;
     (void)user;
     uint8_t was_counting = countdown_active;
 
@@ -326,16 +318,16 @@ static void on_alert(uint8_t pattern, uint8_t level, void *user)
     line[7] = '\0';
 
     if (level >= 4U) {
-        message = "Take a rest";
+        message = SSD1306_CN_REST;
     } else if (level >= 3U) {
-        message = "Focus warning";
+        message = SSD1306_CN_FOCUS_WARNING;
     } else if (level >= 2U) {
-        message = "Attention";
+        message = SSD1306_CN_ATTENTION;
     } else {
-        message = "Gentle remind";
+        message = SSD1306_CN_GENTLE;
     }
 
-    show4("BLE Alert", line, message, "motor active");
+    show_ascii_cn_ascii(line, message, "");
     buzz_alert(pattern, level);
 
     if (was_counting) {
@@ -374,7 +366,7 @@ static void on_text(const uint8_t *data, size_t len, void *user)
     }
     memcpy(line, data, n);
     line[n] = '\0';
-    show4("BLE Text", line, "", "");
+    show_ascii_cn_ascii("TEXT", SSD1306_CN_ALERT, line);
     HAL_Delay(1500U);
     if (was_counting) {
         show_countdown_page();
@@ -423,7 +415,7 @@ static void enter_charge_shutdown(void)
     countdown_active = 0U;
     charge_sleeping = 1U;
     motor_off();
-    show4(BAND_DEVICE_NAME, "Charging", "System sleeping", "");
+    show_cn_page(SSD1306_CN_CHARGING);
     HAL_Delay(800U);
     ssd1306_display_off();
     e104_bt52_sleep(&band.e104);
@@ -433,7 +425,7 @@ static void leave_charge_shutdown(void)
 {
     charge_sleeping = 0U;
     ssd1306_display_on();
-    show4(BAND_DEVICE_NAME, "Waking", "BLE resume", "");
+    show_cn_page(SSD1306_CN_WAKING);
     e104_bt52_wake(&band.e104);
     if (!ble_band_is_configured(&band)) {
         setup_failed = 0U;
@@ -489,7 +481,7 @@ static void on_error(ble_band_result_t error, void *user)
     if (setup_failed) {
         return;
     }
-    show4("BLE Error", "setup failed", "check OLED log", "");
+    show_ascii_cn_ascii(BAND_DEVICE_NAME, SSD1306_CN_BLE_ERROR, "");
 }
 
 static void run_manual_ble_setup(void)
@@ -506,7 +498,7 @@ static void run_manual_ble_setup(void)
     countdown_active = 0U;
     setup_failed = 0U;
     setup_anim_frame = 0U;
-    show4("BLE manual setup", "Restarting", "E104 config", "");
+    show_ascii_cn_ascii(BAND_DEVICE_NAME, SSD1306_CN_MANUAL_SETUP, "");
     HAL_Delay(400U);
     show_setup_progress();
 
