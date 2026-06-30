@@ -26,6 +26,7 @@ public:
     SessionController(SystemStateStore& store, SQLiteStore& sqlite_store);
 
     StartResult startSession(int target_duration_min, const std::string& source);
+    bool skipPrecheck(const std::string& reason);
     bool pauseSession(const std::string& reason);
     bool resumeSession(const std::string& reason);
     EndResult endSession(const std::string& reason);

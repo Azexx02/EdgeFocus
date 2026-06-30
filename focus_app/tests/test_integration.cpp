@@ -899,12 +899,15 @@ void test_session_controller_lifecycle_and_recovery() {
     CHECK(start.session.active, "SessionController start returns active session");
     CHECK(start.session.target_duration_ms == 25 * 60000, "SessionController start stores target duration");
     CHECK(start.session.calibration_completed == false, "SessionController start leaves calibration incomplete");
+    CHECK(controller.skipPrecheck("integration_skip"), "SessionController skip precheck succeeds");
 
     SessionInfo pre_pause = store.snapshot().session;
     pre_pause.start_ms = store.snapshot().snapshot_ms - 5000;
     pre_pause.elapsed_ms = 0;
     pre_pause.target_duration_ms = 25 * 60000;
     pre_pause.remaining_ms = pre_pause.target_duration_ms;
+    pre_pause.calibration_completed = true;
+    pre_pause.calibrating = false;
     store.updateSession(pre_pause);
 
     CHECK(controller.pauseSession("integration_pause"), "SessionController pause succeeds");
@@ -919,6 +922,8 @@ void test_session_controller_lifecycle_and_recovery() {
     CHECK(resumed_snap.session.active == true, "SessionController resume keeps session active");
     CHECK(resumed_snap.session.paused == false, "SessionController resume clears pause");
     CHECK(resumed_snap.session.session_id == start.session.session_id, "SessionController resume preserves session_id");
+    CHECK(deriveSessionPhase(resumed_snap.session) == SessionPhase::FOCUSING,
+          "SessionController resume returns to focusing after precheck was skipped");
 
     SessionInfo s = store.snapshot().session;
     s.elapsed_ms = 90000;
@@ -1008,6 +1013,55 @@ void test_session_controller_end_refreshes_stale_elapsed() {
     CHECK(ended.report.total_duration >= 4, "Stale elapsed is refreshed to avoid zero-length report");
     CHECK(ended.report.session_id == s.session_id, "Ended report keeps session_id");
     CHECK(store.snapshot().session.active == false, "Session ends inactive");
+}
+
+void test_session_controller_precheck_does_not_count_as_focus_time() {
+    std::cout << "\n[Test 13.7] SessionController precheck does not count as focus time\n";
+
+    SystemStateStore store;
+    SQLiteStore sqlite(":memory:");
+    AppContext ctx;
+    sqlite.init(ctx);
+
+    SessionController controller(store, sqlite);
+    auto start = controller.startSession(1, "test_precheck_time");
+    CHECK(start.success, "Precheck timing test starts session");
+
+    auto snap = store.snapshot();
+    SessionInfo s = snap.session;
+    s.start_ms = std::max<int64_t>(0, snap.snapshot_ms - 55000);
+    s.elapsed_ms = 0;
+    s.remaining_ms = s.target_duration_ms;
+    s.calibration_completed = false;
+    s.calibrating = true;
+    store.updateSession(s);
+
+    CHECK(controller.pauseSession("precheck_pause"), "Precheck pause succeeds");
+    auto paused = store.snapshot();
+    CHECK(paused.session.paused == true, "Precheck pause marks paused");
+    CHECK(paused.session.elapsed_ms == 0, "Precheck pause keeps elapsed at zero");
+    CHECK(paused.session.remaining_ms == paused.session.target_duration_ms,
+          "Precheck pause keeps full remaining time");
+
+    CHECK(controller.resumeSession("precheck_resume"), "Precheck resume succeeds");
+    auto resumed = store.snapshot();
+    CHECK(resumed.session.paused == false, "Precheck resume clears paused");
+    CHECK(resumed.session.calibration_completed == false, "Precheck resume stays before calibration skip");
+    CHECK(deriveSessionPhase(resumed.session) == SessionPhase::PRECHECK,
+          "Precheck resume returns to PRECHECK phase");
+    CHECK(resumed.focus_state == FocusState::CALIBRATING, "Precheck resume restores CALIBRATING focus state");
+
+    SessionInfo old_precheck = store.snapshot().session;
+    old_precheck.start_ms = std::max<int64_t>(0, store.snapshot().snapshot_ms - 56000);
+    old_precheck.elapsed_ms = 0;
+    old_precheck.remaining_ms = old_precheck.target_duration_ms;
+    store.updateSession(old_precheck);
+
+    auto ended = controller.endSession("precheck_end");
+    CHECK(ended.success, "Precheck end succeeds");
+    CHECK(ended.report.total_duration == 0, "Precheck end reports zero focus session duration");
+    CHECK(ended.report.focus_duration == 0, "Precheck end reports zero focus duration");
+    CHECK(store.snapshot().today.total_seconds == 0, "Precheck end does not add waiting time to today total");
 }
 
 // ============================================================================
@@ -1274,6 +1328,7 @@ int main() {
     test_session_controller_lifecycle_and_recovery();
     test_session_controller_end_focus_accumulation();
     test_session_controller_end_refreshes_stale_elapsed();
+    test_session_controller_precheck_does_not_count_as_focus_time();
     test_phone_signal_updates_focus_state_immediately();
     test_distraction_count_is_episode_based();
     test_behavior_updates_frame_quality_snapshot();

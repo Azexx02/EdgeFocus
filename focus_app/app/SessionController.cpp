@@ -66,6 +66,33 @@ SessionController::StartResult SessionController::startSession(int target_durati
     return result;
 }
 
+bool SessionController::skipPrecheck(const std::string& reason) {
+    auto snap = store_.snapshot();
+    if (!snap.session.active) {
+        LOGW("SessionController", "Skip precheck failed: no active session");
+        return false;
+    }
+    if (snap.session.calibration_completed) {
+        LOGI("SessionController", "Skip precheck ignored: already focusing");
+        return true;
+    }
+
+    const int64_t now_ms = monotonicMs();
+    SessionInfo s = snap.session;
+    s.paused = false;
+    s.calibrating = false;
+    s.calibration_completed = true;
+    s.start_ms = now_ms;
+    s.elapsed_ms = 0;
+    s.remaining_ms = s.target_duration_ms;
+    store_.updateSession(s);
+    store_.updateFocusState(FocusState::FOCUSED, now_ms, reason);
+    store_.notifySessionChange();
+    LOGI("SessionController", "Session precheck skipped: %s reason=%s",
+         s.session_id.c_str(), reason.c_str());
+    return true;
+}
+
 bool SessionController::pauseSession(const std::string& reason) {
     auto snap = store_.snapshot();
     if (!snap.session.active) {
@@ -79,7 +106,10 @@ bool SessionController::pauseSession(const std::string& reason) {
 
     const int64_t now_ms = monotonicMs();
     SessionInfo s = snap.session;
-    if (s.start_ms > 0) {
+    if (!s.calibration_completed) {
+        s.elapsed_ms = 0;
+        s.remaining_ms = s.target_duration_ms;
+    } else if (s.start_ms > 0) {
         s.elapsed_ms = now_ms - s.start_ms;
         if (s.elapsed_ms < 0) s.elapsed_ms = 0;
         if (s.target_duration_ms > 0) {
@@ -109,9 +139,16 @@ bool SessionController::resumeSession(const std::string& reason) {
     int64_t now_ms = monotonicMs();
     SessionInfo s = snap.session;
     s.paused = false;
-    s.start_ms = now_ms - s.elapsed_ms;
+    if (!s.calibration_completed) {
+        s.elapsed_ms = 0;
+        s.remaining_ms = s.target_duration_ms;
+        s.start_ms = now_ms;
+    } else {
+        s.start_ms = now_ms - s.elapsed_ms;
+    }
     store_.updateSession(s);
-    store_.updateFocusState(FocusState::FOCUSED, now_ms, reason);
+    store_.updateFocusState(s.calibration_completed ? FocusState::FOCUSED : FocusState::CALIBRATING,
+                            now_ms, reason);
     store_.notifySessionChange();
     LOGI("SessionController", "Session resumed: %s reason=%s", s.session_id.c_str(), reason.c_str());
     return true;
@@ -127,7 +164,10 @@ SessionController::EndResult SessionController::endSession(const std::string& re
     }
 
     SessionInfo s = snap.session;
-    if (!s.paused && s.start_ms > 0 && s.elapsed_ms <= 0) {
+    if (!s.calibration_completed) {
+        s.elapsed_ms = 0;
+        s.remaining_ms = s.target_duration_ms;
+    } else if (!s.paused && s.start_ms > 0 && s.elapsed_ms <= 0) {
         const int64_t refreshed_elapsed = monotonicMs() - s.start_ms;
         s.elapsed_ms = std::max<int64_t>(0, refreshed_elapsed);
     }

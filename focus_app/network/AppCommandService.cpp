@@ -339,6 +339,19 @@ std::string AppCommandService::handleSessionControl(const json& data, int req_id
         };
         return makeResponse(req_id, resp);
 
+    } else if (action == "skip_precheck" || action == "skip_calibration") {
+        if (!snap.session.active) {
+            json resp = {{"success", false}, {"message", "No active session"}};
+            return makeResponse(req_id, resp);
+        }
+        SessionController controller(store_, sqlite_store_);
+        bool ok = controller.skipPrecheck("app_skip_precheck");
+        auto after = store_.snapshot();
+        json resp = sessionStateData(after);
+        resp["success"] = ok;
+        store_.pushEvent(makePush("push_state", sessionStateData(after)));
+        return makeResponse(req_id, resp);
+
     } else if (action == "pause") {
         if (!snap.session.active || snap.session.paused) {
             json resp = {{"success", false}, {"message", "No active session to pause"}};

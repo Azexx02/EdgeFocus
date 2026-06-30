@@ -137,13 +137,13 @@ int main() {
         assertSuccess(precheck_state, 49);
         assert(precheck_state["data"]["session_phase"] == "precheck");
 
-        SessionInfo running = snap.session;
-        running.calibrating = false;
-        running.calibration_completed = true;
-        running.start_ms = snap.snapshot_ms;
-        running.elapsed_ms = 0;
-        running.remaining_ms = running.target_duration_ms;
-        store.updateSession(running);
+        json skip_resp = parseResponse(server.handleCommand(
+            R"({"cmd":"session_control","id":51,"data":{"action":"skip_precheck"}})"));
+        assertSuccess(skip_resp, 51);
+        assert(skip_resp["data"]["success"] == true);
+        assert(skip_resp["data"]["session_phase"] == "focusing");
+        assert(skip_resp["data"]["calibration_completed"] == true);
+        assert(skip_resp["data"]["elapsed_ms"] == 0);
 
         json focused_state = parseResponse(server.handleCommand(
             R"({"cmd":"get_current_state","id":50})"));
