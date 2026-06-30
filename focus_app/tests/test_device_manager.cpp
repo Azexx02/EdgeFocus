@@ -4,6 +4,8 @@
 #include "app/SystemStateStore.h"
 #include "policy/InterventionCommand.h"
 #include <cassert>
+#include <cstdio>
+#include <fstream>
 #include <iostream>
 #include <string>
 
@@ -143,6 +145,30 @@ void test_sound_action_uses_sound_channel() {
     dev_mgr.shutdown(ctx);
 }
 
+void test_sound_controller_generates_short_tone_wav() {
+    const std::string path = "/tmp/edgefocus_test_reminder_tone.wav";
+    std::remove(path.c_str());
+
+    const bool generated = SoundController::ensureReminderToneFile(path);
+    assert(generated);
+
+    std::ifstream in(path, std::ios::binary);
+    assert(in.good());
+    std::string header(44, '\0');
+    in.read(&header[0], static_cast<std::streamsize>(header.size()));
+    assert(in.gcount() == static_cast<std::streamsize>(header.size()));
+    assert(header.substr(0, 4) == "RIFF");
+    assert(header.substr(8, 4) == "WAVE");
+    assert(header.substr(12, 4) == "fmt ");
+    assert(header.substr(36, 4) == "data");
+    in.seekg(0, std::ios::end);
+    const auto size = in.tellg();
+    assert(size > 44);
+    assert(size < 20000);
+
+    std::remove(path.c_str());
+}
+
 int main() {
     SoundController::setPlaybackEnabledForTests(false);
     test_device_manager_queue();
@@ -150,6 +176,7 @@ int main() {
     test_action_queue_issue_band_updates_device_status();
     test_rest_suggestion_is_clamped_for_band_alert();
     test_sound_action_uses_sound_channel();
+    test_sound_controller_generates_short_tone_wav();
     std::cout << "All DeviceManager tests passed!\n";
     return 0;
 }

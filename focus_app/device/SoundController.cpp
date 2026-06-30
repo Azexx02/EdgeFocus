@@ -1,7 +1,9 @@
 #include "SoundController.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
+#include <cstdint>
 #include <fstream>
 #include <cctype>
 #include <string>
@@ -14,6 +16,16 @@ namespace {
 bool isRegularFile(const std::string& path) {
     std::ifstream fs(path);
     return fs.is_open();
+}
+
+void writeLe16(std::ofstream& out, std::uint16_t value) {
+    out.put(static_cast<char>(value & 0xff));
+    out.put(static_cast<char>((value >> 8) & 0xff));
+}
+
+void writeLe32(std::ofstream& out, std::uint32_t value) {
+    writeLe16(out, static_cast<std::uint16_t>(value & 0xffff));
+    writeLe16(out, static_cast<std::uint16_t>((value >> 16) & 0xffff));
 }
 
 bool envVarMeansDisabled(const std::string& value) {
@@ -100,6 +112,61 @@ std::string SoundController::mixerPrefix(int volume_percent) {
 #endif
 }
 
+bool SoundController::ensureReminderToneFile(const std::string& path) {
+#if defined(__linux__)
+    if (isRegularFile(path)) {
+        return true;
+    }
+
+    constexpr int kSampleRate = 16000;
+    constexpr int kDurationMs = 180;
+    constexpr int kFrequencyHz = 1200;
+    constexpr double kAmplitude = 0.35;
+    constexpr int kSamples = kSampleRate * kDurationMs / 1000;
+    constexpr int kChannels = 1;
+    constexpr int kBitsPerSample = 16;
+    constexpr int kBlockAlign = kChannels * kBitsPerSample / 8;
+    constexpr int kByteRate = kSampleRate * kBlockAlign;
+    constexpr std::uint32_t kDataSize = kSamples * kBlockAlign;
+    constexpr std::uint32_t kRiffSize = 36 + kDataSize;
+
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    if (!out.is_open()) {
+        LOGW("SoundController", "Failed to create reminder tone file: %s", path.c_str());
+        return false;
+    }
+
+    out.write("RIFF", 4);
+    writeLe32(out, kRiffSize);
+    out.write("WAVE", 4);
+    out.write("fmt ", 4);
+    writeLe32(out, 16);
+    writeLe16(out, 1);
+    writeLe16(out, kChannels);
+    writeLe32(out, kSampleRate);
+    writeLe32(out, kByteRate);
+    writeLe16(out, kBlockAlign);
+    writeLe16(out, kBitsPerSample);
+    out.write("data", 4);
+    writeLe32(out, kDataSize);
+
+    constexpr double kTwoPi = 6.28318530717958647692;
+    for (int i = 0; i < kSamples; ++i) {
+        const double phase = kTwoPi * static_cast<double>(kFrequencyHz) *
+                             static_cast<double>(i) / static_cast<double>(kSampleRate);
+        const double envelope = std::min(1.0, std::min(i / 240.0, (kSamples - i) / 240.0));
+        const auto sample = static_cast<std::int16_t>(
+            std::sin(phase) * kAmplitude * envelope * 32767.0);
+        writeLe16(out, static_cast<std::uint16_t>(sample));
+    }
+
+    return out.good();
+#else
+    (void)path;
+    return false;
+#endif
+}
+
 void SoundController::playReminderSoundAsync(int volume_percent) {
 #if defined(__linux__)
     if (!hasAlsaPlaybackDevice()) {
@@ -107,8 +174,8 @@ void SoundController::playReminderSoundAsync(int volume_percent) {
         return;
     }
     const std::string volume_prefix = mixerPrefix(volume_percent);
-    const std::string sample = "/usr/share/sounds/alsa/Front_Center.wav";
-    if (isRegularFile(sample) && hasCommand("aplay")) {
+    const std::string sample = "/tmp/edgefocus_reminder_tone.wav";
+    if (ensureReminderToneFile(sample) && hasCommand("aplay")) {
         if (launchCommand(volume_prefix + "aplay -q " + sample + " >/dev/null 2>&1 &")) {
             LOGI("SoundController", "Played reminder sound via aplay (volume=%d%%)", volume_percent);
             return;

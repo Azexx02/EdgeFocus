@@ -14,6 +14,9 @@ public:
     static bool playbackEnabledForTests();
     static void setPlaybackEnabledForTests(bool enabled);
 
+    /// Ensure a short non-speech WAV reminder tone exists at path.
+    static bool ensureReminderToneFile(const std::string& path);
+
     /// Trigger a short reminder sound asynchronously.
     void playReminderSound(float volume);
 
