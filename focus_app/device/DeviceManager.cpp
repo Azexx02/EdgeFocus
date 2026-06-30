@@ -8,9 +8,6 @@ DeviceManager::DeviceManager(SystemStateStore& store) : Module("DeviceManager"),
 
 bool DeviceManager::init(AppContext& /*ctx*/) {
     LOGI("DeviceManager", "Init DeviceManager");
-    // Unblock bluetooth and bring up adapter for SimpleBLE
-    system("rfkill unblock bluetooth 2>/dev/null");
-    system("hciconfig hci0 up 2>/dev/null");
     return true;
 }
 
@@ -18,7 +15,11 @@ bool DeviceManager::issueCommand(const InterventionCommand& cmd) {
     return command_queue_.push(cmd);
 }
 
-void DeviceManager::runOnce(AppContext& ctx) {
+bool DeviceManager::issueAction(const DeviceAction& action) {
+    return action_queue_.push(action);
+}
+
+void DeviceManager::runOnce(AppContext& /*ctx*/) {
     auto now = std::chrono::steady_clock::now();
 
     // Sync BLE state from store
@@ -29,22 +30,10 @@ void DeviceManager::runOnce(AppContext& ctx) {
         ble_ctrl_.stopConnection();
     }
 
-    if (auto opt_cmd = command_queue_.tryPop()) {
-        const auto& cmd = *opt_cmd;
-        LOGI("DeviceManager", "Executing command level: %d, message: %s",
-             static_cast<int>(cmd.level), cmd.message.c_str());
-
-        if (cmd.level == CommandLevel::LEVEL_1) {
-            // Light notification: screen flash only
-            screen_ctrl_.flashScreen();
-        } else if (cmd.level == CommandLevel::LEVEL_2) {
-            screen_ctrl_.flashScreen();
-        } else if (cmd.level == CommandLevel::LEVEL_3) {
-            screen_ctrl_.flashScreen();
-            ble_ctrl_.sendAlert(static_cast<uint8_t>(cmd.level));
-        } else if (cmd.level == CommandLevel::REST_SUGGESTION) {
-            screen_ctrl_.flashScreen();
-        }
+    if (auto action = action_queue_.tryPop()) {
+        executeAction(*action);
+    } else if (auto cmd = command_queue_.tryPop()) {
+        executeCommand(*cmd);
     }
 
     // Update connection status only (never overwrite ble_enabled)
@@ -52,8 +41,11 @@ void DeviceManager::runOnce(AppContext& ctx) {
     if (now - last_status_update > std::chrono::seconds(3)) {
         last_status_update = now;
         DeviceStatus status = store_.snapshot().device;
-        status.camera_ok = true;
         status.bracelet_connected = status.ble_enabled && ble_ctrl_.isConnected();
+        status.band_last_alert_level = ble_ctrl_.lastAlertLevel();
+        status.band_last_alert_pattern = ble_ctrl_.lastAlertPattern();
+        status.band_write_attempt_count = ble_ctrl_.writeAttemptCount();
+        status.band_last_write_status = ble_ctrl_.lastWriteStatus();
         store_.updateDeviceStatus(status);
     }
 
@@ -61,7 +53,45 @@ void DeviceManager::runOnce(AppContext& ctx) {
 }
 
 void DeviceManager::shutdown(AppContext& /*ctx*/) {
+    ble_ctrl_.stopConnection();
     LOGI("DeviceManager", "Shutdown");
+}
+
+void DeviceManager::executeCommand(const InterventionCommand& cmd) {
+    LOGI("DeviceManager", "Executing command level: %d, message: %s",
+         static_cast<int>(cmd.level), cmd.message.c_str());
+
+    if (cmd.level == CommandLevel::LEVEL_1 || cmd.level == CommandLevel::REST_SUGGESTION) {
+        executeAction({NotificationChannel::SCREEN, cmd.level});
+    } else if (cmd.level == CommandLevel::LEVEL_2 || cmd.level == CommandLevel::LEVEL_3) {
+        executeAction({NotificationChannel::SCREEN, cmd.level});
+        executeAction({NotificationChannel::BAND, cmd.level});
+    }
+}
+
+void DeviceManager::executeAction(const DeviceAction& action) {
+    ++executed_command_count_;
+    last_executed_level_ = action.level;
+
+    if (action.channel == NotificationChannel::BAND) {
+        uint8_t alert_level = static_cast<uint8_t>(action.level);
+        if (alert_level < 1) alert_level = 1;
+        if (alert_level > 3) alert_level = 3;
+        ble_ctrl_.sendAlert(alert_level);
+    } else {
+        screen_ctrl_.flashScreen();
+        if (action.channel == NotificationChannel::SOUND || action.channel == NotificationChannel::LIGHT) {
+            // Host-side observability path keeps behavior consistent with screen flash.
+        }
+    }
+
+    // Update band diagnostics for visibility in push/state snapshots.
+    DeviceStatus status = store_.snapshot().device;
+    status.band_last_alert_level = ble_ctrl_.lastAlertLevel();
+    status.band_last_alert_pattern = ble_ctrl_.lastAlertPattern();
+    status.band_write_attempt_count = ble_ctrl_.writeAttemptCount();
+    status.band_last_write_status = ble_ctrl_.lastWriteStatus();
+    store_.updateDeviceStatus(status);
 }
 
 } // namespace edgefocus

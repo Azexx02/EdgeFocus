@@ -36,6 +36,7 @@ public:
 private:
     VisionResult buildResult(const CameraFrame& frame, const FrameQuality& quality, const ModelInference& inference) const;
     ModelInference runBestAdapter(const CameraFrame& frame, const FrameQualityMetrics& metrics);
+    bool ensureRealAdapterLoaded();
 
     FrameQueue& frame_queue_;
     ResultQueue& result_queue_;
@@ -44,6 +45,8 @@ private:
     std::unique_ptr<ModelAdapter> real_adapter_;
     std::unique_ptr<ModelAdapter> fallback_adapter_;
     VisionRuntimeMode mode_ = VisionRuntimeMode::AUTO;
+    bool real_adapter_attempted_ = false;
+    bool real_adapter_loaded_ = false;
     int64_t processed_frames_ = 0;
     int64_t dropped_results_ = 0;
 };

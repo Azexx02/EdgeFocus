@@ -74,6 +74,7 @@ int main(int argc, char* argv[]) {
     DeviceStatus dev_status;
     dev_status.system_mode = SystemMode::NORMAL;
     dev_status.camera_ok = false;
+    dev_status.ble_enabled = true;
     store.updateDeviceStatus(dev_status);
 
     // Inter-module queues (W03: vision -> behavior data contract)
@@ -100,7 +101,7 @@ int main(int argc, char* argv[]) {
 
     // Create BLE GATT Server
     auto ble_server = std::make_unique<BleGattServer>(store, sqlite_store, reminder_policy,
-                                                       reminder_policy.getModeManager(), report_gen);
+                                                       reminder_policy.getModeManager());
     ctx.addModule(std::move(ble_server));
 
     auto ui_mgr = std::make_unique<UIManager>(store);

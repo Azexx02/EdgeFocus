@@ -171,7 +171,6 @@ ModelInference StaiMpuPoseAdapter::infer(const CameraFrame& frame, const FrameQu
 
     float* outputs = static_cast<float*>(impl_->wrapper.m_stai_mpu_model->get_output(0));
     const auto detections = nn_postproc::postprocessyolov8_pose(outputs, impl_->confidence_threshold, impl_->iou_threshold);
-    free(outputs);
 
     out.ran_model = true;
     out.inference_time_ms = out.inference_time_ms > 0.0f ? out.inference_time_ms : static_cast<float>(nowMs() - start);

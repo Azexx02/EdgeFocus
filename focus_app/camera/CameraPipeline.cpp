@@ -3,6 +3,8 @@
 
 #include <chrono>
 #include <cstdlib>
+#include <memory>
+#include <string>
 #include <sstream>
 #include <thread>
 
@@ -40,6 +42,25 @@ std::vector<int> parseCandidates(const char* value) {
     return candidates;
 }
 
+bool envEnabled(const char* value) {
+    if (!value) return false;
+    std::string text(value);
+    return text == "1" || text == "true" || text == "TRUE" || text == "on" || text == "ON";
+}
+
+std::string getenvString(const char* key) {
+#ifdef _WIN32
+    char* value = nullptr;
+    size_t len = 0;
+    if (_dupenv_s(&value, &len, key) != 0 || !value) return "";
+    std::unique_ptr<char, decltype(&std::free)> holder(value, &std::free);
+    return std::string(value);
+#else
+    const char* value = std::getenv(key);
+    return value ? std::string(value) : std::string();
+#endif
+}
+
 } // namespace
 
 struct CameraPipeline::Impl {
@@ -57,13 +78,27 @@ CameraPipeline::~CameraPipeline() = default;
 bool CameraPipeline::init(AppContext& /*ctx*/) {
     captured_frames_ = 0;
     dropped_frames_ = 0;
+    next_open_attempt_ms_ = 0;
     // Camera opens on-demand when session starts
-    LOGI("CameraPipeline", "Initialized (camera will open on session start)");
+    if (cameraDisabled()) {
+        DeviceStatus status = store_.snapshot().device;
+        status.camera_ok = false;
+        store_.updateDeviceStatus(status);
+        LOGW("CameraPipeline", "Initialized with camera disabled by EDGEFOCUS_CAMERA_DISABLED");
+    } else {
+        LOGI("CameraPipeline", "Initialized (camera will open on session start)");
+    }
     return true;
 }
 
+bool CameraPipeline::cameraDisabled() const {
+    const std::string disabled = getenvString("EDGEFOCUS_CAMERA_DISABLED");
+    return envEnabled(disabled.empty() ? nullptr : disabled.c_str());
+}
+
 std::vector<int> CameraPipeline::cameraCandidates() const {
-    return parseCandidates(std::getenv("EDGEFOCUS_CAMERA_CANDIDATES"));
+    const std::string candidates = getenvString("EDGEFOCUS_CAMERA_CANDIDATES");
+    return parseCandidates(candidates.empty() ? nullptr : candidates.c_str());
 }
 
 bool CameraPipeline::openCamera() {
@@ -133,12 +168,47 @@ void CameraPipeline::runOnce(AppContext& ctx) {
     }
 
     // --- ACTIVE: session is running ---
+    if (cameraDisabled()) {
+        if (camera_opened_) {
+            closeCamera();
+            camera_opened_ = false;
+        }
+        DeviceStatus status = snap.device;
+        if (status.camera_ok) {
+            status.camera_ok = false;
+            store_.updateDeviceStatus(status);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        return;
+    }
+
+    // --- ACTIVE but paused: freeze capture without cycling the OpenCV backend.
+    // Some board GStreamer/V4L2 pipelines are fragile when repeatedly released
+    // and reopened; pausing only needs to stop frame production.
+    if (snap.session.paused) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        return;
+    }
+
     if (!camera_opened_) {
-        if (!openCamera()) {
-            LOGW("CameraPipeline", "Cannot open camera, sleeping");
+        const int64_t now = nowMs();
+        if (now < next_open_attempt_ms_) {
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
             return;
         }
+        if (!openCamera()) {
+            DeviceStatus status = snap.device;
+            status.camera_ok = false;
+            store_.updateDeviceStatus(status);
+            next_open_attempt_ms_ = nowMs() + 15000;
+            LOGW("CameraPipeline", "Cannot open camera, retrying later");
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            return;
+        }
+        DeviceStatus status = snap.device;
+        status.camera_ok = true;
+        store_.updateDeviceStatus(status);
+        next_open_attempt_ms_ = 0;
         camera_opened_ = true;
     }
 

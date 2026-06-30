@@ -28,7 +28,7 @@ namespace wrapper_stai_mpu{
 
 	/* Wrapper configuration structure */
 	struct Config {
-		bool verbose;
+		bool verbose = false;
 		int number_of_threads = 2;
 		int number_of_results = 5;
 		std::string model_name;
@@ -62,7 +62,12 @@ namespace wrapper_stai_mpu{
 			std::unique_ptr<stai_mpu_network>            m_stai_mpu_model;
 			std::vector<stai_mpu_tensor>				 m_output_infos;
 
-			stai_mpu_wrapper() {}
+			stai_mpu_wrapper() : m_input_tensor_int(nullptr), m_input_tensor_f(nullptr) {}
+			~stai_mpu_wrapper()
+			{
+				delete[] m_input_tensor_int;
+				delete[] m_input_tensor_f;
+			}
 
 		/* STAI Mpu Wrapper initialization */
 		void Initialize(Config* conf)

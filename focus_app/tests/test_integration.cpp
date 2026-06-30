@@ -10,7 +10,9 @@
  * 6. ReportGenerator → SystemStateStore → ReviewPage (SessionReport fields)
  */
 #include "app/SystemStateStore.h"
+#include "app/SessionController.h"
 #include "app/AppContext.h"
+#include "app/SessionPhase.h"
 #include "storage/SQLiteStore.h"
 #include "storage/ReportGenerator.h"
 #include "behavior/FocusStateMachine.h"
@@ -19,13 +21,17 @@
 #include "policy/ModeManager.h"
 #include "device/DeviceManager.h"
 #include "network/BleGattServer.h"
+#include "ui/StatusPage.h"
+#include "ui/UIManager.h"
 #include "vision/VisionResult.h"
 #include <iostream>
 #include <cassert>
 #include <string>
 #include <sstream>
+#include <nlohmann/json.hpp>
 
 using namespace edgefocus;
+using json = nlohmann::json;
 
 int tests_passed = 0;
 int tests_failed = 0;
@@ -39,6 +45,42 @@ int tests_failed = 0;
         tests_passed++; \
     } \
 } while(0)
+
+void setBehaviorContext(SystemStateStore& store, int level, int risk = 70) {
+    BehaviorContext ctx;
+    ctx.phone_signal = true;
+    ctx.vision_signal = false;
+    ctx.phone_distraction_level = level;
+    ctx.phone_usage_state = 1;
+    ctx.risk_score = risk;
+    ctx.reason = "integration";
+    store.updateBehaviorContext(ctx);
+}
+
+void test_session_phase_helper() {
+    std::cout << "\n[Test 0] Session phase helper\n";
+
+    SessionInfo inactive;
+    CHECK(deriveSessionPhase(inactive) == SessionPhase::IDLE, "inactive session => IDLE");
+
+    SessionInfo precheck{};
+    precheck.active = true;
+    precheck.calibration_completed = false;
+    CHECK(deriveSessionPhase(precheck) == SessionPhase::PRECHECK,
+          "active + calibration incomplete => PRECHECK");
+
+    SessionInfo focusing{};
+    focusing.active = true;
+    focusing.calibration_completed = true;
+    CHECK(deriveSessionPhase(focusing) == SessionPhase::FOCUSING,
+          "active + calibration complete => FOCUSING");
+
+    SessionInfo paused{};
+    paused.active = true;
+    paused.paused = true;
+    paused.calibration_completed = true;
+    CHECK(deriveSessionPhase(paused) == SessionPhase::PAUSED, "paused session => PAUSED");
+}
 
 // ============================================================================
 // Test 1: BehaviorEngine → ReminderPolicy (FocusState contract)
@@ -73,7 +115,8 @@ void test_behavior_to_policy_contract() {
     CHECK(cmd.has_value(), "LOOKING_AWAY → policy generates command");
     CHECK(cmd->level == CommandLevel::LEVEL_1, "LOOKING_AWAY → LEVEL_1");
 
-    // PHONE_IN_USE → LEVEL_2
+    setBehaviorContext(store, 2);
+    // PHONE_IN_USE is a behavior-layer state and maps via behavior context.
     store.updateFocusState(FocusState::PHONE_IN_USE, 5000, "test");
     snap = store.snapshot();
     cmd = policy.processState(snap.focus_state, 12000);
@@ -86,7 +129,8 @@ void test_behavior_to_policy_contract() {
     cmd = policy.processState(snap.focus_state, 20000);
     CHECK(!cmd.has_value(), "PHONE_IN_LEARNING → no intervention");
 
-    // PHONE_IN_PLAYING → LEVEL_3
+    setBehaviorContext(store, 3, 95);
+    // PHONE_IN_PLAYING is a behavior-layer state and maps via behavior context.
     store.updateFocusState(FocusState::PHONE_IN_PLAYING, 21000, "test");
     snap = store.snapshot();
     cmd = policy.processState(snap.focus_state, 28000);
@@ -193,8 +237,7 @@ void test_snapshot_to_gatt_contract() {
     DeviceManager dev_mgr(store);
     ReminderPolicy policy(store, sqlite, dev_mgr);
     policy.init(ctx);
-    ReportGenerator report_gen(sqlite);
-    BleGattServer server(store, sqlite, policy, policy.getModeManager(), report_gen);
+    BleGattServer server(store, sqlite, policy, policy.getModeManager());
     server.init(ctx);
 
     // Set up some state
@@ -257,7 +300,6 @@ void test_snapshot_to_gatt_contract() {
         CHECK(resp.find("\"focus_seconds\":2400") != std::string::npos, "focus_seconds=2400");
         CHECK(resp.find("\"sessions\":2") != std::string::npos, "sessions=2");
         CHECK(resp.find("\"events\":5") != std::string::npos, "events=5");
-        CHECK(resp.find("\"phone_distraction_count\":1") != std::string::npos, "phone_distraction_count=1");
     }
 
     // get_console_data
@@ -267,7 +309,6 @@ void test_snapshot_to_gatt_contract() {
         CHECK(resp.find("\"device\"") != std::string::npos, "has device");
         CHECK(resp.find("\"reminder\"") != std::string::npos, "has reminder");
         CHECK(resp.find("\"today\"") != std::string::npos, "has today");
-        CHECK(resp.find("\"frame_quality\"") != std::string::npos, "has frame_quality");
     }
 
     server.shutdown(ctx);
@@ -296,18 +337,18 @@ void test_mode_sync_contract() {
     mm.setMode(SystemMode::SILENT);
     CHECK(mm.getMode() == SystemMode::SILENT, "Mode changed to SILENT");
 
-    // Verify ReminderPolicy reads the updated mode
-    // SILENT should downgrade LEVEL_2 to LEVEL_1
+    // Verify ReminderPolicy reads the updated mode.
+    // SILENT changes the reminder medium marker, not the policy severity.
+    setBehaviorContext(store, 2, 70);
     store.updateFocusState(FocusState::PHONE_IN_USE, 1000, "test");
-    auto cmd = policy.processState(FocusState::PHONE_IN_USE, 8000);
-    CHECK(cmd.has_value(), "PHONE_IN_USE generates command");
-    CHECK(cmd->level == CommandLevel::LEVEL_1, "SILENT downgrades LEVEL_2→LEVEL_1");
-    CHECK(cmd->message.find("[Silent]") != std::string::npos, "Message has [Silent] prefix");
+    auto silent_cmd = policy.processState(FocusState::PHONE_IN_USE, 8000);
+    CHECK(silent_cmd.has_value(), "PHONE_IN_USE generates command");
+    CHECK(silent_cmd->message.find("[Silent]") != std::string::npos, "Message has [Silent] prefix");
 
     mm.setMode(SystemMode::NORMAL);
-    cmd = policy.processState(FocusState::PHONE_IN_USE, 16000);
-    CHECK(cmd.has_value(), "PHONE_IN_USE generates command");
-    CHECK(cmd->level == CommandLevel::LEVEL_2, "NORMAL keeps LEVEL_2");
+    auto normal_cmd = policy.processState(FocusState::PHONE_IN_USE, 16000);
+    CHECK(normal_cmd.has_value(), "PHONE_IN_USE generates command");
+    CHECK(normal_cmd->level == silent_cmd->level, "NORMAL and SILENT keep the same policy level");
 
     // Also verify store is updated (for UI display)
     DeviceStatus ds = store.snapshot().device;
@@ -382,14 +423,13 @@ void test_session_lifecycle() {
     DeviceManager dev_mgr(store);
     ReminderPolicy policy(store, sqlite, dev_mgr);
     policy.init(ctx);
-    ReportGenerator rg(sqlite);
-    BleGattServer server(store, sqlite, policy, policy.getModeManager(), rg);
+    BleGattServer server(store, sqlite, policy, policy.getModeManager());
     server.init(ctx);
 
-    // 1. Start session via BLE
+    // 1. Start session via BLE (new protocol: data nested, id echoed)
     std::string resp = server.handleCommand(
-        "{\"cmd\":\"session_control\",\"action\":\"start\",\"target_duration_min\":25}");
-    CHECK(resp.find("\"status\":\"ok\"") != std::string::npos, "Session started via BLE");
+        R"({"cmd":"session_control","id":1,"data":{"action":"start","target_duration_min":25}})");
+    CHECK(resp.find("\"status\":\"success\"") != std::string::npos, "Session started via BLE");
 
     auto snap = store.snapshot();
     CHECK(snap.session.active == true, "Session is active");
@@ -415,14 +455,21 @@ void test_session_lifecycle() {
     for (int i = 0; i < 10; ++i) sqlite.runOnce(ctx);
 
     // 3. End session via BLE
-    resp = server.handleCommand("{\"cmd\":\"session_control\",\"action\":\"end\"}");
-    CHECK(resp.find("\"status\":\"ok\"") != std::string::npos, "Session ended via BLE");
+    resp = server.handleCommand(
+        R"({"cmd":"session_control","id":2,"data":{"action":"end"}})");
+    CHECK(resp.find("\"status\":\"success\"") != std::string::npos, "Session ended via BLE");
+    auto end_json = json::parse(resp);
+    CHECK(end_json["data"]["session_id"] == sid, "End response keeps session_id");
+    CHECK(end_json["data"]["total_duration"].get<int64_t>() >= 0, "End response total_duration is non-negative");
 
     snap = store.snapshot();
     CHECK(snap.session.active == false, "Session is inactive after end");
+    CHECK(snap.today.sessions == 1, "Manual BLE end increments today sessions");
+    CHECK(snap.today.total_seconds >= 0, "Manual BLE end updates today total seconds");
+    CHECK(snap.today.events == 2, "Manual BLE end carries distraction count into today events");
 
     // 4. Verify report was generated
-    resp = server.handleCommand("{\"cmd\":\"get_last_report\"}");
+    resp = server.handleCommand(R"({"cmd":"get_last_report","id":3})");
     CHECK(resp.find("\"total_duration\"") != std::string::npos, "Report has total_duration");
     CHECK(resp.find("\"focus_duration\"") != std::string::npos, "Report has focus_duration");
     CHECK(resp.find("\"distraction_count\"") != std::string::npos, "Report has distraction_count");
@@ -454,9 +501,761 @@ void test_focus_state_enum_consistency() {
     CHECK(static_cast<int>(SystemMode::HOME) == 2, "HOME=2");
 }
 
+// ============================================================================
+// Test 9: Timer completion creates authoritative report snapshot
+// ============================================================================
+void test_timer_completion_report_snapshot() {
+    std::cout << "\n[Test 9] Timer completion report snapshot\n";
+
+    SystemStateStore store;
+    SQLiteStore sqlite(":memory:");
+    AppContext ctx;
+    sqlite.init(ctx);
+
+    BoundedQueue<VisionResult> vision_queue(2, false);
+    BehaviorEngine behavior(vision_queue, store, sqlite);
+    behavior.init(ctx);
+
+    std::string pushed_event;
+    store.setPushCallback([&](const std::string& event_json) {
+        pushed_event = event_json;
+    });
+
+    auto initial = store.snapshot();
+    SessionInfo s;
+    s.active = true;
+    s.session_id = "timer_complete_session";
+    s.start_ms = initial.snapshot_ms - 2000;
+    s.elapsed_ms = 2000;
+    s.target_duration_ms = 1000;
+    s.remaining_ms = 0;
+    s.distraction_count = 2;
+    s.reminder_count = 1;
+    s.phone_distraction_count = 1;
+    s.calibration_completed = true;
+    store.updateSession(s);
+
+    behavior.runOnce(ctx);
+
+    auto snap = store.snapshot();
+    CHECK(snap.session.active == false, "Timer completion ends active session");
+    CHECK(snap.last_report.session_id == "timer_complete_session", "Timer completion stores last report session_id");
+    CHECK(snap.last_report.total_duration >= 1, "Timer completion stores total duration");
+    CHECK(snap.last_report.distraction_count == 2, "Timer completion stores distraction count");
+    CHECK(snap.last_report.reminder_count == 1, "Timer completion stores reminder count");
+    CHECK(snap.last_report.phone_distraction_count == 1, "Timer completion stores phone distraction count");
+    CHECK(snap.today.sessions == 1, "Timer completion increments today sessions");
+    CHECK(snap.today.phone_distraction_count == 1, "Timer completion increments today phone count");
+    CHECK(!pushed_event.empty(), "Timer completion pushes an event");
+    auto pushed = json::parse(pushed_event);
+    CHECK(pushed["cmd"] == "push_timer_complete", "Timer completion pushes push_timer_complete");
+    CHECK(pushed["data"]["session_id"] == "timer_complete_session", "Timer push carries session_id");
+    CHECK(pushed["data"]["target_duration_ms"] == 1000, "Timer push carries target_duration_ms");
+
+    behavior.runOnce(ctx);
+    snap = store.snapshot();
+    CHECK(snap.today.sessions == 1, "Timer completion is not counted twice after idle cleanup");
+    CHECK(snap.today.total_seconds == snap.last_report.total_duration, "Timer completion total seconds stays stable");
+}
+
+void test_away_timeout_uses_authoritative_session_end() {
+    std::cout << "\n[Test 9.5] Away timeout uses authoritative session end\n";
+
+    SystemStateStore store;
+    SQLiteStore sqlite(":memory:");
+    AppContext ctx;
+    sqlite.init(ctx);
+
+    BoundedQueue<VisionResult> vision_queue(2, false);
+    BehaviorEngine behavior(vision_queue, store, sqlite);
+    behavior.init(ctx);
+
+    SessionController controller(store, sqlite);
+    auto started = controller.startSession(25, "away_timeout_test");
+    CHECK(started.success, "Away timeout test starts session through controller");
+
+    std::string pushed_event;
+    store.setPushCallback([&](const std::string& event_json) {
+        pushed_event = event_json;
+    });
+
+    auto initial = store.snapshot();
+    SessionInfo s = store.snapshot().session;
+    s.start_ms = initial.snapshot_ms - 90000;
+    s.elapsed_ms = 90000;
+    s.target_duration_ms = 25 * 60000;
+    s.remaining_ms = s.target_duration_ms - s.elapsed_ms;
+    s.focus_accumulated_ms = 30000;
+    s.distraction_count = 3;
+    s.reminder_count = 2;
+    s.phone_distraction_count = 1;
+    s.away_since_ms = initial.snapshot_ms - 60000;
+    s.away_timeout_ms = 1000;
+    s.calibration_completed = true;
+    store.updateSession(s);
+
+    VisionResult result;
+    result.timestamp_ms = initial.snapshot_ms;
+    result.frame_quality = {FrameQualityLevel::GOOD, 0.9f, true, "good"};
+    result.presence = {Presence::PRESENT, 0.9f, true};
+    CHECK(vision_queue.push(result), "Away timeout test queues a vision result");
+
+    behavior.runOnce(ctx);
+
+    auto snap = store.snapshot();
+    CHECK(snap.session.active == false, "Away timeout ends active session");
+    CHECK(snap.last_report.session_id == started.session.session_id, "Away timeout stores last report session_id");
+    CHECK(snap.last_report.total_duration == 90, "Away timeout stores total duration");
+    CHECK(snap.last_report.focus_duration == 30, "Away timeout preserves accumulated focus duration");
+    CHECK(snap.today.sessions == 1, "Away timeout increments today sessions");
+    CHECK(snap.today.total_seconds == 90, "Away timeout increments today total seconds");
+    CHECK(snap.today.events == 3, "Away timeout carries distraction count into today events");
+
+    auto rec = sqlite.queryLastCompletedSession();
+    CHECK(rec.session_id == started.session.session_id, "Away timeout persists completed session");
+    CHECK(rec.total_duration == 90, "Away timeout persists total duration");
+
+    CHECK(!pushed_event.empty(), "Away timeout pushes session end");
+    auto pushed = json::parse(pushed_event);
+    CHECK(pushed["cmd"] == "push_session_end", "Away timeout pushes push_session_end");
+    CHECK(pushed["data"]["session_id"] == started.session.session_id, "Away timeout push carries session_id");
+}
+
+// ============================================================================
+// Test 10: Vision frames do not auto-complete manual gimbal pre-check
+// ============================================================================
+void test_calibration_completion_push_fields() {
+    std::cout << "\n[Test 10] Vision frames do not complete pre-check\n";
+
+    SystemStateStore store;
+    SQLiteStore sqlite(":memory:");
+    AppContext ctx;
+    sqlite.init(ctx);
+
+    BoundedQueue<VisionResult> vision_queue(4, false);
+    BehaviorEngine behavior(vision_queue, store, sqlite);
+    behavior.init(ctx);
+
+    SessionInfo s;
+    s.active = true;
+    s.session_id = "calibration_session";
+    s.start_ms = store.snapshot().snapshot_ms;
+    s.target_duration_ms = 25 * 60000;
+    s.remaining_ms = s.target_duration_ms;
+    s.calibrating = true;
+    s.calibration_completed = false;
+    store.updateSession(s);
+
+    std::string pushed_event;
+    store.setPushCallback([&](const std::string& event_json) {
+        pushed_event = event_json;
+    });
+
+    VisionResult first;
+    first.timestamp_ms = s.start_ms;
+    first.frame_quality = {FrameQualityLevel::GOOD, 0.9f, true, "good"};
+    first.presence = {Presence::PRESENT, 0.9f, true};
+    CHECK(vision_queue.push(first), "First calibration frame queued");
+    behavior.runOnce(ctx);
+
+    VisionResult second = first;
+    second.timestamp_ms = s.start_ms + 1500;
+    CHECK(vision_queue.push(second), "Second calibration frame queued");
+    behavior.runOnce(ctx);
+
+    auto snap = store.snapshot();
+    CHECK(snap.session.calibration_completed == false, "Vision frames do not auto-complete pre-check");
+    CHECK(snap.session.calibrating == true, "Session remains in pre-check until manual skip");
+    CHECK(pushed_event.empty(), "No calibration-complete push is emitted from vision frames");
+}
+
+// ============================================================================
+// Test 11: Gimbal pre-check waits for manual skip without vision frames
+// ============================================================================
+void test_calibration_placeholder_without_frames() {
+    std::cout << "\n[Test 11] Calibration waits without frames\n";
+
+    SystemStateStore store;
+    SQLiteStore sqlite(":memory:");
+    AppContext ctx;
+    sqlite.init(ctx);
+
+    BoundedQueue<VisionResult> vision_queue(4, false);
+    BehaviorEngine behavior(vision_queue, store, sqlite);
+    behavior.init(ctx);
+
+    auto initial = store.snapshot();
+    SessionInfo s;
+    s.active = true;
+    s.session_id = "placeholder_session";
+    s.start_ms = initial.snapshot_ms - 5000;
+    s.target_duration_ms = 25 * 60000;
+    s.remaining_ms = s.target_duration_ms;
+    s.calibrating = true;
+    s.calibration_completed = false;
+    store.updateSession(s);
+
+    std::string pushed_event;
+    store.setPushCallback([&](const std::string& event_json) {
+        pushed_event = event_json;
+    });
+
+    behavior.runOnce(ctx);
+
+    auto snap = store.snapshot();
+    CHECK(snap.session.calibration_completed == false, "Pre-check does not auto-complete without manual skip");
+    CHECK(snap.session.calibrating == true, "Pre-check remains calibrating without manual skip");
+    CHECK(snap.session.elapsed_ms == 0, "Pre-check does not advance session elapsed time");
+    CHECK(snap.session.remaining_ms == s.target_duration_ms, "Pre-check does not reduce remaining time");
+    CHECK(pushed_event.empty(), "No automatic calibration push without manual skip");
+}
+
+// ============================================================================
+// Test 12: Local StatusPage lifecycle supports manual calibr. skip, pause/resume, end
+// ============================================================================
+void test_status_page_local_lifecycle_persists_session() {
+    std::cout << "\n[Test 12] StatusPage local lifecycle persists session\n";
+
+    SystemStateStore store;
+    SQLiteStore sqlite(":memory:");
+    AppContext ctx;
+    sqlite.init(ctx);
+    ReportGenerator report_gen(sqlite);
+
+    StatusPage page;
+    page.setStore(&store);
+    page.setSQLiteStore(&sqlite);
+    page.setReportGenerator(&report_gen);
+
+    bool switched_to_review = false;
+    page.setPageSwitcher([&](int page_id) {
+        switched_to_review = (page_id == 3);
+    });
+
+    CHECK(page.onTouch(120, 190), "Local START touch is consumed");
+    auto snap = store.snapshot();
+    CHECK(snap.session.active == true, "Local START activates session");
+    CHECK(!snap.session.session_id.empty(), "Local START creates session_id");
+    CHECK(snap.session.calibration_completed == false, "Local START keeps calibration incomplete");
+    CHECK(snap.session.calibrating == true, "Local START starts calibration");
+    std::string sid = snap.session.session_id;
+
+    CHECK(page.onTouch(120, 270), "Local GO touch is consumed");
+    snap = store.snapshot();
+    CHECK(snap.session.calibration_completed == true, "Local GO completes calibration");
+    CHECK(snap.session.calibrating == false, "Local GO disables calibration flag");
+    CHECK(snap.session.elapsed_ms == 0, "Local GO starts focus timer at zero");
+    CHECK(snap.session.remaining_ms == snap.session.target_duration_ms, "Local GO starts with full remaining time");
+    CHECK(snap.focus_state == FocusState::FOCUSED, "Manual GO sets focus state");
+
+    SessionInfo s = snap.session;
+    s.start_ms = store.snapshot().snapshot_ms - 60000;
+    s.elapsed_ms = 60000;
+    s.distraction_count = 2;
+    s.reminder_count = 1;
+    s.phone_distraction_count = 1;
+    store.updateSession(s);
+
+    CHECK(page.onTouch(120, 270), "Local PAUSE touch is consumed");
+    snap = store.snapshot();
+    CHECK(snap.session.active == true, "Local PAUSE keeps session active");
+    CHECK(snap.session.paused == true, "Local PAUSE marks session paused");
+    CHECK(snap.session.session_id == sid, "Local PAUSE preserves session_id");
+    CHECK(page.currentInternalStateForTest() == StatusPage::PAUSED_STATE, "Local PAUSE shows paused page");
+    CHECK(!switched_to_review, "Local PAUSE does not switch to review");
+
+    CHECK(page.onTouch(120, 210), "Local RESUME touch is consumed");
+    snap = store.snapshot();
+    CHECK(snap.session.active == true, "Local RESUME keeps session active");
+    CHECK(snap.session.paused == false, "Local RESUME unpauses session");
+    CHECK(snap.session.session_id == sid, "Local RESUME keeps session_id");
+    CHECK(page.currentInternalStateForTest() == StatusPage::FOCUSED_STATE, "Local RESUME returns to focused state");
+
+    CHECK(page.onTouch(120, 270), "Local re-PAUSE touch is consumed");
+    snap = store.snapshot();
+    CHECK(snap.session.paused == true, "Local re-PAUSE re-enters paused state");
+
+    CHECK(page.onTouch(120, 270), "Local END touch is consumed");
+    snap = store.snapshot();
+    CHECK(switched_to_review, "Local END switches to review");
+    CHECK(snap.last_report.session_id == sid, "Local END stores last report session_id");
+    CHECK(snap.last_report.total_duration == 60, "Local END stores total duration");
+    CHECK(snap.last_report.distraction_count == 2, "Local END stores distraction count");
+    CHECK(snap.today.sessions == 1, "Local END updates today sessions");
+    CHECK(snap.today.phone_distraction_count == 1, "Local END updates today phone count");
+
+    auto rec = sqlite.queryLastCompletedSession();
+    CHECK(rec.session_id == sid, "Local END persists completed session");
+    CHECK(rec.total_duration == 60, "Local END persists total duration");
+}
+
+// ============================================================================
+// Test 12.5: StatusPage syncs UI state from snapshot
+// ============================================================================
+void test_status_page_syncs_with_session_snapshot() {
+    std::cout << "\n[Test 12.5] StatusPage syncs session snapshot\n";
+
+    SystemStateStore store;
+    FrameBuffer fb;
+    CHECK(fb.init(), "StatusPage sync test framebuffer init (headless fallback expected)");
+
+    StatusPage page;
+    page.setStore(&store);
+
+    Preferences prefs;
+    prefs.default_focus_duration_min = 45;
+    store.updatePreferences(prefs);
+
+    auto snap = store.snapshot();
+    page.syncWithSnapshotForTest(snap);
+    CHECK(page.currentInternalStateForTest() == StatusPage::READY_STATE, "StatusPage starts READY when session inactive");
+    CHECK(page.targetDurationMinForTest() == 45, "StatusPage uses preference default duration when session inactive");
+
+    CHECK(page.onTouch(190, 130), "StatusPage accepts local duration plus while READY");
+    CHECK(page.targetDurationMinForTest() == 50, "StatusPage local duration override increments from preference default");
+    page.render(fb, store.snapshot());
+    CHECK(page.targetDurationMinForTest() == 50, "StatusPage keeps local duration override across idle render");
+
+    SessionInfo running;
+    running.active = true;
+    running.calibration_completed = false;
+    running.target_duration_ms = 30 * 60000;
+    store.updateSession(running);
+    snap = store.snapshot();
+    page.render(fb, snap);
+    CHECK(page.currentInternalStateForTest() == StatusPage::CALIBRATING_STATE,
+          "StatusPage syncs ACTIVE + !calibration_completed to CALIBRATING");
+    CHECK(page.targetDurationMinForTest() == 30, "StatusPage syncs active session target duration to UI minutes");
+
+    running.calibration_completed = true;
+    running.elapsed_ms = 5000;
+    running.remaining_ms = 55000;
+    store.updateSession(running);
+    page.syncWithSnapshotForTest(store.snapshot());
+    CHECK(page.currentInternalStateForTest() == StatusPage::FOCUSED_STATE,
+          "StatusPage syncs ACTIVE + calibration_completed to FOCUSED");
+    CHECK(page.countdownSecondsForTest(store.snapshot()) == 55,
+          "StatusPage countdown uses authoritative remaining_ms");
+
+    running.paused = true;
+    store.updateSession(running);
+    page.syncWithSnapshotForTest(store.snapshot());
+    CHECK(page.currentInternalStateForTest() == StatusPage::PAUSED_STATE,
+          "StatusPage syncs ACTIVE + paused to PAUSED");
+    running.paused = false;
+
+    running.active = false;
+    store.updateSession(running);
+    page.syncWithSnapshotForTest(store.snapshot());
+    CHECK(page.currentInternalStateForTest() == StatusPage::READY_STATE,
+          "StatusPage syncs inactive session to READY");
+    CHECK(page.targetDurationMinForTest() == 45,
+          "StatusPage resets to preference default after session becomes inactive");
+}
+
+// ============================================================================
+// Test 13: UIManager auto-switches to status when session becomes active
+// ============================================================================
+void test_uimanager_auto_switch_to_status_on_session_start() {
+    std::cout << "\n[Test 13] UIManager auto-switches on session activation\n";
+
+    SystemStateStore store;
+    SQLiteStore sqlite(":memory:");
+    AppContext ctx;
+    sqlite.init(ctx);
+
+    UIManager ui(store);
+    CHECK(ui.init(ctx), "UIManager init succeeds");
+
+    ui.setCurrentPageForTest(1); // PAGE_STATS
+    CHECK(ui.currentPageForTest() == 1, "UIManager test can set current page to a non-status page");
+
+    SessionInfo running = store.snapshot().session;
+    running.active = true;
+    running.calibration_completed = true;
+    running.target_duration_ms = 25 * 60000;
+    store.updateSession(running);
+
+    ui.runOnce(ctx);
+    CHECK(ui.currentPageForTest() == 0, "UIManager switches to Status page when session becomes active");
+
+    ui.shutdown(ctx);
+}
+
+// ============================================================================
+// Test 13: SessionController owns authoritative lifecycle primitives
+// ============================================================================
+void test_session_controller_lifecycle_and_recovery() {
+    std::cout << "\n[Test 13] SessionController lifecycle and recovery\n";
+
+    SystemStateStore store;
+    SQLiteStore sqlite(":memory:");
+    AppContext ctx;
+    sqlite.init(ctx);
+
+    SessionController controller(store, sqlite);
+    auto start = controller.startSession(25, "test");
+    CHECK(start.success, "SessionController start succeeds");
+    CHECK(start.session.active, "SessionController start returns active session");
+    CHECK(start.session.target_duration_ms == 25 * 60000, "SessionController start stores target duration");
+    CHECK(start.session.calibration_completed == false, "SessionController start leaves calibration incomplete");
+
+    SessionInfo pre_pause = store.snapshot().session;
+    pre_pause.start_ms = store.snapshot().snapshot_ms - 5000;
+    pre_pause.elapsed_ms = 0;
+    pre_pause.target_duration_ms = 25 * 60000;
+    pre_pause.remaining_ms = pre_pause.target_duration_ms;
+    store.updateSession(pre_pause);
+
+    CHECK(controller.pauseSession("integration_pause"), "SessionController pause succeeds");
+    auto paused_snap = store.snapshot();
+    CHECK(paused_snap.session.active == true, "SessionController pause keeps session active");
+    CHECK(paused_snap.session.paused == true, "SessionController pause marks session paused");
+    CHECK(paused_snap.session.elapsed_ms >= 4000, "SessionController pause freezes elapsed at pause time");
+    CHECK(paused_snap.session.remaining_ms <= paused_snap.session.target_duration_ms - 4000,
+          "SessionController pause freezes remaining at pause time");
+    CHECK(controller.resumeSession("integration_resume"), "SessionController resume succeeds");
+    auto resumed_snap = store.snapshot();
+    CHECK(resumed_snap.session.active == true, "SessionController resume keeps session active");
+    CHECK(resumed_snap.session.paused == false, "SessionController resume clears pause");
+    CHECK(resumed_snap.session.session_id == start.session.session_id, "SessionController resume preserves session_id");
+
+    SessionInfo s = store.snapshot().session;
+    s.elapsed_ms = 90000;
+    s.distraction_count = 3;
+    s.reminder_count = 2;
+    s.phone_distraction_count = 1;
+    store.updateSession(s);
+
+    auto end = controller.endSession("test_ended");
+    CHECK(end.success, "SessionController end succeeds");
+    CHECK(end.report.session_id == start.session.session_id, "SessionController end keeps session id");
+    CHECK(end.report.total_duration == 90, "SessionController end freezes total duration");
+    CHECK(store.snapshot().session.active == false, "SessionController end resets active session");
+    CHECK(store.snapshot().today.sessions == 1, "SessionController end updates today sessions");
+    CHECK(store.snapshot().today.total_seconds == 90, "SessionController end updates today total seconds");
+    CHECK(store.snapshot().today.events == 3, "SessionController end updates today events");
+
+    auto rec = sqlite.queryLastCompletedSession();
+    CHECK(rec.session_id == start.session.session_id, "SessionController end persists completed session");
+    CHECK(rec.total_duration == 90, "SessionController end persists total duration");
+
+    controller.startSession(10, "test");
+    int recovered = controller.closeInterruptedSessions();
+    CHECK(recovered >= 1, "SessionController recovery closes active persisted sessions");
+    auto interrupted = sqlite.queryLastCompletedSession();
+    CHECK(interrupted.session_id.empty() == false, "SessionController recovery leaves completed history");
+}
+
+void test_session_controller_end_focus_accumulation() {
+    std::cout << "\n[Test 13.5] SessionController manual end uses focus_accumulated_ms\n";
+
+    SystemStateStore store;
+    SQLiteStore sqlite(":memory:");
+    AppContext ctx;
+    sqlite.init(ctx);
+
+    SessionController controller(store, sqlite);
+    auto start = controller.startSession(20, "test_focus_accum");
+    CHECK(start.success, "SessionController start succeeds for focus accumulation scenario");
+    CHECK(start.session.focus_accumulated_ms == 0, "Started session focus_accumulated_ms initializes to 0");
+
+    SessionInfo s = store.snapshot().session;
+    s.active = true;
+    s.calibration_completed = true;
+    s.elapsed_ms = 90000;
+    s.focus_accumulated_ms = 30000;
+    s.distraction_count = 0;
+    s.reminder_count = 0;
+    s.phone_distraction_count = 0;
+    s.start_ms = std::max<int64_t>(0, store.snapshot().snapshot_ms - 90000);
+    store.updateSession(s);
+    store.updateFocusState(FocusState::FOCUSED, s.start_ms, "focused");
+
+    auto end = controller.endSession("manual_end_focus_accum");
+    CHECK(end.success, "SessionController end succeeds");
+    CHECK(end.report.focus_duration == 30, "Manual end uses focus_accumulated (30 seconds)");
+    CHECK(end.report.total_duration == 90, "Manual end still reports elapsed total_duration 90 seconds");
+    CHECK(end.report.session_id == start.session.session_id, "Manual end preserves session_id");
+}
+
+void test_session_controller_end_refreshes_stale_elapsed() {
+    std::cout << "\n[Test 13.6] SessionController end refreshes stale elapsed_ms\n";
+
+    SystemStateStore store;
+    SQLiteStore sqlite(":memory:");
+    AppContext ctx;
+    sqlite.init(ctx);
+
+    SessionController controller(store, sqlite);
+    auto start = controller.startSession(20, "test_end_refresh");
+    CHECK(start.success, "SessionController start succeeds");
+    CHECK(start.session.session_id.empty() == false, "Started session has session_id");
+
+    auto base = store.snapshot();
+    SessionInfo s = base.session;
+    s.active = true;
+    s.calibration_completed = true;
+    s.elapsed_ms = 0;
+    s.start_ms = std::max<int64_t>(0, base.snapshot_ms - 5000);
+    s.session_id = base.session.session_id;
+    s.target_duration_ms = base.session.target_duration_ms;
+    s.remaining_ms = s.target_duration_ms;
+    store.updateSession(s);
+
+    auto ended = controller.endSession("integration_end_refresh");
+    CHECK(ended.success, "SessionController end succeeds");
+    CHECK(ended.report.total_duration >= 4, "Stale elapsed is refreshed to avoid zero-length report");
+    CHECK(ended.report.session_id == s.session_id, "Ended report keeps session_id");
+    CHECK(store.snapshot().session.active == false, "Session ends inactive");
+}
+
+// ============================================================================
+// Test 14: phone_sync drives store focus state without waiting for a vision frame
+// ============================================================================
+void test_phone_signal_updates_focus_state_immediately() {
+    std::cout << "\n[Test 14] phone_sync updates focus state immediately\n";
+
+    SystemStateStore store;
+    SQLiteStore sqlite(":memory:");
+    AppContext ctx;
+    sqlite.init(ctx);
+
+    BoundedQueue<VisionResult> vision_queue(2, false);
+    BehaviorEngine behavior(vision_queue, store, sqlite);
+    behavior.init(ctx);
+
+    auto initial = store.snapshot();
+    SessionInfo s;
+    s.active = true;
+    s.session_id = "phone_signal_session";
+    s.start_ms = initial.snapshot_ms;
+    s.target_duration_ms = 25 * 60000;
+    s.remaining_ms = s.target_duration_ms;
+    s.calibrating = false;
+    s.calibration_completed = true;
+    store.updateSession(s);
+    store.updateFocusState(FocusState::FOCUSED, initial.snapshot_ms, "test focused");
+
+    PhoneUsageSignal sig;
+    sig.active = true;
+    sig.distraction_level = 3;
+    sig.timestamp_ms = initial.snapshot_ms + 1000;
+    store.setPhoneSignal(sig);
+
+    behavior.runOnce(ctx);
+
+    auto snap = store.snapshot();
+    CHECK(snap.focus_state == FocusState::PHONE_IN_USE, "Level 3 phone signal keeps generic phone usage state");
+    CHECK(snap.session.phone_distraction_count == 1, "Active phone signal increments session phone count");
+    CHECK(snap.session.current_phone_distraction_level == 3, "Active phone signal stores phone-reported strength for behavior tuning");
+}
+
+void test_distraction_count_is_episode_based() {
+    std::cout << "\n[Test 14.0.5] Distraction count increments on episode entry\n";
+
+    SystemStateStore store;
+    SQLiteStore sqlite(":memory:");
+    AppContext ctx;
+    sqlite.init(ctx);
+
+    BoundedQueue<VisionResult> vision_queue(8, false);
+    BehaviorEngine behavior(vision_queue, store, sqlite);
+    behavior.init(ctx);
+
+    auto initial = store.snapshot();
+    SessionInfo s;
+    s.active = true;
+    s.session_id = "distraction_episode_session";
+    s.start_ms = initial.snapshot_ms - 1000;
+    s.target_duration_ms = 25 * 60000;
+    s.remaining_ms = s.target_duration_ms;
+    s.calibrating = false;
+    s.calibration_completed = true;
+    store.updateSession(s);
+    store.updateFocusState(FocusState::FOCUSED, initial.snapshot_ms, "test focused");
+
+    PhoneUsageSignal sig;
+    sig.active = true;
+    sig.timestamp_ms = initial.snapshot_ms + 1;
+    sig.distraction_level = 2;
+    sig.usage_state = PhoneUsageState::IN_USE;
+    store.setPhoneSignal(sig);
+    behavior.runOnce(ctx);
+    auto snap = store.snapshot();
+    CHECK(snap.session.distraction_count == 1, "Phone distraction episode increments once on first entry");
+    CHECK(snap.focus_state == FocusState::PHONE_IN_USE, "Phone signal updates focus state");
+
+    sig.timestamp_ms += 200;
+    store.setPhoneSignal(sig);
+    behavior.runOnce(ctx);
+    snap = store.snapshot();
+    CHECK(snap.session.distraction_count == 1, "Same phone distraction episode does not keep incrementing");
+
+    sig.timestamp_ms += 200;
+    sig.usage_state = PhoneUsageState::PLAYING;
+    store.setPhoneSignal(sig);
+    behavior.runOnce(ctx);
+    snap = store.snapshot();
+    CHECK(snap.session.distraction_count == 1, "Phone usage subtype changes do not create a new episode");
+
+    store.updateFocusState(FocusState::FOCUSED, sig.timestamp_ms + 100, "focus back");
+
+    const int64_t frame_base = sig.timestamp_ms + 1000;
+    for (int i = 0; i < 4; ++i) {
+        VisionResult result;
+        result.timestamp_ms = frame_base + i * 1000;
+        result.frame_quality = {FrameQualityLevel::GOOD, 0.95f, true, "quality"};
+        result.presence = {Presence::AWAY, 0.95f, true};
+        result.presence_conf = 0.95f;
+        result.face = {FaceState::DETECTED, 0.95f, true};
+        result.debug_note = "away";
+        CHECK(vision_queue.push(result), "Away frame can be queued");
+        behavior.runOnce(ctx);
+    }
+
+    snap = store.snapshot();
+    CHECK(snap.focus_state == FocusState::AWAY, "Vision away triggers distraction state");
+    CHECK(snap.session.distraction_count == 2, "Vision away episode increments once when entering distraction");
+
+    VisionResult sustained;
+    sustained.timestamp_ms = frame_base + 5000;
+    sustained.frame_quality = {FrameQualityLevel::GOOD, 0.95f, true, "quality"};
+    sustained.presence = {Presence::AWAY, 0.95f, true};
+    sustained.presence_conf = 0.95f;
+    sustained.face = {FaceState::DETECTED, 0.95f, true};
+    CHECK(vision_queue.push(sustained), "Sustained away frame queued");
+    behavior.runOnce(ctx);
+
+    CHECK(store.snapshot().session.distraction_count == 2, "Sustained away does not add repeated distraction count");
+}
+
+// ============================================================================
+// Test 14.1: Vision frame quality is visible through SystemStateStore
+// ============================================================================
+void test_behavior_updates_frame_quality_snapshot() {
+    std::cout << "\n[Test 14.1] BehaviorEngine updates frame quality snapshot\n";
+
+    SystemStateStore store;
+    SQLiteStore sqlite(":memory:");
+    AppContext ctx;
+    sqlite.init(ctx);
+
+    BoundedQueue<VisionResult> vision_queue(2, false);
+    BehaviorEngine behavior(vision_queue, store, sqlite);
+    behavior.init(ctx);
+
+    const auto initial = store.snapshot();
+    SessionInfo s;
+    s.active = true;
+    s.session_id = "frame_quality_session";
+    s.start_ms = initial.snapshot_ms;
+    s.target_duration_ms = 25 * 60000;
+    s.remaining_ms = s.target_duration_ms;
+    s.calibrating = false;
+    s.calibration_completed = true;
+    store.updateSession(s);
+    store.updateFocusState(FocusState::FOCUSED, initial.snapshot_ms, "test focused");
+
+    VisionResult result;
+    result.timestamp_ms = initial.snapshot_ms + 1000;
+    result.frame_quality.level = FrameQualityLevel::GOOD;
+    result.frame_quality.score = 0.73f;
+    result.frame_quality.reason = "test_quality";
+    result.frame_quality.valid = true;
+    CHECK(vision_queue.push(result), "Frame quality test queues a vision result");
+
+    behavior.runOnce(ctx);
+
+    auto snap = store.snapshot();
+    CHECK(snap.frame_quality.score > 0.72f && snap.frame_quality.score < 0.74f,
+          "BehaviorEngine writes frame quality score to store");
+    CHECK(snap.frame_quality.reason == "test_quality",
+          "BehaviorEngine writes frame quality reason to store");
+    CHECK(snap.frame_quality.guidance_needed == false,
+          "BehaviorEngine writes frame quality guidance flag to store");
+}
+
+// ============================================================================
+// Test 14.2: Session start clears stale pending phone_sync
+// ============================================================================
+void test_session_start_clears_stale_phone_signal() {
+    std::cout << "\n[Test 14.2] Session start clears stale pending phone signal\n";
+
+    SystemStateStore store;
+    SQLiteStore sqlite(":memory:");
+    AppContext ctx;
+    sqlite.init(ctx);
+
+    PhoneUsageSignal stale;
+    stale.active = true;
+    stale.timestamp_ms = store.snapshot().snapshot_ms;
+    stale.distraction_level = 3;
+    stale.usage_state = PhoneUsageState::PLAYING;
+    store.setPhoneSignal(stale);
+
+    SessionController controller(store, sqlite);
+    auto started = controller.startSession(25, "test");
+    CHECK(started.success, "Session start succeeds with stale phone signal present");
+
+    PhoneUsageSignal consumed;
+    CHECK(!store.consumePhoneSignal(consumed), "Session start clears stale pending phone signal");
+}
+
+// ========================================================================
+// Test 14.5: Paused session freezes behavior progression and counters
+// ========================================================================
+void test_behavior_pause_freezes_elapsed_and_counter_updates() {
+    std::cout << "\n[Test 14.5] Paused session freezes behavior progression\n";
+
+    SystemStateStore store;
+    SQLiteStore sqlite(":memory:");
+    AppContext ctx;
+    sqlite.init(ctx);
+
+    BoundedQueue<VisionResult> vision_queue(4, false);
+    BehaviorEngine behavior(vision_queue, store, sqlite);
+    behavior.init(ctx);
+
+    const auto initial = store.snapshot();
+    SessionInfo s;
+    s.active = true;
+    s.paused = true;
+    s.session_id = "paused_integration_session";
+    s.start_ms = initial.snapshot_ms - 8000;
+    s.elapsed_ms = 8000;
+    s.remaining_ms = 5000;
+    s.calibrating = false;
+    s.calibration_completed = true;
+    s.target_duration_ms = 5000;
+    store.updateSession(s);
+
+    VisionResult queued;
+    queued.timestamp_ms = initial.snapshot_ms;
+    CHECK(vision_queue.push(queued), "Paused run can queue a stale frame");
+
+    PhoneUsageSignal sig;
+    sig.active = true;
+    sig.timestamp_ms = initial.snapshot_ms;
+    sig.distraction_level = 2;
+    store.setPhoneSignal(sig);
+
+    behavior.runOnce(ctx);
+
+    auto snap = store.snapshot();
+    CHECK(snap.session.active == true, "Paused session does not auto-complete timer");
+    CHECK(snap.session.paused == true, "Pause marker remains");
+    CHECK(snap.session.elapsed_ms == 8000, "Paused session keeps elapsed_ms unchanged");
+    CHECK(snap.session.remaining_ms == 5000, "Paused session keeps remaining_ms unchanged");
+    CHECK(snap.session.phone_distraction_count == 0, "Paused session ignores phone signals");
+    CHECK(snap.last_report.session_id.empty(), "Paused session does not emit timer completion report");
+    CHECK(!vision_queue.tryPop().has_value(), "Paused session drops queued vision results");
+}
+
 int main() {
     std::cout << "=== Module Integration Tests ===\n";
 
+    test_session_phase_helper();
     test_behavior_to_policy_contract();
     test_policy_to_device_contract();
     test_session_info_contract();
@@ -465,6 +1264,21 @@ int main() {
     test_report_contract();
     test_session_lifecycle();
     test_focus_state_enum_consistency();
+    test_timer_completion_report_snapshot();
+    test_away_timeout_uses_authoritative_session_end();
+    test_calibration_completion_push_fields();
+    test_calibration_placeholder_without_frames();
+    test_status_page_local_lifecycle_persists_session();
+    test_status_page_syncs_with_session_snapshot();
+    test_uimanager_auto_switch_to_status_on_session_start();
+    test_session_controller_lifecycle_and_recovery();
+    test_session_controller_end_focus_accumulation();
+    test_session_controller_end_refreshes_stale_elapsed();
+    test_phone_signal_updates_focus_state_immediately();
+    test_distraction_count_is_episode_based();
+    test_behavior_updates_frame_quality_snapshot();
+    test_session_start_clears_stale_phone_signal();
+    test_behavior_pause_freezes_elapsed_and_counter_updates();
 
     std::cout << "\n=== Results ===\n";
     std::cout << "Passed: " << tests_passed << std::endl;

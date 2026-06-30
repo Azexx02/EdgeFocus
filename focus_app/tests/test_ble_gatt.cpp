@@ -2,17 +2,48 @@
 #include "app/AppContext.h"
 #include "app/SystemStateStore.h"
 #include "storage/SQLiteStore.h"
-#include "storage/ReportGenerator.h"
 #include "policy/ReminderPolicy.h"
 #include "device/DeviceManager.h"
 #include <iostream>
 #include <cassert>
 #include <string>
+#include <nlohmann/json.hpp>
 
 using namespace edgefocus;
+using json = nlohmann::json;
+
+json parseResponse(const std::string& resp) {
+    return json::parse(resp);
+}
+
+void assertSuccess(const json& resp, int expected_id) {
+    assert(resp["status"] == "success");
+    assert(resp["id"] == expected_id);
+}
 
 int main() {
     std::cout << "Starting BLE GATT Server tests...\n";
+    json response;
+
+    // Test 0: startup recovery closes persisted active sessions
+    {
+        SystemStateStore recovery_store;
+        SQLiteStore recovery_sqlite(":memory:");
+        AppContext recovery_ctx;
+        recovery_sqlite.init(recovery_ctx);
+        recovery_sqlite.saveSession("recovery_session", 1000, 60000);
+        DeviceManager recovery_dev_mgr(recovery_store);
+        ReminderPolicy recovery_policy(recovery_store, recovery_sqlite, recovery_dev_mgr);
+        recovery_policy.init(recovery_ctx);
+        BleGattServer recovery_server(recovery_store, recovery_sqlite, recovery_policy,
+                                      recovery_policy.getModeManager());
+        recovery_server.init(recovery_ctx);
+        auto recovered = recovery_sqlite.queryLastCompletedSession();
+        assert(recovered.session_id == "recovery_session");
+        recovery_server.shutdown(recovery_ctx);
+        recovery_sqlite.shutdown(recovery_ctx);
+        std::cout << "  startup recovery: OK\n";
+    }
 
     SystemStateStore store;
     SQLiteStore sqlite_store(":memory:");
@@ -22,113 +53,440 @@ int main() {
     DeviceManager dev_mgr(store);
     ReminderPolicy policy(store, sqlite_store, dev_mgr);
     policy.init(ctx);
-    ReportGenerator report_gen(sqlite_store);
-    BleGattServer server(store, sqlite_store, policy, policy.getModeManager(), report_gen);
+    BleGattServer server(store, sqlite_store, policy, policy.getModeManager());
     server.init(ctx);
 
     // Test 1: get_device_status
     {
-        std::string resp = server.handleCommand("{\"cmd\":\"get_device_status\"}");
-        assert(resp.find("\"status\":\"ok\"") != std::string::npos);
-        assert(resp.find("\"battery_percent\"") != std::string::npos);
-        assert(resp.find("\"system_mode\"") != std::string::npos);
+        json resp = parseResponse(server.handleCommand(R"({"cmd":"get_device_status","id":1})"));
+        assertSuccess(resp, 1);
+        assert(resp["data"].contains("battery_percent"));
+        assert(resp["data"].contains("system_mode"));
         std::cout << "  get_device_status: OK\n";
     }
 
     // Test 2: get_current_state
     {
-        std::string resp = server.handleCommand("{\"cmd\":\"get_current_state\"}");
-        assert(resp.find("\"status\":\"ok\"") != std::string::npos);
-        assert(resp.find("\"focus_state\"") != std::string::npos);
-        assert(resp.find("\"elapsed_ms\"") != std::string::npos);
+        json resp = parseResponse(server.handleCommand(R"({"cmd":"get_current_state","id":2})"));
+        assertSuccess(resp, 2);
+        assert(resp["data"].contains("focus_state"));
+        assert(resp["data"].contains("session_phase"));
+        assert(resp["data"]["session_phase"] == "idle");
+        assert(resp["data"].contains("elapsed_ms"));
+        assert(resp["data"].contains("active"));
+        assert(resp["data"].contains("session_id"));
         std::cout << "  get_current_state: OK\n";
     }
 
     // Test 3: get_today_summary
     {
-        std::string resp = server.handleCommand("{\"cmd\":\"get_today_summary\"}");
-        assert(resp.find("\"status\":\"ok\"") != std::string::npos);
-        assert(resp.find("\"total_seconds\"") != std::string::npos);
-        assert(resp.find("\"focus_seconds\"") != std::string::npos);
+        json resp = parseResponse(server.handleCommand(R"({"cmd":"get_today_summary","id":3})"));
+        assertSuccess(resp, 3);
+        assert(resp["data"].contains("total_seconds"));
+        assert(resp["data"].contains("focus_seconds"));
+        assert(resp["data"].contains("phone_distraction_count"));
         std::cout << "  get_today_summary: OK\n";
     }
 
     // Test 4: get_last_report (no report yet)
     {
-        std::string resp = server.handleCommand("{\"cmd\":\"get_last_report\"}");
-        assert(resp.find("\"status\":\"ok\"") != std::string::npos);
-        assert(resp.find("null") != std::string::npos);
+        json resp = parseResponse(server.handleCommand(R"({"cmd":"get_last_report","id":4})"));
+        assertSuccess(resp, 4);
+        assert(resp["data"].is_null());
         std::cout << "  get_last_report (empty): OK\n";
+    }
+
+    // Test 4b: start without duration still uses the board default target.
+    {
+        json resp = parseResponse(server.handleCommand(
+            R"({"cmd":"session_control","id":41,"data":{"action":"start"}})"));
+        assertSuccess(resp, 41);
+        assert(resp["data"]["success"] == true);
+        assert(resp["data"]["target_duration_ms"] == 25 * 60000);
+        auto snap = store.snapshot();
+        assert(snap.session.target_duration_ms == 25 * 60000);
+
+        json end_resp = parseResponse(server.handleCommand(
+            R"({"cmd":"session_control","id":42,"data":{"action":"end"}})"));
+        assertSuccess(end_resp, 42);
+        std::cout << "  session_control start default duration: OK\n";
     }
 
     // Test 5: session_control start
     {
-        std::string resp = server.handleCommand("{\"cmd\":\"session_control\",\"action\":\"start\",\"target_duration_min\":25}");
-        assert(resp.find("\"status\":\"ok\"") != std::string::npos);
-        assert(resp.find("\"session_id\"") != std::string::npos);
+        json resp = parseResponse(server.handleCommand(
+            R"({"cmd":"session_control","id":5,"data":{"action":"start","target_duration_min":25}})"));
+        assertSuccess(resp, 5);
+        assert(resp["data"]["success"] == true);
+        assert(resp["data"].contains("session_id"));
+        assert(resp["data"].contains("remaining_ms"));
+        assert(resp["data"].contains("target_duration_ms"));
+        assert(resp["data"]["target_duration_ms"] == 1500000);
+        assert(resp["data"].contains("focus_state"));
+        assert(resp["data"]["focus_state"] == static_cast<int>(FocusState::CALIBRATING));
+        assert(resp["data"].contains("calibration_completed"));
+        assert(resp["data"]["calibration_completed"] == false);
         auto snap = store.snapshot();
         assert(snap.session.active == true);
         assert(snap.session.target_duration_ms == 25 * 60000);
+        assert(snap.session.start_ms > 0);
+        assert(snap.session.start_ms <= snap.snapshot_ms);
+
+        json precheck_state = parseResponse(server.handleCommand(
+            R"({"cmd":"get_current_state","id":49})"));
+        assertSuccess(precheck_state, 49);
+        assert(precheck_state["data"]["session_phase"] == "precheck");
+
+        SessionInfo running = snap.session;
+        running.calibrating = false;
+        running.calibration_completed = true;
+        running.start_ms = snap.snapshot_ms;
+        running.elapsed_ms = 0;
+        running.remaining_ms = running.target_duration_ms;
+        store.updateSession(running);
+
+        json focused_state = parseResponse(server.handleCommand(
+            R"({"cmd":"get_current_state","id":50})"));
+        assertSuccess(focused_state, 50);
+        assert(focused_state["data"]["session_phase"] == "focusing");
         std::cout << "  session_control start: OK\n";
     }
 
-    // Test 6: get_current_state (active session)
+    // Test 6: session_control start (idempotent)
     {
-        std::string resp = server.handleCommand("{\"cmd\":\"get_current_state\"}");
-        assert(resp.find("\"target_duration_ms\":1500000") != std::string::npos);
+        json resp = parseResponse(server.handleCommand(
+            R"({"cmd":"session_control","id":6,"data":{"action":"start","target_duration_min":25}})"));
+        assertSuccess(resp, 6);
+        assert(resp["data"]["success"] == true);
+        assert(resp["data"]["already_active"] == true);
+        assert(resp["data"].contains("remaining_ms"));
+        std::cout << "  session_control start (idempotent): OK\n";
+    }
+
+    // Test 7: get_current_state (active session)
+    {
+        json resp = parseResponse(server.handleCommand(
+            R"({"cmd":"get_current_state","id":7})"));
+        assert(resp["data"]["target_duration_ms"] == 1500000);
+        assert(resp["data"]["active"] == true);
+        assert(resp["data"]["session_phase"] == "focusing");
         std::cout << "  get_current_state (active): OK\n";
     }
 
-    // Test 7: session_control end
+    // Test 8: session_control pause
     {
-        std::string resp = server.handleCommand("{\"cmd\":\"session_control\",\"action\":\"end\"}");
-        assert(resp.find("\"status\":\"ok\"") != std::string::npos);
+        auto pre_pause = store.snapshot().session.session_id;
+        std::string last_push;
+        store.setPushCallback([&last_push](const std::string& event_json) {
+            last_push = event_json;
+        });
+        json resp = parseResponse(server.handleCommand(
+            R"({"cmd":"session_control","id":8,"data":{"action":"pause"}})"));
+        assertSuccess(resp, 8);
+        assert(resp["data"]["success"] == true);
+        assert(resp["data"]["paused"] == true);
+        assert(resp["data"]["session_phase"] == "paused");
+        auto snap = store.snapshot();
+        assert(snap.session.session_id == pre_pause);
+        assert(snap.session.paused == true);
+        assert(snap.session.active == true);
+        auto push = json::parse(last_push);
+        assert(push["cmd"] == "push_state");
+        assert(push["data"]["session_phase"] == "paused");
+        std::cout << "  session_control pause: OK\n";
+    }
+
+    // Test 9: session_control resume
+    {
+        auto paused_id = store.snapshot().session.session_id;
+        std::string last_push;
+        store.setPushCallback([&last_push](const std::string& event_json) {
+            last_push = event_json;
+        });
+        json resp = parseResponse(server.handleCommand(
+            R"({"cmd":"session_control","id":9,"data":{"action":"resume"}})"));
+        assertSuccess(resp, 9);
+        assert(resp["data"]["success"] == true);
+        assert(resp["data"]["paused"] == false);
+        assert(resp["data"]["session_phase"] == "focusing");
+        assert(resp["data"].contains("remaining_ms"));
+        auto snap = store.snapshot();
+        assert(snap.session.session_id == paused_id);
+        assert(snap.session.paused == false);
+        assert(snap.session.active == true);
+        auto push = json::parse(last_push);
+        assert(push["cmd"] == "push_state");
+        assert(push["data"]["session_phase"] == "focusing");
+        std::cout << "  session_control resume: OK\n";
+    }
+
+    // Test 10: session_control end
+    {
+        json resp = parseResponse(server.handleCommand(
+            R"({"cmd":"session_control","id":10,"data":{"action":"end"}})"));
+        assertSuccess(resp, 10);
+        assert(resp["data"]["success"] == true);
+        assert(resp["data"].contains("total_duration"));
+        assert(resp["data"].contains("focus_duration"));
+        assert(resp["data"].contains("distraction_count"));
+        assert(resp["data"].contains("reminder_count"));
         auto snap = store.snapshot();
         assert(snap.session.active == false);
         std::cout << "  session_control end: OK\n";
     }
 
-    // Test 8: update_preferences
+    // Test 11: update_preferences
     {
-        std::string resp = server.handleCommand("{\"cmd\":\"update_preferences\",\"system_mode\":1}");
-        assert(resp.find("\"status\":\"ok\"") != std::string::npos);
-        assert(resp.find("\"system_mode\":1") != std::string::npos);
+        json resp = parseResponse(server.handleCommand(
+            R"({"cmd":"update_preferences","id":11,"data":{"system_mode":1,"default_focus_duration_min":35,"normal_channels_mask":3,"silent_channels_mask":2}})"));
+        assertSuccess(resp, 11);
+        assert(resp["data"]["system_mode"] == 1);
+        assert(resp["data"]["default_focus_duration_min"] == 35);
         assert(policy.getModeManager().getMode() == SystemMode::SILENT);
+        assert(resp["data"]["normal_channels_mask"] == 3);
+        assert(resp["data"]["silent_channels_mask"] == 2);
+        assert(resp["data"]["normal_channels"] == json::array({"SCREEN", "BAND"}));
+        assert(resp["data"]["silent_channels"] == json::array({"BAND"}));
         std::cout << "  update_preferences: OK\n";
     }
 
-    // Test 9: reminder_ack
+    // Test 11b: update_preferences rejects invalid field types without throwing.
     {
-        std::string resp = server.handleCommand("{\"cmd\":\"reminder_ack\"}");
-        assert(resp.find("\"status\":\"ok\"") != std::string::npos);
-        assert(resp.find("\"cooling_ms\"") != std::string::npos);
+        bool threw = false;
+        json resp;
+        try {
+            resp = parseResponse(server.handleCommand(
+                R"({"cmd":"update_preferences","id":111,"data":{"system_mode":"silent"}})"));
+        } catch (...) {
+            threw = true;
+        }
+        assert(!threw);
+        assert(resp["status"] == "error");
+        assert(resp["id"] == 111);
+        std::cout << "  update_preferences invalid type: OK\n";
+    }
+
+    // Test 11c: update_preferences accepts channel arrays and updates masks.
+    {
+        json resp = parseResponse(server.handleCommand(
+            R"({"cmd":"update_preferences","id":112,"data":{"normal_channels":["band"],"silent_channels":["screen","sound"]}})"));
+        assertSuccess(resp, 112);
+        assert(resp["data"]["normal_channels_mask"] == 2);
+        assert(resp["data"]["silent_channels_mask"] == 5);
+        assert(resp["data"]["normal_channels"] == json::array({"BAND"}));
+        assert(resp["data"]["silent_channels"] == json::array({"SCREEN", "SOUND"}));
+    }
+
+    // Test 12: get_preferences
+    {
+        json resp = parseResponse(server.handleCommand(
+            R"({"cmd":"get_preferences","id":12})"));
+        assertSuccess(resp, 12);
+        assert(resp["data"].contains("system_mode"));
+        assert(resp["data"].contains("vibration_strength"));
+        assert(resp["data"].contains("led_brightness"));
+        assert(resp["data"].contains("reminder_sensitivity"));
+        assert(resp["data"].contains("away_timeout_min"));
+        assert(resp["data"].contains("default_focus_duration_min"));
+        assert(resp["data"]["default_focus_duration_min"] == 35);
+        assert(resp["data"].contains("normal_channels_mask"));
+        assert(resp["data"].contains("silent_channels_mask"));
+        assert(resp["data"].contains("normal_channels"));
+        assert(resp["data"].contains("silent_channels"));
+        std::cout << "  get_preferences: OK\n";
+    }
+
+    // Test 12b: start without duration uses configured default focus duration.
+    {
+        json resp = parseResponse(server.handleCommand(
+            R"({"cmd":"session_control","id":121,"data":{"action":"start"}})"));
+        assertSuccess(resp, 121);
+        assert(resp["data"]["success"] == true);
+        assert(resp["data"]["target_duration_ms"] == 35 * 60000);
+        json end_resp = parseResponse(server.handleCommand(
+            R"({"cmd":"session_control","id":122,"data":{"action":"end"}})"));
+        assertSuccess(end_resp, 122);
+        std::cout << "  session_control start configured default duration: OK\n";
+    }
+
+    // Test 13: reminder_ack
+    {
+        json resp = parseResponse(server.handleCommand(
+            R"({"cmd":"reminder_ack","id":13,"data":{}})"));
+        assertSuccess(resp, 13);
+        assert(resp["data"].contains("cooling_ms"));
         std::cout << "  reminder_ack: OK\n";
     }
 
-    // Test 10: phone_sync
+    // Test 14: phone_sync (in use)
     {
-        std::string resp = server.handleCommand("{\"cmd\":\"phone_sync\",\"is_in_use\":true,\"distraction_level\":2}");
-        assert(resp.find("\"status\":\"ok\"") != std::string::npos);
-        assert(resp.find("\"action_taken\":\"strong_distraction\"") != std::string::npos);
-        std::cout << "  phone_sync: OK\n";
+        json resp = parseResponse(server.handleCommand(
+            R"({"cmd":"phone_sync","id":14,"data":{"is_in_use":true,"distraction_level":2,"app_name":"com.test.app"}})"));
+        assertSuccess(resp, 14);
+        assert(resp["data"].contains("focus_state"));
+        assert(resp["data"].contains("action_taken"));
+        assert(resp["data"].contains("distraction_count"));
+        assert(resp["data"].contains("reminder_count"));
+        assert(resp["data"]["action_taken"] == true);
+        PhoneUsageSignal sig;
+        assert(store.consumePhoneSignal(sig));
+        assert(sig.active == true);
+        assert(sig.distraction_level == 2);
+        assert(sig.usage_state == PhoneUsageState::IN_USE);
+        std::cout << "  phone_sync (in use): OK\n";
     }
 
-    // Test 11: get_console_data
+    // Test 14b: phone_sync keeps usage state separate from distraction level
     {
-        std::string resp = server.handleCommand("{\"cmd\":\"get_console_data\"}");
-        assert(resp.find("\"status\":\"ok\"") != std::string::npos);
-        assert(resp.find("\"session\"") != std::string::npos);
-        assert(resp.find("\"device\"") != std::string::npos);
-        assert(resp.find("\"reminder\"") != std::string::npos);
-        assert(resp.find("\"today\"") != std::string::npos);
+        json resp_state = parseResponse(server.handleCommand(
+            R"({"cmd":"phone_sync","id":114,"data":{"is_in_use":true,"distraction_level":3,"app_name":"unknown"}})"));
+        assertSuccess(resp_state, 114);
+        PhoneUsageSignal sig;
+        assert(store.consumePhoneSignal(sig));
+        assert(sig.active == true);
+        assert(sig.distraction_level == 3);
+        assert(sig.usage_state == PhoneUsageState::IN_USE);
+
+        json resp_level = parseResponse(server.handleCommand(
+            R"({"cmd":"phone_sync","id":115,"data":{"is_in_use":true,"distraction_level":1,"app_category":"entertainment","app_name":"video"}})"));
+        assertSuccess(resp_level, 115);
+        assert(store.consumePhoneSignal(sig));
+        assert(sig.active == true);
+        assert(sig.distraction_level == 1);
+        assert(sig.usage_state == PhoneUsageState::PLAYING);
+        std::cout << "  phone_sync (state/level separated): OK\n";
+    }
+
+    // Test 15: phone_sync (not in use)
+    {
+        json resp = parseResponse(server.handleCommand(
+            R"({"cmd":"phone_sync","id":15,"data":{"is_in_use":false,"distraction_level":0}})"));
+        assertSuccess(resp, 15);
+        assert(resp["data"]["action_taken"] == false);
+        std::cout << "  phone_sync (not in use): OK\n";
+    }
+
+    // Test 16: phone_sync (local_session_sync)
+    {
+        json resp = parseResponse(server.handleCommand(
+            R"({"cmd":"phone_sync","id":16,"data":{"is_in_use":false,"app_name":"local_session_sync","duration_sec":1500}})"));
+        assertSuccess(resp, 16);
+        std::cout << "  phone_sync (local_session_sync): OK\n";
+    }
+
+    // Test 17: get_console_data
+    {
+        json resp = parseResponse(server.handleCommand(
+            R"({"cmd":"get_console_data","id":17})"));
+        assertSuccess(resp, 17);
+        assert(resp["data"].contains("session"));
+        assert(resp["data"].contains("device"));
+        assert(resp["data"].contains("reminder"));
+        assert(resp["data"].contains("frame_quality"));
+        assert(resp["data"].contains("today"));
+        assert(resp["data"]["session"].contains("active"));
+        assert(resp["data"]["session"].contains("session_id"));
+        assert(resp["data"]["session"].contains("focus_state"));
+        assert(resp["data"]["session"].contains("calibration_completed"));
+        assert(resp["data"]["session"].contains("session_phase"));
         std::cout << "  get_console_data: OK\n";
     }
 
-    // Test 12: Unknown command
+    // Test 18: session_feedback
     {
-        std::string resp = server.handleCommand("{\"cmd\":\"unknown_cmd\"}");
-        assert(resp.find("\"status\":\"error\"") != std::string::npos);
+        json start_resp = parseResponse(server.handleCommand(
+            R"({"cmd":"session_control","id":18,"data":{"action":"start","target_duration_min":10}})"));
+        std::string sid = start_resp["data"]["session_id"];
+
+        json resp = parseResponse(server.handleCommand(
+            "{\"cmd\":\"session_feedback\",\"id\":18,\"data\":{\"session_id\":\"" + sid + "\",\"feedback\":\"too_much\"}}"));
+        assertSuccess(resp, 18);
+        assert(resp["data"]["success"] == true);
+
+        server.handleCommand(R"({"cmd":"session_control","id":18,"data":{"action":"end"}})");
+        std::cout << "  session_feedback: OK\n";
+    }
+
+    // Test 19: get_session_history
+    {
+        json resp = parseResponse(server.handleCommand(
+            R"({"cmd":"get_session_history","id":19,"data":{"limit":1}})"));
+        assertSuccess(resp, 19);
+        assert(resp["data"].contains("sessions"));
+        assert(resp["data"].contains("has_more"));
+        assert(resp["data"].contains("next_cursor"));
+        std::cout << "  get_session_history: OK\n";
+    }
+
+    // Test 20: session_feedback (invalid value)
+    {
+        json resp = parseResponse(server.handleCommand(
+            R"({"cmd":"session_feedback","id":20,"data":{"session_id":"session_bad","feedback":"invalid"}})"));
+        assert(resp["status"] == "error");
+        std::cout << "  session_feedback (invalid): OK\n";
+    }
+
+    // Test 21: session_feedback (missing session_id session)
+    {
+        json resp = parseResponse(server.handleCommand(
+            R"({"cmd":"session_feedback","id":21,"data":{"session_id":"non_exist_session_123","feedback":"too_little"}})"));
+        assert(resp["status"] == "error");
+        assert(resp["error"].get<std::string>().find("Session not found") != std::string::npos);
+        std::cout << "  session_feedback (not found): OK\n";
+    }
+
+    // Test 22: start/end/report/history/feedback use same session_id (closed loop)
+    {
+        json start_resp = parseResponse(server.handleCommand(
+            R"({"cmd":"session_control","id":22,"data":{"action":"start","target_duration_min":10}})"));
+        assertSuccess(start_resp, 22);
+        assert(start_resp["data"]["success"] == true);
+        std::string sid = start_resp["data"]["session_id"];
+
+        json end_resp = parseResponse(server.handleCommand(
+            R"({"cmd":"session_control","id":23,"data":{"action":"end"}})"));
+        assertSuccess(end_resp, 23);
+        auto session_id = end_resp["data"]["session_id"].get<std::string>();
+        assert(session_id == sid);
+
+        json last_report = parseResponse(server.handleCommand(
+            R"({"cmd":"get_last_report","id":24})"));
+        assertSuccess(last_report, 24);
+        assert(last_report["data"]["session_id"] == sid);
+
+        json history = parseResponse(server.handleCommand(
+            R"({"cmd":"get_session_history","id":25,"data":{"limit":1}})"));
+        assertSuccess(history, 25);
+        assert(history["data"]["sessions"].is_array());
+        assert(!history["data"]["sessions"].empty());
+        assert(history["data"]["sessions"][0]["session_id"] == sid);
+
+        std::string fb_payload = std::string("{\"cmd\":\"session_feedback\",\"id\":26,\"data\":{\"session_id\":\"") + sid
+                                     + "\",\"feedback\":\"too_much\"}}";
+        json fb_resp = parseResponse(server.handleCommand(fb_payload));
+        assertSuccess(fb_resp, 26);
+        assert(fb_resp["data"]["success"] == true);
+
+        std::cout << "  session lifecycle/session_feedback closed loop: OK\n";
+    }
+
+    // Test 23: Unknown command
+    {
+        response = parseResponse(server.handleCommand(R"({"cmd":"unknown_cmd","id":99})"));
+        assert(response["status"] == "error");
+        assert(response["id"] == 99);
         std::cout << "  unknown command: OK\n";
+    }
+
+    // Test 22: push callback registration
+    {
+        bool callback_called = false;
+        store.setPushCallback([&callback_called](const std::string&) {
+            callback_called = true;
+        });
+        store.pushEvent(R"({"cmd":"push_state","data":{"focus_state":0}})");
+        assert(callback_called);
+        std::cout << "  push callback: OK\n";
     }
 
     server.shutdown(ctx);

@@ -1,10 +1,13 @@
 #include "vision/VisionResult.h"
 #include "vision/VisionEngine.h"
 #include "vision/InferenceScheduler.h"
+#include "camera/CameraPipeline.h"
 #include "app/BoundedQueue.h"
 #include "app/SystemStateStore.h"
+#include "app/AppContext.h"
 #include <iostream>
 #include <cassert>
+#include <cstdlib>
 
 using namespace edgefocus;
 
@@ -141,6 +144,69 @@ void test_mock_scenarios() {
     assert(res_lc.reason_code == ReasonCode::LOW_CONFIDENCE);
 }
 
+void test_vision_pause_does_not_emit_results() {
+    BoundedQueue<VisionResult> output_queue(3, false);
+    BoundedQueue<CameraFrame> frame_queue(3, true);
+    SystemStateStore store;
+    AppContext ctx;
+
+    SessionInfo session;
+    session.active = true;
+    session.paused = true;
+    session.calibration_completed = true;
+    store.updateSession(session);
+
+    VisionEngine engine(output_queue, frame_queue, store);
+    engine.init(ctx);
+    engine.setMockScenario(MockScenario::FOCUSED);
+
+    // Push a stale frame that should be drained on pause.
+    CameraFrame stale;
+    stale.timestamp_ms = 12345;
+    stale.width = 64;
+    stale.height = 64;
+    stale.channels = 3;
+    stale.format = PixelFormat::BGR24;
+    stale.data.assign(64 * 64 * 3, 0);
+    assert(frame_queue.push(std::move(stale)));
+    assert(!output_queue.tryPop().has_value());
+
+    engine.runOnce(ctx);
+    assert(!output_queue.tryPop().has_value());
+    assert(frame_queue.empty());
+}
+
+void test_camera_disabled_does_not_capture() {
+#ifdef _WIN32
+    _putenv_s("EDGEFOCUS_CAMERA_DISABLED", "1");
+#else
+    setenv("EDGEFOCUS_CAMERA_DISABLED", "1", 1);
+#endif
+
+    BoundedQueue<CameraFrame> frames(1, true);
+    SystemStateStore store;
+    DeviceStatus status;
+    status.camera_ok = true;
+    store.updateDeviceStatus(status);
+    SessionInfo session;
+    session.active = true;
+    store.updateSession(session);
+
+    CameraPipeline camera(frames, store);
+    AppContext ctx;
+    assert(camera.init(ctx));
+    camera.runOnce(ctx);
+
+    assert(!frames.tryPop().has_value());
+    assert(store.snapshot().device.camera_ok == false);
+
+#ifdef _WIN32
+    _putenv_s("EDGEFOCUS_CAMERA_DISABLED", "");
+#else
+    unsetenv("EDGEFOCUS_CAMERA_DISABLED");
+#endif
+}
+
 void test_fallback_inference_from_pixels() {
     BoundedQueue<CameraFrame> frame_queue(3, true);
     BoundedQueue<VisionResult> result_queue(5, false);
@@ -182,6 +248,8 @@ int main() {
     test_confidence_value();
     test_vision_result_helpers();
     test_mock_scenarios();
+    test_vision_pause_does_not_emit_results();
+    test_camera_disabled_does_not_capture();
     test_fallback_inference_from_pixels();
     std::cout << "All VisionResult tests passed!\n";
     return 0;

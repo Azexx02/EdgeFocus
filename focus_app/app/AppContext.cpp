@@ -20,8 +20,8 @@ AppContext::~AppContext() {
 }
 
 void AppContext::signalHandler(int signum) {
+    (void)signum;
     if (s_instance) {
-        LOGI("AppContext", "Caught signal %d, requesting shutdown", signum);
         s_instance->requestShutdown();
     }
 }

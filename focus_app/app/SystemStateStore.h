@@ -2,37 +2,33 @@
 #include <mutex>
 #include <condition_variable>
 #include <string>
+#include <functional>
 #include <cstdint>
 #include "behavior/FocusState.h"
+#include "behavior/EventDetector.h"
 #include "policy/InterventionCommand.h"
 #include "policy/ModeManager.h"
 #include "storage/ReportGenerator.h"
 
 namespace edgefocus {
 
-// ---------------------------------------------------------------------------
-// SystemStateStore — the single source of truth for UI and device layers.
-//
-// RULES:
-//   - Behavior/vision/policy modules WRITE to this store.
-//   - UI and DeviceManager only READ (via snapshot()).
-//   - All fields are protected by a single mutex.
-//   - snapshot() returns a consistent copy for lock-free reading.
-// ---------------------------------------------------------------------------
-
 struct SessionInfo {
     bool        active = false;
-    bool        calibrating = false;           // true during calibration phase
-    bool        calibration_completed = false;  // true after FSM exits CALIBRATING
-    std::string session_id;                    // unique session identifier
+    bool        paused = false;
+    bool        calibrating = false;
+    bool        calibration_completed = false;
+    std::string session_id;
     int64_t     start_ms = 0;
     int64_t     elapsed_ms = 0;
+    int64_t     focus_accumulated_ms = 0;
     int         distraction_count = 0;
     int         reminder_count = 0;
-    int64_t     away_since_ms = 0;             // timestamp when AWAY state began (0 = not away)
-    int64_t     away_timeout_ms = 30 * 60 * 1000; // auto-terminate after away for this long
-    int64_t     target_duration_ms = 0;        // pomodoro target duration (0 = no target)
-    int64_t     remaining_ms = 0;              // remaining time (target - elapsed)
+    int         phone_distraction_count = 0;
+    int         current_phone_distraction_level = 1;
+    int64_t     away_since_ms = 0;
+    int64_t     away_timeout_ms = 30 * 60 * 1000;
+    int64_t     target_duration_ms = 0;
+    int64_t     remaining_ms = 0;
 };
 
 struct TodayStats {
@@ -49,65 +45,68 @@ struct ActiveReminder {
     int64_t      since_ms = 0;
 };
 
+struct BehaviorContext {
+    int         risk_score = 0;
+    bool        vision_signal = false;
+    bool        phone_signal = false;
+    int         phone_distraction_level = 1;
+    int         phone_usage_state = 0;
+    std::string reason;
+};
+
 struct DeviceStatus {
     SystemMode  system_mode = SystemMode::NORMAL;
     bool        camera_ok = false;
     bool        bracelet_connected = false;
     bool        ble_enabled = false;
-    int         battery_percent = -1;  // -1 = unknown
+    int         battery_percent = -1;
+    int         band_last_alert_level = 0;
+    int         band_last_alert_pattern = 0;
+    int         band_write_attempt_count = 0;
+    std::string band_last_write_status;
 };
 
 struct FrameQualityInfo {
-    float       score = 0.0f;       // 0.0 ~ 1.0
-    std::string reason;             // e.g. "blur detected", "too dark"
+    float       score = 0.0f;
+    std::string reason;
     bool        guidance_needed = false;
 };
 
-// ---------------------------------------------------------------------------
-// Complete state snapshot — returned by snapshot()
-// ---------------------------------------------------------------------------
+struct Preferences {
+    int         system_mode = 0;
+    int         away_timeout_min = 15;
+    int         default_focus_duration_min = 25;
+    float       vibration_strength = 0.5f;
+    int         led_brightness = 75;
+    float       reminder_sensitivity = 0.5f;
+    // Bitmasks use stable channel bits:
+    // SCREEN=1, BAND=2, SOUND=4, LIGHT=8
+    int         normal_channels_mask = 3;
+    int         silent_channels_mask = 2;
+};
 
 struct SystemSnapshot {
-    // Focus
     FocusState  focus_state = FocusState::CALIBRATING;
     int64_t     focus_state_since_ms = 0;
     std::string focus_reason;
 
-    // Session
     SessionInfo session;
-
-    // Today
     TodayStats  today;
-
-    // Reminder
     ActiveReminder reminder;
-
-    // Device
     DeviceStatus device;
-
-    // Frame quality
     FrameQualityInfo frame_quality;
-
-    // Last report
     SessionReport last_report;
+    Preferences preferences;
+    BehaviorContext behavior_context;
 
-    // Timestamp of this snapshot
     int64_t snapshot_ms = 0;
 };
 
-// ---------------------------------------------------------------------------
-// SystemStateStore
-// ---------------------------------------------------------------------------
-
 class SystemStateStore {
 public:
-    // Delete copy/move
     SystemStateStore(const SystemStateStore&) = delete;
     SystemStateStore& operator=(const SystemStateStore&) = delete;
-
     SystemStateStore() = default;
-
-    // --- Writers (called by behavior/vision/policy modules) ---
 
     void updateFocusState(FocusState state, int64_t since_ms, const std::string& reason);
     void updateSession(const SessionInfo& info);
@@ -117,18 +116,26 @@ public:
     void updateDeviceStatus(const DeviceStatus& status);
     void updateFrameQuality(float score, const std::string& reason, bool guidance_needed);
     void updateLastReport(const SessionReport& report);
+    void updatePreferences(const Preferences& prefs);
+    void updateBehaviorContext(const BehaviorContext& context);
 
-    // Increment helpers
     void incrementDistraction();
     void incrementReminder();
 
-    // --- Session lifecycle ---
     void notifySessionChange();
     bool waitForSessionChange(std::unique_lock<std::mutex>& lock, int timeout_ms);
     void resetSession();
     std::mutex& mutexForCV() { return mutex_; }
 
-    // --- Reader (called by UI) ---
+    // Phone signal buffer (BleGattServer writes, BehaviorEngine reads)
+    void setPhoneSignal(const PhoneUsageSignal& sig);
+    bool consumePhoneSignal(PhoneUsageSignal& sig_out);
+    void clearPhoneSignal();
+
+    // Push event callback (BehaviorEngine calls, BleGattServer registers)
+    using PushCallback = std::function<void(const std::string& event_json)>;
+    void setPushCallback(PushCallback cb);
+    void pushEvent(const std::string& event_json);
 
     SystemSnapshot snapshot() const;
 
@@ -136,6 +143,10 @@ private:
     mutable std::mutex mutex_;
     std::condition_variable session_cv_;
     SystemSnapshot state_;
+
+    PhoneUsageSignal pending_phone_sig_;
+    bool has_phone_signal_ = false;
+    PushCallback push_callback_;
 };
 
 } // namespace edgefocus

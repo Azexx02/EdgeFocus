@@ -4,7 +4,16 @@ constexpr const char* DB_SCHEMA = R"(
 CREATE TABLE IF NOT EXISTS session (
     id TEXT PRIMARY KEY,
     start_time INTEGER,
-    end_time INTEGER
+    end_time INTEGER,
+    target_duration INTEGER,
+    actual_duration INTEGER,
+    focus_duration INTEGER,
+    status TEXT,
+    end_reason TEXT,
+    distraction_count INTEGER DEFAULT 0,
+    reminder_count INTEGER DEFAULT 0,
+    phone_distraction_count INTEGER DEFAULT 0,
+    feedback TEXT DEFAULT 'just_right'
 );
 
 CREATE TABLE IF NOT EXISTS state_segment (
@@ -33,10 +42,14 @@ CREATE TABLE IF NOT EXISTS reminder (
 );
 
 CREATE TABLE IF NOT EXISTS feedback (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    session_id TEXT,
-    rating INTEGER,
-    comments TEXT
+    session_id TEXT PRIMARY KEY,
+    rating TEXT NOT NULL DEFAULT 'just_right',
+    updated_at INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS preferences (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS user_baseline (

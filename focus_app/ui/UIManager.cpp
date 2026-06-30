@@ -171,8 +171,13 @@ void UIManager::switchPage(int id) {
 
 void UIManager::renderFrame() {
     SystemSnapshot snap = store_.snapshot();
-    renderGlobalHeader(snap);
+    if (!last_session_active_ && snap.session.active) {
+        switchPage(PAGE_STATUS);
+    }
+    last_session_active_ = snap.session.active;
+
     pages_[current_page_]->render(fb_, snap);
+    renderGlobalHeader(snap);
     fb_.flush();
 }
 

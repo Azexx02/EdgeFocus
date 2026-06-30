@@ -45,6 +45,7 @@ void Logger::log(LogLevel lv, const char* tag, const char* fmt, va_list args) {
     fprintf(stderr, "[%s.%03ld] [%s] [%s] ", timebuf, (long)ms, levelStr(lv), tag);
     vfprintf(stderr, fmt, args);
     fprintf(stderr, "\n");
+    fflush(stderr);
 }
 
 void Logger::debug(const char* tag, const char* fmt, ...) {

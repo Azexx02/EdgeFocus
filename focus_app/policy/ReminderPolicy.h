@@ -1,6 +1,7 @@
 #pragma once
 #include "app/Module.h"
 #include "behavior/FocusState.h"
+#include "policy/NotificationRouter.h"
 #include "InterventionCommand.h"
 #include "ModeManager.h"
 #include <optional>
@@ -31,6 +32,7 @@ private:
     SystemStateStore& store_;
     SQLiteStore& sqlite_store_;
     DeviceManager& device_mgr_;
+    NotificationRouter notifier_;
     ModeManager mode_manager_;
     int64_t last_reminder_time_ms_{0};
     int64_t base_cooling_ms_{5000};

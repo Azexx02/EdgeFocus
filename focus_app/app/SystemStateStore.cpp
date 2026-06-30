@@ -3,8 +3,6 @@
 
 namespace edgefocus {
 
-// --- Writers ---
-
 void SystemStateStore::updateFocusState(FocusState state, int64_t since_ms,
                                          const std::string& reason) {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -56,6 +54,16 @@ void SystemStateStore::updateLastReport(const SessionReport& report) {
     state_.last_report = report;
 }
 
+void SystemStateStore::updatePreferences(const Preferences& prefs) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    state_.preferences = prefs;
+}
+
+void SystemStateStore::updateBehaviorContext(const BehaviorContext& context) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    state_.behavior_context = context;
+}
+
 void SystemStateStore::incrementDistraction() {
     std::lock_guard<std::mutex> lock(mutex_);
     state_.session.distraction_count++;
@@ -65,8 +73,6 @@ void SystemStateStore::incrementReminder() {
     std::lock_guard<std::mutex> lock(mutex_);
     state_.session.reminder_count++;
 }
-
-// --- Session lifecycle ---
 
 void SystemStateStore::notifySessionChange() {
     session_cv_.notify_all();
@@ -86,9 +92,51 @@ void SystemStateStore::resetSession() {
     state_.reminder.level = CommandLevel::NONE;
     state_.reminder.message.clear();
     state_.reminder.since_ms = 0;
+    state_.behavior_context = BehaviorContext{};
+    // Clear phone signal buffer so previous session's signal doesn't leak
+    has_phone_signal_ = false;
+    pending_phone_sig_ = {};
 }
 
-// --- Reader ---
+// Phone signal buffer
+
+void SystemStateStore::setPhoneSignal(const PhoneUsageSignal& sig) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    pending_phone_sig_ = sig;
+    has_phone_signal_ = true;
+}
+
+bool SystemStateStore::consumePhoneSignal(PhoneUsageSignal& sig_out) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!has_phone_signal_) return false;
+    sig_out = pending_phone_sig_;
+    has_phone_signal_ = false;
+    return true;
+}
+
+void SystemStateStore::clearPhoneSignal() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    has_phone_signal_ = false;
+    pending_phone_sig_ = {};
+}
+
+// Push event callback
+
+void SystemStateStore::setPushCallback(PushCallback cb) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    push_callback_ = std::move(cb);
+}
+
+void SystemStateStore::pushEvent(const std::string& event_json) {
+    std::function<void(const std::string&)> cb;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        cb = push_callback_;
+    }
+    if (cb) cb(event_json);
+}
+
+// Reader
 
 SystemSnapshot SystemStateStore::snapshot() const {
     std::lock_guard<std::mutex> lock(mutex_);

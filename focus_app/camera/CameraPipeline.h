@@ -32,6 +32,7 @@ private:
     bool openCamera();
     void closeCamera();
     bool readFrame(CameraFrame* frame);
+    bool cameraDisabled() const;
     std::vector<int> cameraCandidates() const;
 
     struct Impl;
@@ -39,6 +40,7 @@ private:
     Queue& output_queue_;
     SystemStateStore& store_;
     bool camera_opened_ = false;
+    int64_t next_open_attempt_ms_ = 0;
     int64_t captured_frames_ = 0;
     int64_t dropped_frames_ = 0;
 };

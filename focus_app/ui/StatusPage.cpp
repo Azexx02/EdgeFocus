@@ -1,5 +1,8 @@
 #include "StatusPage.h"
 #include "app/Logger.h"
+#include "app/SessionController.h"
+#include "app/SessionPhase.h"
+#include "storage/StorageEvent.h"
 #include <cstdio>
 #include <string>
 #include <cmath>
@@ -11,7 +14,21 @@
 
 namespace edgefocus {
 
+namespace {
+int64_t monotonicMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+int64_t wallClockMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+}
+} // namespace
+
 void StatusPage::render(FrameBuffer& fb, const SystemSnapshot& snap) {
+    syncFromSnapshot(snap);
+
     const int W = fb.width();
     const int H = fb.height();
 
@@ -188,8 +205,8 @@ void StatusPage::render(FrameBuffer& fb, const SystemSnapshot& snap) {
         // GO Button
         fb.fillRoundRect(Rect(20, H - 80, W - 40, 55), 10, Color::primary());
         FontInfo go_font;
-        go_font.scale = 3;
-        fb.drawTextCentered(Rect(20, H - 80, W - 40, 55), "GO", Color::bgDark(), go_font);
+        go_font.scale = 2;
+        fb.drawTextCentered(Rect(20, H - 80, W - 40, 55), "SKIP & START", Color::bgDark(), go_font);
 
     } else if (internal_state_ == InternalState::FOCUSED) {
         // --- Active Session Screen ---
@@ -203,14 +220,8 @@ void StatusPage::render(FrameBuffer& fb, const SystemSnapshot& snap) {
         snprintf(dist_buf, sizeof(dist_buf), "%d distractions", snap.session.distraction_count);
         fb.drawTextCentered(Rect(0, 80, W, 20), dist_buf, Color::textSecondary(), small_font);
 
-        // Calculate elapsed time from system clock (not dependent on vision data)
-        int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now().time_since_epoch()).count();
-        int64_t elapsed_ms = 0;
-        if (snap.session.start_ms > 0) {
-            elapsed_ms = now_ms - snap.session.start_ms;
-        }
-        if (elapsed_ms < 0) elapsed_ms = 0;
+        const int64_t elapsed_sec = elapsedSeconds(snap);
+        const int64_t display_sec = countdownSeconds(snap);
 
         // Draw circular progress
         int cx = W / 2;
@@ -220,27 +231,28 @@ void StatusPage::render(FrameBuffer& fb, const SystemSnapshot& snap) {
         fb.drawRing(cx, cy, radius, thickness, Color::bgCard());
         float progress = 0.0f;
         if (snap.session.target_duration_ms > 0) {
-            progress = static_cast<float>(elapsed_ms) / static_cast<float>(snap.session.target_duration_ms);
+            const int64_t remaining_ms = display_sec * 1000;
+            progress = 1.0f - (static_cast<float>(remaining_ms) /
+                               static_cast<float>(snap.session.target_duration_ms));
+            if (progress < 0.0f) progress = 0.0f;
             if (progress > 1.0f) progress = 1.0f;
         }
-        fb.drawArc(cx, cy, radius, thickness, -M_PI/2, -M_PI/2 + (progress * 2.0f * M_PI), Color::primary());
+        constexpr float kHalfPi = static_cast<float>(M_PI / 2.0);
+        constexpr float kTwoPi = static_cast<float>(M_PI * 2.0);
+        fb.drawArc(cx, cy, radius, thickness, -kHalfPi, -kHalfPi + (progress * kTwoPi), Color::primary());
 
-        // Time text inside ring
+        // Time text inside ring: match the mobile APP countdown direction.
         FontInfo time_font;
         time_font.scale = 2;
-        int64_t elapsed_sec = elapsed_ms / 1000;
-        std::string time_str = formatDuration(elapsed_sec);
+        std::string time_str = formatDuration(display_sec);
         fb.drawTextCentered(Rect(cx - radius, cy - 10, radius * 2, 20), time_str, Color::textPrimary(), time_font);
 
-        // Remaining time display
+        // Secondary time display keeps elapsed time visible without changing the data contract.
         if (snap.session.target_duration_ms > 0) {
-            int64_t remaining_ms = snap.session.target_duration_ms - elapsed_ms;
-            if (remaining_ms < 0) remaining_ms = 0;
-            int64_t remaining_sec = remaining_ms / 1000;
-            std::string remain_str = formatDuration(remaining_sec);
+            std::string elapsed_str = formatDuration(elapsed_sec);
             FontInfo remain_font;
             remain_font.scale = 1;
-            fb.drawTextCentered(Rect(0, cy + radius + 5, W, 15), remain_str, Color::textSecondary(), remain_font);
+            fb.drawTextCentered(Rect(0, cy + radius + 5, W, 15), elapsed_str, Color::textSecondary(), remain_font);
         }
 
         // PAUSE Button
@@ -253,7 +265,57 @@ void StatusPage::render(FrameBuffer& fb, const SystemSnapshot& snap) {
         if (snap.focus_state != FocusState::FOCUSED) {
             fb.drawTextCentered(Rect(0, 220, W, 20), state_text, state_color, small_font);
         }
+    } else if (internal_state_ == InternalState::PAUSED) {
+        FontInfo title_font;
+        title_font.scale = 2;
+        fb.drawTextCentered(Rect(0, 80, W, 30), "PAUSED", Color::secondary(), title_font);
+
+        FontInfo small_font;
+        small_font.scale = 1;
+        fb.drawTextCentered(Rect(0, 110, W, 20), "Session paused", Color::textSecondary(), small_font);
+
+        fb.fillRoundRect(Rect(20, 190, W - 40, 45), 8, Color::bgCard());
+        fb.drawTextCentered(Rect(20, 190, W - 40, 45), "RESUME", Color::textPrimary(), title_font);
+
+        fb.fillRoundRect(Rect(20, 250, W - 40, 45), 8, Color::bgCard());
+        fb.drawTextCentered(Rect(20, 250, W - 40, 45), "END", Color::error(), title_font);
     }
+}
+
+void StatusPage::syncWithSnapshotForTest(const SystemSnapshot& snap) {
+    syncFromSnapshot(snap);
+}
+
+void StatusPage::syncFromSnapshot(const SystemSnapshot& snap) {
+    const SessionPhase phase = deriveSessionPhase(snap.session);
+    switch (phase) {
+    case SessionPhase::PAUSED:
+        internal_state_ = InternalState::PAUSED;
+        break;
+    case SessionPhase::PRECHECK:
+        internal_state_ = InternalState::CALIBRATING;
+        break;
+    case SessionPhase::FOCUSING:
+        internal_state_ = InternalState::FOCUSED;
+        break;
+    case SessionPhase::IDLE:
+    default:
+        internal_state_ = InternalState::READY;
+        break;
+    }
+
+    const bool session_active = (phase != SessionPhase::IDLE);
+    if (session_active && snap.session.target_duration_ms > 0) {
+        target_duration_min_ = static_cast<int>(snap.session.target_duration_ms / (60 * 1000));
+    } else if (!session_active) {
+        if (was_session_active_) {
+            local_duration_override_ = false;
+        }
+        if (!local_duration_override_) {
+            target_duration_min_ = snap.preferences.default_focus_duration_min;
+        }
+    }
+    was_session_active_ = session_active;
 }
 
 bool StatusPage::onTouch(int x, int y) {
@@ -282,6 +344,7 @@ bool StatusPage::onTouch(int x, int y) {
         if (y >= SEL_Y && y <= SEL_Y + SEL_H && x >= 30 && x <= 30 + BTN_W) {
             target_duration_min_ -= DURATION_STEP;
             if (target_duration_min_ < DURATION_MIN) target_duration_min_ = DURATION_MIN;
+            local_duration_override_ = true;
             return true;
         }
 
@@ -290,6 +353,7 @@ bool StatusPage::onTouch(int x, int y) {
         if (y >= SEL_Y && y <= SEL_Y + SEL_H && x >= plus_x && x <= plus_x + BTN_W) {
             target_duration_min_ += DURATION_STEP;
             if (target_duration_min_ > DURATION_MAX) target_duration_min_ = DURATION_MAX;
+            local_duration_override_ = true;
             return true;
         }
 
@@ -297,26 +361,12 @@ bool StatusPage::onTouch(int x, int y) {
         if (y > 175 && y < 230 && x > 20 && x < W - 20) {
             // START button tapped - begin session with calibration
             internal_state_ = InternalState::CALIBRATING;
-            calibration_start_ms_ = std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now().time_since_epoch()).count();
+            calibration_start_ms_ = monotonicMs();
 
-            SessionInfo s;
-            s.active = true;
-            s.calibrating = true;
-            s.calibration_completed = false;
-            s.session_id = "session_" + std::to_string(
-                std::chrono::duration_cast<std::chrono::milliseconds>(
-                    std::chrono::steady_clock::now().time_since_epoch()).count());
-            s.start_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now().time_since_epoch()).count();
-            s.elapsed_ms = 0;
-            s.distraction_count = 0;
-            s.reminder_count = 0;
-            s.away_since_ms = 0;
-            s.away_timeout_ms = snap.session.away_timeout_ms;
-            s.target_duration_ms = target_duration_min_ * 60000;
-            store_->updateSession(s);
-            store_->notifySessionChange();
+            if (sqlite_store_) {
+                SessionController controller(*store_, *sqlite_store_);
+                controller.startSession(target_duration_min_, "local");
+            }
 
             LOGI("StatusPage", "Session started (calibration, target=%dmin)", target_duration_min_);
             return true;
@@ -327,29 +377,42 @@ bool StatusPage::onTouch(int x, int y) {
             internal_state_ = InternalState::FOCUSED;
 
             SessionInfo s = store_->snapshot().session;
+            const int64_t now_ms = monotonicMs();
             s.calibrating = false;
             s.calibration_completed = true;
+            s.start_ms = now_ms;
+            s.elapsed_ms = 0;
+            s.remaining_ms = s.target_duration_ms;
             store_->updateSession(s);
+            store_->updateFocusState(FocusState::FOCUSED, now_ms, "Calibration skipped");
+            store_->notifySessionChange();
             return true;
         }
     } else if (internal_state_ == InternalState::FOCUSED) {
         if (y > 250 && y < 300 && x > 20 && x < W - 20) {
-            // PAUSE button tapped - end session
-            internal_state_ = InternalState::READY;
+            // PAUSE button tapped - pause session only
+            if (!sqlite_store_) return false;
 
-            SessionInfo s = store_->snapshot().session;
-            s.active = false;
-            store_->updateSession(s);
-            store_->notifySessionChange();
+            SessionController controller(*store_, *sqlite_store_);
+            controller.pauseSession("local_paused");
+            internal_state_ = InternalState::PAUSED;
+            return true;
+        }
+    } else if (internal_state_ == InternalState::PAUSED) {
+        if (y > 190 && y < 235 && x > 20 && x < W - 20) {
+            // Resume button tapped
+            if (!sqlite_store_) return false;
+            SessionController controller(*store_, *sqlite_store_);
+            controller.resumeSession("local_resumed");
+            internal_state_ = InternalState::FOCUSED;
+            return true;
+        }
 
-            // Generate report before navigating to review
-            if (report_gen_ && !s.session_id.empty()) {
-                SessionReport report = report_gen_->generateReport(s.session_id);
-                store_->updateLastReport(report);
-            }
-
-            store_->resetSession();
-
+        if (y > 250 && y < 295 && x > 20 && x < W - 20) {
+            // End button tapped
+            if (!sqlite_store_) return false;
+            SessionController controller(*store_, *sqlite_store_);
+            controller.endSession("local_ended");
             if (switch_page_) switch_page_(3); // PAGE_REVIEW
             return true;
         }
@@ -408,6 +471,36 @@ std::string StatusPage::formatDuration(int64_t seconds) const {
     if (h > 0) snprintf(buf, sizeof(buf), "%02d:%02d:%02d", h, m, s);
     else snprintf(buf, sizeof(buf), "%02d:%02d", m, s);
     return std::string(buf);
+}
+
+int64_t StatusPage::elapsedSeconds(const SystemSnapshot& snap) const {
+    int64_t elapsed_ms = snap.session.elapsed_ms;
+    if (elapsed_ms <= 0 && snap.session.start_ms > 0) {
+        const int64_t now_ms = monotonicMs();
+        elapsed_ms = now_ms - snap.session.start_ms;
+    }
+    if (elapsed_ms < 0) elapsed_ms = 0;
+    return elapsed_ms / 1000;
+}
+
+int64_t StatusPage::countdownSeconds(const SystemSnapshot& snap) const {
+    if (snap.session.target_duration_ms <= 0) {
+        return elapsedSeconds(snap);
+    }
+
+    int64_t remaining_ms = snap.session.remaining_ms;
+    if (remaining_ms <= 0 && snap.session.elapsed_ms < snap.session.target_duration_ms) {
+        remaining_ms = snap.session.target_duration_ms - snap.session.elapsed_ms;
+    }
+    if (remaining_ms < 0) remaining_ms = 0;
+    if (remaining_ms > snap.session.target_duration_ms) {
+        remaining_ms = snap.session.target_duration_ms;
+    }
+    return remaining_ms / 1000;
+}
+
+int64_t StatusPage::countdownSecondsForTest(const SystemSnapshot& snap) const {
+    return countdownSeconds(snap);
 }
 
 } // namespace edgefocus

@@ -6,14 +6,16 @@ FocusStateMachine::FocusStateMachine()
     : win30s_(30000), 
       current_state_(FocusState::CALIBRATING),
       candidate_state_(FocusState::CALIBRATING),
-      candidate_start_ms_(0) {}
+      candidate_start_ms_(0) {
+    last_event_ = {};
+}
 
 FocusState FocusStateMachine::determineCandidateState(const FocusEvent& event) {
     if (event.is_low_confidence) return FocusState::LOW_CONFIDENCE;
     if (event.is_away) return FocusState::AWAY;
     if (event.is_phone_in_use) {
-        if (event.phone_distraction_level == 0) return FocusState::PHONE_IN_LEARNING;
-        if (event.phone_distraction_level == 2) return FocusState::PHONE_IN_PLAYING;
+        if (event.phone_usage_state == PhoneUsageState::LEARNING) return FocusState::PHONE_IN_LEARNING;
+        if (event.phone_usage_state == PhoneUsageState::PLAYING) return FocusState::PHONE_IN_PLAYING;
         return FocusState::PHONE_IN_USE;
     }
     if (event.is_sleepy_or_slumped) return FocusState::SLEEPY_OR_SLUMPED;
@@ -27,6 +29,8 @@ void FocusStateMachine::processFrame(const VisionResult& frame) {
 
     // Initial calibration period: require 1 second of data with quality gate
     if (current_state_ == FocusState::CALIBRATING) {
+        last_event_ = {};
+        last_risk_score_ = 0;
         if (!win30s_.getItems().empty() && 
             (frame.timestamp_ms - win30s_.getItems().front().timestamp_ms) >= 1000) {
             // Require at least some frames with good quality before transitioning
@@ -41,6 +45,7 @@ void FocusStateMachine::processFrame(const VisionResult& frame) {
     }
 
     FocusEvent event = detector_.detect(win30s_, config_);
+    last_event_ = event;
 
     FocusState new_candidate = determineCandidateState(event);
 
@@ -67,6 +72,7 @@ void FocusStateMachine::processFrame(const VisionResult& frame) {
 
     // Update risk score
     last_risk_score_ = scorer_.calculateScore(event);
+    last_event_.risk_score = last_risk_score_;
 }
 
 void FocusStateMachine::reset() {
@@ -74,6 +80,8 @@ void FocusStateMachine::reset() {
     candidate_state_ = FocusState::CALIBRATING;
     candidate_start_ms_ = 0;
     last_risk_score_ = 0;
+    last_event_ = {};
+    detector_.resetPhoneSignal();
     win30s_ = SlidingWindow(30000);
 }
 

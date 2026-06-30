@@ -23,33 +23,56 @@ bool InferenceScheduler::init(VisionRuntimeMode mode, const std::string& registr
     mode_ = mode;
     processed_frames_ = 0;
     dropped_results_ = 0;
+    real_adapter_attempted_ = false;
+    real_adapter_loaded_ = false;
 
     registry_.load(registry_path);
     fallback_adapter_.reset(new CpuFallbackPoseAdapter());
     fallback_adapter_->init(ModelPackage{});
+    real_adapter_.reset();
 
-    real_adapter_.reset(new StaiMpuPoseAdapter());
-    bool real_loaded = false;
-    if (registry_.hasPosePackage()) {
-        real_loaded = real_adapter_->init(registry_.posePackage());
-    }
-
-    if (mode_ == VisionRuntimeMode::REAL && !real_loaded) {
+    if (mode_ == VisionRuntimeMode::REAL && !registry_.hasPosePackage()) {
         LOGW("InferenceScheduler", "Real model requested but unavailable: %s", registry_.lastError().c_str());
     }
-    LOGI("InferenceScheduler", "Init mode=%d real_loaded=%d fallback_loaded=%d adapter=%s",
-         static_cast<int>(mode_), real_loaded ? 1 : 0, fallback_adapter_->loaded() ? 1 : 0, activeAdapterName());
+    LOGI("InferenceScheduler", "Init mode=%d real_pending=%d fallback_loaded=%d adapter=%s",
+         static_cast<int>(mode_), registry_.hasPosePackage() ? 1 : 0, fallback_adapter_->loaded() ? 1 : 0, activeAdapterName());
     return true;
 }
 
 const char* InferenceScheduler::activeAdapterName() const {
     if (mode_ == VisionRuntimeMode::FALLBACK) return fallback_adapter_ ? fallback_adapter_->name() : "none";
-    if (real_adapter_ && real_adapter_->loaded()) return real_adapter_->name();
+    if (real_adapter_loaded_ && real_adapter_ && real_adapter_->loaded()) return real_adapter_->name();
+    if (!real_adapter_attempted_ && registry_.hasPosePackage()) return "stai_mpu_pose_pending";
     return fallback_adapter_ ? fallback_adapter_->name() : "none";
 }
 
+bool InferenceScheduler::ensureRealAdapterLoaded() {
+    if (real_adapter_loaded_ && real_adapter_ && real_adapter_->loaded()) {
+        return true;
+    }
+    if (real_adapter_attempted_) {
+        return false;
+    }
+    real_adapter_attempted_ = true;
+    if (!registry_.hasPosePackage()) {
+        LOGW("InferenceScheduler", "Real adapter unavailable: %s", registry_.lastError().c_str());
+        return false;
+    }
+
+    LOGI("InferenceScheduler", "Lazy initializing real adapter in inference thread");
+    real_adapter_.reset(new StaiMpuPoseAdapter());
+    real_adapter_loaded_ = real_adapter_->init(registry_.posePackage());
+    if (!real_adapter_loaded_) {
+        LOGW("InferenceScheduler", "Real adapter init failed, falling back to CPU adapter");
+        real_adapter_.reset();
+    } else {
+        LOGI("InferenceScheduler", "Real adapter initialized: %s", real_adapter_->name());
+    }
+    return real_adapter_loaded_;
+}
+
 ModelInference InferenceScheduler::runBestAdapter(const CameraFrame& frame, const FrameQualityMetrics& metrics) {
-    if (mode_ != VisionRuntimeMode::FALLBACK && real_adapter_ && real_adapter_->loaded()) {
+    if (mode_ != VisionRuntimeMode::FALLBACK && ensureRealAdapterLoaded()) {
         ModelInference result = real_adapter_->infer(frame, metrics);
         if (result.ran_model) {
             return result;

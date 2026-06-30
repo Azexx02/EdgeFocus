@@ -1,10 +1,28 @@
 #include "behavior/EventDetector.h"
 #include <cmath>
+#include <functional>
 
 namespace edgefocus {
 
+namespace {
+void appendReason(std::string& reason, const std::string& token) {
+    if (!reason.empty()) reason += "|";
+    reason += token;
+}
+
+int clampPhoneLevel(int level) {
+    if (level < 1) return 1;
+    if (level > 3) return 3;
+    return level;
+}
+} // namespace
+
 void EventDetector::injectPhoneSignal(const PhoneUsageSignal& sig) {
     last_phone_sig_ = sig;
+}
+
+void EventDetector::resetPhoneSignal() {
+    last_phone_sig_ = {};
 }
 
 static int64_t getContinuousDuration(const SlidingWindow& win, std::function<bool(const VisionResult&)> cond) {
@@ -36,7 +54,21 @@ FocusEvent EventDetector::detect(const SlidingWindow& win, const BehaviorConfig&
         return r.isLowConfidence(); 
     }) > config.low_confidence_ratio;
 
+    // Keep phone signal even when vision quality is low.
+    if (last_phone_sig_.active && (current_ts - last_phone_sig_.timestamp_ms) < 5000) {
+        event.is_phone_in_use = true;
+        event.phone_signal = true;
+        event.phone_distraction_level = clampPhoneLevel(last_phone_sig_.distraction_level);
+        event.phone_usage_state = last_phone_sig_.usage_state;
+        event.phone_usage_state_raw = static_cast<int>(last_phone_sig_.usage_state);
+        appendReason(event.reason, "phone_signal");
+    } else {
+        event.phone_signal = false;
+        event.phone_usage_state_raw = static_cast<int>(event.phone_usage_state);
+    }
+
     if (event.is_low_confidence) {
+        appendReason(event.reason, "low_confidence");
         return event;
     }
 
@@ -46,6 +78,8 @@ FocusEvent EventDetector::detect(const SlidingWindow& win, const BehaviorConfig&
     });
     if (away_dur >= config.away_confirm_ms) {
         event.is_away = true;
+        event.vision_signal = true;
+        appendReason(event.reason, "away");
     }
 
     // Looking away: person present but head yaw > 30 degrees for confirming duration
@@ -55,6 +89,8 @@ FocusEvent EventDetector::detect(const SlidingWindow& win, const BehaviorConfig&
     });
     if (looking_away_dur >= config.looking_away_confirm_ms) {
         event.is_looking_away = true;
+        event.vision_signal = true;
+        appendReason(event.reason, "looking_away");
     }
 
     // Sleepy or slumped: Head DOWN (10s) or Eyes CLOSED (legacy fallback)
@@ -69,16 +105,19 @@ FocusEvent EventDetector::detect(const SlidingWindow& win, const BehaviorConfig&
     
     if (head_down_dur >= config.slumped_confirm_ms) {
         event.is_sleepy_or_slumped = true;
+        event.vision_signal = true;
+        appendReason(event.reason, "sleepy_or_slumped");
     } else if (sleepy_dur >= config.sleepy_confirm_ms) {
         event.is_sleepy_or_slumped = true; 
+        event.vision_signal = true;
+        appendReason(event.reason, "sleepy_or_slumped");
+    }
+    if (!event.is_away && !event.is_looking_away && !event.is_sleepy_or_slumped) {
+        event.vision_signal = false;
     }
 
-    // Phone in use: Use injected signal with distraction level
-    if (last_phone_sig_.active) {
-        if (current_ts - last_phone_sig_.timestamp_ms < 5000) {
-            event.is_phone_in_use = true;
-            event.phone_distraction_level = last_phone_sig_.distraction_level;
-        }
+    if (event.reason.empty()) {
+        appendReason(event.reason, "focused_like");
     }
 
     return event;

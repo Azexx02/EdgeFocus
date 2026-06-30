@@ -41,6 +41,9 @@ public:
     void setSQLiteStore(SQLiteStore* store) { sqlite_store_ = store; }
     void setModeManager(ModeManager* mm) { mode_mgr_ = mm; }
 
+    int currentPageForTest() const { return current_page_; }
+    void setCurrentPageForTest(int id) { switchPage(id); }
+
 private:
     enum PageId {
         PAGE_STATUS = 0,
@@ -90,6 +93,8 @@ private:
 
     // Frame timing
     static constexpr int FRAME_INTERVAL_MS = 100;  // 10 FPS
+
+    bool last_session_active_ = false;
 };
 
 } // namespace edgefocus

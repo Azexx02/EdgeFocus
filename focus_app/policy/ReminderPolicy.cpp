@@ -1,13 +1,50 @@
 #include "ReminderPolicy.h"
 #include "app/AppContext.h"
 #include "app/SystemStateStore.h"
+#include "app/SessionPhase.h"
 #include "device/DeviceManager.h"
 
 #include "storage/StorageEvent.h"
+#include <algorithm>
+#include <sstream>
 
 namespace edgefocus {
 
-ReminderPolicy::ReminderPolicy(SystemStateStore& store, SQLiteStore& sqlite_store, DeviceManager& device_mgr) 
+namespace {
+std::string jsonEscape(const std::string& value) {
+    std::string escaped;
+    escaped.reserve(value.size());
+    for (char c : value) {
+        switch (c) {
+            case '"': escaped += "\\\""; break;
+            case '\\': escaped += "\\\\"; break;
+            case '\n': escaped += "\\n"; break;
+            case '\r': escaped += "\\r"; break;
+            case '\t': escaped += "\\t"; break;
+            default: escaped += c; break;
+        }
+    }
+    return escaped;
+}
+
+CommandLevel phoneContextLevel(const BehaviorContext& ctx) {
+    const int risk_score = std::clamp(ctx.risk_score, 0, 100);
+    const int distraction_level = std::clamp(ctx.phone_distraction_level, 1, 3);
+
+    if (!ctx.phone_signal) {
+        if (risk_score >= 95) return CommandLevel::LEVEL_3;
+        if (risk_score >= 80) return CommandLevel::LEVEL_2;
+        return CommandLevel::LEVEL_1;
+    }
+
+    if (distraction_level >= 3 || risk_score >= 90) return CommandLevel::LEVEL_3;
+    if (distraction_level >= 2 || risk_score >= 70) return CommandLevel::LEVEL_2;
+    return CommandLevel::LEVEL_1;
+}
+
+} // namespace
+
+ReminderPolicy::ReminderPolicy(SystemStateStore& store, SQLiteStore& sqlite_store, DeviceManager& device_mgr)
     : Module("ReminderPolicy"), store_(store), sqlite_store_(sqlite_store), device_mgr_(device_mgr) {}
 
 bool ReminderPolicy::init(AppContext& /*ctx*/) {
@@ -18,8 +55,8 @@ bool ReminderPolicy::init(AppContext& /*ctx*/) {
 void ReminderPolicy::runOnce(AppContext& /*ctx*/) {
     SystemSnapshot snap = store_.snapshot();
 
-    // Only process reminders when session is active AND calibration is done
-    if (!snap.session.active || !snap.session.calibration_completed) {
+    // Only process reminders when phase is focusing.
+    if (deriveSessionPhase(snap.session) != SessionPhase::FOCUSING) {
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
         return;
     }
@@ -32,7 +69,36 @@ void ReminderPolicy::runOnce(AppContext& /*ctx*/) {
     if (cmd.has_value()) {
         LOGI("ReminderPolicy", "Issued reminder: level=%d msg=%s",
              static_cast<int>(cmd->level), cmd->message.c_str());
-        device_mgr_.issueCommand(*cmd);
+        auto actions = notifier_.route(
+            ReminderIntent{cmd->level, cmd->message, cmd->timestamp_ms},
+            mode_manager_.getMode(),
+            NotificationPreferences{
+                notificationMaskToChannels(snap.preferences.normal_channels_mask),
+                notificationMaskToChannels(snap.preferences.silent_channels_mask)
+            });
+        for (const auto& action : actions) {
+            device_mgr_.issueAction(action);
+        }
+
+        // Router-driven actions are the runtime dispatch path.
+        // DeviceManager::issueCommand remains available as a compatibility API
+        // for direct callers and tests, but is not invoked here.
+
+        auto after = store_.snapshot();
+        std::ostringstream push;
+        push << "{\"cmd\":\"push_alert\",\"data\":{"
+             << "\"level\":" << static_cast<int>(cmd->level) << ","
+             << "\"message\":\"" << jsonEscape(cmd->message) << "\","
+             << "\"risk_score\":" << after.behavior_context.risk_score << ","
+             << "\"phone_distraction_level\":" << after.behavior_context.phone_distraction_level << ","
+             << "\"vision_signal\":" << (after.behavior_context.vision_signal ? "true" : "false") << ","
+             << "\"phone_signal\":" << (after.behavior_context.phone_signal ? "true" : "false") << ","
+             << "\"reason\":\"" << jsonEscape(after.behavior_context.reason) << "\","
+             << "\"since_ms\":" << now_ms << ","
+             << "\"focus_state\":" << static_cast<int>(snap.focus_state) << ","
+             << "\"reminder_count\":" << after.session.reminder_count
+             << "}}";
+        store_.pushEvent(push.str());
     }
 
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
@@ -43,6 +109,12 @@ void ReminderPolicy::shutdown(AppContext& /*ctx*/) {
 }
 
 std::optional<InterventionCommand> ReminderPolicy::processState(FocusState state, int64_t now_ms) {
+    auto snapshot = store_.snapshot();
+    const auto& behavior_context = snapshot.behavior_context;
+    if (snapshot.session.active && deriveSessionPhase(snapshot.session) != SessionPhase::FOCUSING) {
+        return std::nullopt;
+    }
+
     if (state == FocusState::FOCUSED || state == FocusState::PAUSED ||
         state == FocusState::CALIBRATING || state == FocusState::PHONE_IN_LEARNING) {
         last_level_ = CommandLevel::NONE;
@@ -62,39 +134,44 @@ std::optional<InterventionCommand> ReminderPolicy::processState(FocusState state
 
     InterventionCommand cmd;
     cmd.timestamp_ms = now_ms;
+    cmd.risk_score = behavior_context.risk_score;
+    cmd.phone_distraction_level = behavior_context.phone_distraction_level;
+    cmd.reason = behavior_context.reason;
     CommandLevel target_level = CommandLevel::LEVEL_1; // default
 
     if (state == FocusState::LOOKING_AWAY) {
         target_level = CommandLevel::LEVEL_1;
-        cmd.message = "视线好像离开学习区了，回来看看这一页吧。";
+        cmd.message = "Need glance back to screen";
     } else if (state == FocusState::SLEEPY_OR_SLUMPED) {
         target_level = CommandLevel::REST_SUGGESTION;
-        cmd.message = "看起来有点累，可以坐直一点，或者休息一下。";
+        cmd.message = "Take a short break and sit upright";
     } else if (state == FocusState::PHONE_IN_USE) {
-        target_level = CommandLevel::LEVEL_2;
-        cmd.message = "学习期间手机正在使用，先放到一边吧。";
+        target_level = phoneContextLevel(behavior_context);
+        cmd.message = "Phone usage detected";
     } else if (state == FocusState::PHONE_IN_PLAYING) {
-        target_level = CommandLevel::LEVEL_3;
-        cmd.message = "手机游戏/短视频严重干扰学习，请立即停止！";
+        target_level = phoneContextLevel(behavior_context);
+        cmd.message = "High phone distraction detected";
     } else if (state == FocusState::LOW_CONFIDENCE) {
         target_level = CommandLevel::NONE;
-        cmd.message = "画面不太清楚，可以调整一下角度或补光。";
+        cmd.message = "Vision signal unreliable";
     } else if (state == FocusState::AWAY) {
         target_level = CommandLevel::NONE;
-        cmd.message = "已暂停观察，回来后继续。";
+        cmd.message = "Long away from desk, no reminder";
     } else {
         return std::nullopt;
     }
 
-    // SILENT mode downgrade
+    // SILENT mode only changes the reminder medium marker, not policy severity.
     if (mode == SystemMode::SILENT) {
         if (target_level == CommandLevel::LEVEL_3 || target_level == CommandLevel::LEVEL_2) {
-            target_level = CommandLevel::LEVEL_1;
             cmd.message = "[Silent] " + cmd.message;
         }
     }
 
     cmd.level = target_level;
+    cmd.risk_score = behavior_context.risk_score;
+    cmd.phone_distraction_level = behavior_context.phone_distraction_level;
+    cmd.reason = behavior_context.reason;
 
     last_level_ = cmd.level;
     last_reminder_time_ms_ = now_ms;

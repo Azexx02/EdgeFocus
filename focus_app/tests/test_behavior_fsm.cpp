@@ -141,34 +141,36 @@ void test_looking_away() {
     std::cout << "test_looking_away passed\n";
 }
 
-void test_phone_distraction_levels() {
+void test_phone_usage_state_is_separate_from_distraction_level() {
     FocusStateMachine fsm;
     for (int i = 0; i < 20; ++i) fsm.processFrame(createFrame(i * 100));
-    
-    // Test level 0 (learning) -> PHONE_IN_LEARNING
+
+    // Distraction level is not the phone usage state. A high level without an
+    // explicit usage subtype remains generic phone use.
     PhoneUsageSignal sig;
     sig.active = true;
     sig.timestamp_ms = 2000;
-    sig.distraction_level = 0;
+    sig.distraction_level = 3;
     fsm.injectPhoneSignal(sig);
     fsm.processFrame(createFrame(2100));
-    assert(fsm.getCurrentState() == FocusState::PHONE_IN_LEARNING);
-    
-    // Test level 2 (strong) -> PHONE_IN_PLAYING
-    sig.distraction_level = 2;
+    assert(fsm.getCurrentState() == FocusState::PHONE_IN_USE);
+
+    // Explicit usage subtype controls PHONE_IN_LEARNING / PHONE_IN_PLAYING.
+    sig.usage_state = PhoneUsageState::LEARNING;
+    sig.distraction_level = 1;
     sig.timestamp_ms = 2200;
     fsm.injectPhoneSignal(sig);
     fsm.processFrame(createFrame(2300));
-    assert(fsm.getCurrentState() == FocusState::PHONE_IN_PLAYING);
-    
-    // Test level 1 (weak) -> PHONE_IN_USE
-    sig.distraction_level = 1;
+    assert(fsm.getCurrentState() == FocusState::PHONE_IN_LEARNING);
+
+    sig.usage_state = PhoneUsageState::PLAYING;
+    sig.distraction_level = 2;
     sig.timestamp_ms = 2400;
     fsm.injectPhoneSignal(sig);
     fsm.processFrame(createFrame(2500));
-    assert(fsm.getCurrentState() == FocusState::PHONE_IN_USE);
-    
-    std::cout << "test_phone_distraction_levels passed\n";
+    assert(fsm.getCurrentState() == FocusState::PHONE_IN_PLAYING);
+
+    std::cout << "test_phone_usage_state_is_separate_from_distraction_level passed\n";
 }
 
 void test_calibration_quality_gate() {
@@ -211,6 +213,63 @@ void test_risk_score() {
     std::cout << "test_risk_score passed\n";
 }
 
+void test_last_event_tracks_multiple_signals() {
+    FocusStateMachine fsm;
+    for (int i = 0; i < 20; ++i) fsm.processFrame(createFrame(i * 100));
+
+    PhoneUsageSignal sig;
+    sig.active = true;
+    sig.timestamp_ms = 2000;
+    sig.distraction_level = 2;
+    fsm.injectPhoneSignal(sig);
+    fsm.processFrame(createFrame(2100));
+
+    // now produce enough frames to pass calibration and trigger vision signal
+    for (int i = 21; i < 55; ++i) {
+        VisionResult r = createFrame(i * 100);
+        r.presence.value = Presence::AWAY;
+        r.presence.confidence = 0.9f;
+        r.head_pose.valid = true;
+        r.head_pose.value.yaw = 35.0f;
+        fsm.processFrame(r);
+    }
+
+    FocusEvent event = fsm.getLastEvent();
+    assert(event.phone_signal);
+    assert(event.vision_signal);
+    assert(event.phone_distraction_level == 2);
+    std::cout << "test_last_event_tracks_multiple_signals passed\n";
+}
+
+void test_event_detector_reset_clears_phone_signal() {
+    EventDetector detector;
+    BehaviorConfig config;
+    SlidingWindow win(30000);
+
+    VisionResult frame;
+    frame.timestamp_ms = 1000;
+    frame.presence = {Presence::PRESENT, 1.0f, true};
+    frame.frame_quality.valid = true;
+    frame.frame_quality.level = FrameQualityLevel::GOOD;
+    win.add(frame);
+
+    PhoneUsageSignal sig;
+    sig.active = true;
+    sig.timestamp_ms = 1000;
+    sig.distraction_level = 3;
+    detector.injectPhoneSignal(sig);
+
+    auto with_phone = detector.detect(win, config);
+    assert(with_phone.phone_signal);
+
+    detector.resetPhoneSignal();
+    auto after_reset = detector.detect(win, config);
+    assert(!after_reset.phone_signal);
+    assert(!after_reset.is_phone_in_use);
+
+    std::cout << "test_event_detector_reset_clears_phone_signal passed\n";
+}
+
 int main() {
     test_focus();
     test_head_down();
@@ -219,9 +278,11 @@ int main() {
     test_low_confidence();
     test_hysteresis();
     test_looking_away();
-    test_phone_distraction_levels();
+    test_phone_usage_state_is_separate_from_distraction_level();
     test_calibration_quality_gate();
     test_risk_score();
+    test_last_event_tracks_multiple_signals();
+    test_event_detector_reset_clears_phone_signal();
     std::cout << "All behavior FSM tests passed!\n";
     return 0;
 }

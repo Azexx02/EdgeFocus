@@ -17,7 +17,7 @@ enum class FocusState : uint8_t {
 
     // Phone distraction subtypes
     PHONE_IN_LEARNING = 8,  // Learning app (no intervention)
-    PHONE_IN_PLAYING = 9    // Strong distraction (LEVEL_3)
+    PHONE_IN_PLAYING = 9    // Entertainment/playing phone usage input; severity is policy-decided.
 };
 
 } // namespace edgefocus

@@ -58,6 +58,16 @@ void VisionEngine::runOnce(AppContext& /*ctx*/) {
         return;
     }
 
+    // --- PAUSED: keep pause boundaries from advancing vision pipeline state ---
+    if (snap.session.paused) {
+        // Drain stale camera frames so resume does not replay long-backlog frames.
+        if (frame_queue_) {
+            while (frame_queue_->tryPop().has_value()) {}
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        return;
+    }
+
     // --- ACTIVE: run inference ---
     if (scheduler_ && runtime_mode_ != VisionRuntimeMode::MOCK) {
         scheduler_->runOnce();

@@ -16,6 +16,9 @@ struct InterventionCommand {
     int64_t timestamp_ms{0};
     CommandLevel level{CommandLevel::NONE};
     std::string message;
+    int risk_score = 0;
+    int phone_distraction_level = 1;
+    std::string reason;
 };
 
 } // namespace edgefocus
