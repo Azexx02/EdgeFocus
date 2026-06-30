@@ -64,6 +64,14 @@ bool SoundController::hasCommand(const std::string& command) {
 #endif
 }
 
+bool SoundController::hasAlsaPlaybackDevice() {
+#if defined(__linux__)
+    return std::system("aplay -l 2>/dev/null | grep -q '^card '") == 0;
+#else
+    return false;
+#endif
+}
+
 bool SoundController::launchCommand(const std::string& command) {
 #if defined(__linux__)
     const int rc = std::system(command.c_str());
@@ -73,26 +81,50 @@ bool SoundController::launchCommand(const std::string& command) {
 #endif
 }
 
-void SoundController::playReminderSoundAsync() {
+int SoundController::volumeToPercent(float volume) {
+    if (volume < 0.0f) volume = 0.0f;
+    if (volume > 1.0f) volume = 1.0f;
+    return static_cast<int>(volume * 100.0f + 0.5f);
+}
+
+std::string SoundController::mixerPrefix(int volume_percent) {
 #if defined(__linux__)
+    if (!hasCommand("amixer")) {
+        LOGW("SoundController", "amixer not available; sound volume control skipped");
+        return "";
+    }
+    return "amixer -q sset Master " + std::to_string(volume_percent) + "% >/dev/null 2>&1 || true; ";
+#else
+    (void)volume_percent;
+    return "";
+#endif
+}
+
+void SoundController::playReminderSoundAsync(int volume_percent) {
+#if defined(__linux__)
+    if (!hasAlsaPlaybackDevice()) {
+        LOGW("SoundController", "No ALSA playback device found; skip reminder sound");
+        return;
+    }
+    const std::string volume_prefix = mixerPrefix(volume_percent);
     const std::string sample = "/usr/share/sounds/alsa/Front_Center.wav";
     if (isRegularFile(sample) && hasCommand("aplay")) {
-        if (launchCommand("aplay -q " + sample + " >/dev/null 2>&1 &")) {
-            LOGI("SoundController", "Played reminder sound via aplay");
+        if (launchCommand(volume_prefix + "aplay -q " + sample + " >/dev/null 2>&1 &")) {
+            LOGI("SoundController", "Played reminder sound via aplay (volume=%d%%)", volume_percent);
             return;
         }
     }
 
     if (hasCommand("speaker-test")) {
-        if (launchCommand("speaker-test -t sine -f 1000 -l 1 >/dev/null 2>&1 &")) {
-            LOGI("SoundController", "Played reminder sound via speaker-test");
+        if (launchCommand(volume_prefix + "speaker-test -t sine -f 1000 -l 1 >/dev/null 2>&1 &")) {
+            LOGI("SoundController", "Played reminder sound via speaker-test (volume=%d%%)", volume_percent);
             return;
         }
     }
 
     if (hasCommand("beep")) {
-        if (launchCommand("beep -f 1200 -l 150 >/dev/null 2>&1 &")) {
-            LOGI("SoundController", "Played reminder sound via beep");
+        if (launchCommand(volume_prefix + "beep -f 1200 -l 150 >/dev/null 2>&1 &")) {
+            LOGI("SoundController", "Played reminder sound via beep (volume=%d%%)", volume_percent);
             return;
         }
     }
@@ -103,7 +135,7 @@ void SoundController::playReminderSoundAsync() {
 #endif
 }
 
-void SoundController::playReminderSound() {
+void SoundController::playReminderSound(float volume) {
     ++play_count_;
     if (!isPlaybackAllowed()) {
         LOGW("SoundController", "Sound playback disabled; skip reminder sound");
@@ -114,10 +146,11 @@ void SoundController::playReminderSound() {
         return;
     }
 
+    const int volume_percent = volumeToPercent(volume);
     try {
-        std::thread([]() {
+        std::thread([volume_percent]() {
             try {
-                playReminderSoundAsync();
+                playReminderSoundAsync(volume_percent);
             } catch (const std::exception& ex) {
                 LOGE("SoundController", "Reminder sound task failed: %s", ex.what());
             } catch (...) {

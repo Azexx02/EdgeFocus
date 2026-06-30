@@ -81,7 +81,7 @@ void DeviceManager::executeAction(const DeviceAction& action) {
         if (alert_level > 3) alert_level = 3;
         ble_ctrl_.sendAlert(alert_level);
     } else if (action.channel == NotificationChannel::SOUND) {
-        sound_ctrl_.playReminderSound();
+        sound_ctrl_.playReminderSound(store_.snapshot().preferences.sound_volume);
     } else {
         screen_ctrl_.flashScreen();
     }

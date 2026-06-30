@@ -89,6 +89,7 @@ struct Preferences {
     int         away_timeout_min = 15;
     int         default_focus_duration_min = 25;
     float       vibration_strength = 0.5f;
+    float       sound_volume = 0.7f;
     int         led_brightness = 75;
     float       reminder_sensitivity = 0.5f;
     // Reminder channel bitmasks:

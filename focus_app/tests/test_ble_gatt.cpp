@@ -243,6 +243,7 @@ int main() {
         assertSuccess(resp, 1110);
         assert(resp["data"]["normal_channels_mask"] == 7);
         assert(resp["data"]["silent_channels_mask"] == 3);
+        assert(resp["data"]["sound_volume"] == 0.7f);
         assert(resp["data"]["normal_channels"] == json::array({"SCREEN", "BAND", "SOUND"}));
         assert(resp["data"]["silent_channels"] == json::array({"SCREEN", "BAND"}));
         std::cout << "  get_preferences defaults: OK\n";
@@ -251,10 +252,11 @@ int main() {
     // Test 11: update_preferences
     {
         json resp = parseResponse(server.handleCommand(
-            R"({"cmd":"update_preferences","id":11,"data":{"system_mode":1,"default_focus_duration_min":35,"normal_channels_mask":3,"silent_channels_mask":2}})"));
+            R"({"cmd":"update_preferences","id":11,"data":{"system_mode":1,"default_focus_duration_min":35,"sound_volume":0.25,"normal_channels_mask":3,"silent_channels_mask":2}})"));
         assertSuccess(resp, 11);
         assert(resp["data"]["system_mode"] == 1);
         assert(resp["data"]["default_focus_duration_min"] == 35);
+        assert(resp["data"]["sound_volume"] == 0.25f);
         assert(policy.getModeManager().getMode() == SystemMode::SILENT);
         assert(resp["data"]["normal_channels_mask"] == 3);
         assert(resp["data"]["silent_channels_mask"] == 2);
@@ -300,6 +302,14 @@ int main() {
         assert(resp["data"]["silent_channels"] == json::array({"SCREEN", "BAND"}));
     }
 
+    // Test 11e: update_preferences clamps sound_volume into 0.0..1.0.
+    {
+        json resp = parseResponse(server.handleCommand(
+            R"({"cmd":"update_preferences","id":114,"data":{"sound_volume":1.5}})"));
+        assertSuccess(resp, 114);
+        assert(resp["data"]["sound_volume"] == 1.0f);
+    }
+
     // Test 12: get_preferences
     {
         json resp = parseResponse(server.handleCommand(
@@ -307,6 +317,7 @@ int main() {
         assertSuccess(resp, 12);
         assert(resp["data"].contains("system_mode"));
         assert(resp["data"].contains("vibration_strength"));
+        assert(resp["data"].contains("sound_volume"));
         assert(resp["data"].contains("led_brightness"));
         assert(resp["data"].contains("reminder_sensitivity"));
         assert(resp["data"].contains("away_timeout_min"));

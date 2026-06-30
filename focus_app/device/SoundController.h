@@ -15,16 +15,19 @@ public:
     static void setPlaybackEnabledForTests(bool enabled);
 
     /// Trigger a short reminder sound asynchronously.
-    void playReminderSound();
+    void playReminderSound(float volume);
 
     int playCount() const { return play_count_.load(); }
 
 private:
     static bool isPlaybackAllowed();
     static bool isEnvPlaybackDisabled();
+    static bool hasAlsaPlaybackDevice();
     static bool hasCommand(const std::string& command);
     static bool launchCommand(const std::string& command);
-    static void playReminderSoundAsync();
+    static int volumeToPercent(float volume);
+    static std::string mixerPrefix(int volume_percent);
+    static void playReminderSoundAsync(int volume_percent);
 
     static std::atomic<bool> playback_enabled_for_tests_;
     static std::atomic<bool> in_flight_;
