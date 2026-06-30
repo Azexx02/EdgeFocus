@@ -50,7 +50,10 @@ set(APP_SOURCES
     policy/ModeManager.cpp
     device/GpioHelper.cpp
     device/DeviceManager.cpp
+    device/GimbalController.cpp
+    device/GimbalMonitor.cpp
     device/ScreenController.cpp
+    device/SoundController.cpp
     device/BleBandController.cpp
     storage/SQLiteStore.cpp
     storage/ReportGenerator.cpp

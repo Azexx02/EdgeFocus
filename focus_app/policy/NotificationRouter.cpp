@@ -17,7 +17,9 @@ NotificationChannelMask notificationChannelsToMask(
                 mask |= kNotificationChannelSoundMask;
                 break;
             case NotificationChannel::LIGHT:
-                mask |= kNotificationChannelLightMask;
+                // Backward compatibility: LIGHT is treated as SCREEN for
+                // existing payloads.
+                mask |= kNotificationChannelScreenMask;
                 break;
             default:
                 break;
@@ -28,19 +30,21 @@ NotificationChannelMask notificationChannelsToMask(
 
 std::vector<NotificationChannel> notificationMaskToChannels(int32_t mask) {
     std::vector<NotificationChannel> channels;
-    if (mask & kNotificationChannelScreenMask) channels.push_back(NotificationChannel::SCREEN);
+    if ((mask & kNotificationChannelScreenMask) || (mask & kNotificationChannelLightMask)) {
+        channels.push_back(NotificationChannel::SCREEN);
+    }
     if (mask & kNotificationChannelBandMask) channels.push_back(NotificationChannel::BAND);
     if (mask & kNotificationChannelSoundMask) channels.push_back(NotificationChannel::SOUND);
-    if (mask & kNotificationChannelLightMask) channels.push_back(NotificationChannel::LIGHT);
     return channels;
 }
 
 std::vector<std::string> notificationMaskToNames(int32_t mask) {
     std::vector<std::string> names;
-    if (mask & kNotificationChannelScreenMask) names.push_back("SCREEN");
+    if ((mask & kNotificationChannelScreenMask) || (mask & kNotificationChannelLightMask)) {
+        names.push_back("SCREEN");
+    }
     if (mask & kNotificationChannelBandMask) names.push_back("BAND");
     if (mask & kNotificationChannelSoundMask) names.push_back("SOUND");
-    if (mask & kNotificationChannelLightMask) names.push_back("LIGHT");
     return names;
 }
 

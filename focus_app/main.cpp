@@ -9,6 +9,7 @@
 #include "behavior/BehaviorEngine.h"
 #include "policy/ReminderPolicy.h"
 #include "device/DeviceManager.h"
+#include "device/GimbalMonitor.h"
 #include "storage/SQLiteStore.h"
 #include "storage/ReportGenerator.h"
 #include "network/BleGattServer.h"
@@ -91,6 +92,7 @@ int main(int argc, char* argv[]) {
     auto device_mgr_ptr = std::make_unique<DeviceManager>(store);
     DeviceManager& device_mgr = *device_mgr_ptr;
     ctx.addModule(std::move(device_mgr_ptr));
+    ctx.addModule(std::make_unique<GimbalMonitor>(store));
     auto reminder_policy_ptr = std::make_unique<ReminderPolicy>(store, sqlite_store, device_mgr);
     ReminderPolicy& reminder_policy = *reminder_policy_ptr;
     ctx.addModule(std::move(reminder_policy_ptr));

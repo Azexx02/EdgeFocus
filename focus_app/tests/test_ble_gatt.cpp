@@ -62,6 +62,8 @@ int main() {
         assertSuccess(resp, 1);
         assert(resp["data"].contains("battery_percent"));
         assert(resp["data"].contains("system_mode"));
+        assert(resp["data"].contains("gimbal_connected"));
+        assert(resp["data"].contains("gimbal_online"));
         std::cout << "  get_device_status: OK\n";
     }
 
@@ -235,6 +237,17 @@ int main() {
         std::cout << "  session_control end: OK\n";
     }
 
+    // Test 11a: defaults are SCREEN+BAND+SOUND / SCREEN+BAND.
+    {
+        json resp = parseResponse(server.handleCommand(R"({"cmd":"get_preferences","id":1110})"));
+        assertSuccess(resp, 1110);
+        assert(resp["data"]["normal_channels_mask"] == 7);
+        assert(resp["data"]["silent_channels_mask"] == 3);
+        assert(resp["data"]["normal_channels"] == json::array({"SCREEN", "BAND", "SOUND"}));
+        assert(resp["data"]["silent_channels"] == json::array({"SCREEN", "BAND"}));
+        std::cout << "  get_preferences defaults: OK\n";
+    }
+
     // Test 11: update_preferences
     {
         json resp = parseResponse(server.handleCommand(
@@ -269,12 +282,22 @@ int main() {
     // Test 11c: update_preferences accepts channel arrays and updates masks.
     {
         json resp = parseResponse(server.handleCommand(
-            R"({"cmd":"update_preferences","id":112,"data":{"normal_channels":["band"],"silent_channels":["screen","sound"]}})"));
+            R"({"cmd":"update_preferences","id":112,"data":{"normal_channels":["light","band","sound"],"silent_channels":["screen","sound","band"]}})"));
         assertSuccess(resp, 112);
-        assert(resp["data"]["normal_channels_mask"] == 2);
-        assert(resp["data"]["silent_channels_mask"] == 5);
-        assert(resp["data"]["normal_channels"] == json::array({"BAND"}));
-        assert(resp["data"]["silent_channels"] == json::array({"SCREEN", "SOUND"}));
+        assert(resp["data"]["normal_channels_mask"] == 7);
+        assert(resp["data"]["silent_channels_mask"] == 3);
+        assert(resp["data"]["normal_channels"] == json::array({"SCREEN", "BAND", "SOUND"}));
+        assert(resp["data"]["silent_channels"] == json::array({"SCREEN", "BAND"}));
+        std::cout << "  update_preferences normal/silent arrays with legacy LIGHT and silent SOUND filter: OK\n";
+    }
+
+    // Test 11d: update_preferences silently filters SOUND from silent numeric mask.
+    {
+        json resp = parseResponse(server.handleCommand(
+            R"({"cmd":"update_preferences","id":113,"data":{"silent_channels_mask":7}})"));
+        assertSuccess(resp, 113);
+        assert(resp["data"]["silent_channels_mask"] == 3);
+        assert(resp["data"]["silent_channels"] == json::array({"SCREEN", "BAND"}));
     }
 
     // Test 12: get_preferences
@@ -389,7 +412,40 @@ int main() {
         assert(resp["data"]["session"].contains("focus_state"));
         assert(resp["data"]["session"].contains("calibration_completed"));
         assert(resp["data"]["session"].contains("session_phase"));
+        assert(resp["data"]["device"].contains("gimbal"));
+        assert(resp["data"]["device"]["gimbal"].contains("connected"));
+        assert(resp["data"]["device"]["gimbal"].contains("online"));
+        assert(resp["data"]["device"]["gimbal"].contains("safe"));
+        assert(resp["data"]["device"]["gimbal"].contains("boost"));
+        assert(resp["data"]["device"]["gimbal"].contains("motor"));
+        assert(resp["data"]["device"]["gimbal"].contains("en"));
+        assert(resp["data"]["device"]["gimbal"].contains("ix"));
+        assert(resp["data"]["device"]["gimbal"].contains("iy"));
+        assert(resp["data"]["device"]["gimbal"].contains("angle_x"));
+        assert(resp["data"]["device"]["gimbal"].contains("angle_y"));
+        assert(resp["data"]["device"]["gimbal"].contains("last_seen_ms"));
+        assert(resp["data"]["device"]["gimbal"].contains("last_error"));
         std::cout << "  get_console_data: OK\n";
+    }
+
+    // Test 17b: get_gimbal_status
+    {
+        json resp = parseResponse(server.handleCommand(
+            R"({"cmd":"get_gimbal_status","id":170})"));
+        assertSuccess(resp, 170);
+        assert(resp["data"].contains("connected"));
+        assert(resp["data"].contains("online"));
+        assert(resp["data"].contains("safe"));
+        assert(resp["data"].contains("boost"));
+        assert(resp["data"].contains("motor"));
+        assert(resp["data"].contains("en"));
+        assert(resp["data"].contains("ix"));
+        assert(resp["data"].contains("iy"));
+        assert(resp["data"].contains("angle_x"));
+        assert(resp["data"].contains("angle_y"));
+        assert(resp["data"].contains("last_seen_ms"));
+        assert(resp["data"].contains("last_error"));
+        std::cout << "  get_gimbal_status: OK\n";
     }
 
     // Test 18: session_feedback

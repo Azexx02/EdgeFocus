@@ -1,4 +1,5 @@
 #include "policy/NotificationRouter.h"
+#include "app/SystemStateStore.h"
 #include <cassert>
 #include <iostream>
 #include <vector>
@@ -60,9 +61,15 @@ void test_mask_decode_for_default_sets() {
     assert(silent[0] == NotificationChannel::BAND);
 }
 
+void test_mask_decode_legacy_light_to_screen() {
+    auto legacy = notificationMaskToChannels(kNotificationChannelLightMask);
+    assert(legacy.size() == 1);
+    assert(legacy[0] == NotificationChannel::SCREEN);
+}
+
 void test_mask_encode() {
     int mask = notificationChannelsToMask({NotificationChannel::SCREEN, NotificationChannel::LIGHT});
-    assert(mask == (kNotificationChannelScreenMask | kNotificationChannelLightMask));
+    assert(mask == kNotificationChannelScreenMask);
 
     auto names = notificationMaskToNames(kNotificationChannelBandMask | kNotificationChannelSoundMask);
     assert(names.size() == 2);
@@ -70,12 +77,31 @@ void test_mask_encode() {
     assert(names[1] == "SOUND");
 }
 
+void test_router_preferences_defaults() {
+    Preferences prefs;
+    assert(prefs.normal_channels_mask == 7);
+    assert(prefs.silent_channels_mask == 3);
+}
+
+void test_mask_names_no_light_output() {
+    auto names = notificationMaskToNames(
+        kNotificationChannelScreenMask | kNotificationChannelBandMask |
+        kNotificationChannelSoundMask | kNotificationChannelLightMask);
+    assert(names.size() == 3);
+    assert(names[0] == "SCREEN");
+    assert(names[1] == "BAND");
+    assert(names[2] == "SOUND");
+}
+
 int main() {
     test_normal_route_to_multiple_channels();
     test_silent_route_to_single_quiet_channel_and_no_downgrade();
     test_none_route();
     test_mask_decode_for_default_sets();
+    test_mask_decode_legacy_light_to_screen();
     test_mask_encode();
+    test_router_preferences_defaults();
+    test_mask_names_no_light_output();
     std::cout << "All notification router tests passed!\n";
     return 0;
 }

@@ -44,6 +44,7 @@ add_executable(test_reminder_policy
     ../policy/ModeManager.cpp
     ../device/DeviceManager.cpp
     ../device/ScreenController.cpp
+    ../device/SoundController.cpp
     ../device/BleBandController.cpp
     ../device/GpioHelper.cpp
     ../storage/SQLiteStore.cpp
@@ -65,6 +66,7 @@ add_executable(test_device_manager
     ../device/DeviceManager.cpp
     ../policy/NotificationRouter.cpp
     ../device/ScreenController.cpp
+    ../device/SoundController.cpp
     ../device/BleBandController.cpp
     ../device/GpioHelper.cpp
     ../app/AppContext.cpp
@@ -96,7 +98,7 @@ target_link_libraries(test_vision_result PRIVATE Threads::Threads)
 add_test(NAME test_vision_result COMMAND test_vision_result)
 
 # ===========================================================================
-# 9. Picture Vision Smoke (image -> frame -> InferenceScheduler fallback -> VisionResult)
+# 6. Picture Vision Smoke (image -> frame -> InferenceScheduler fallback -> VisionResult)
 #    Tests: picture_test directory loading path fallback, frame build, and FALLBACK output sanity.
 #    If OpenCV is not enabled, this test returns SKIP status via exit code 0.
 # ===========================================================================
@@ -126,7 +128,7 @@ endif()
 add_test(NAME test_picture_vision COMMAND test_picture_vision)
 
 # ===========================================================================
-# 8. Notification Router Test (intent + preference routing)
+# 7. Notification Router Test (intent + preference routing)
 #    Tests: NORMAL/SILENT/level/NONE routing behavior.
 # ===========================================================================
 add_executable(test_notification_router
@@ -135,6 +137,84 @@ add_executable(test_notification_router
 target_include_directories(test_notification_router PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(test_notification_router PRIVATE Threads::Threads)
 add_test(NAME test_notification_router COMMAND test_notification_router)
+
+# ===========================================================================
+# 8. BLE GATT Server Test (BleGattServer API commands)
+#    Tests: all 10 API commands, JSON parsing, session lifecycle
+#    Deps: SQLiteStore, ReportGenerator, ReminderPolicy, DeviceManager
+# ===========================================================================
+add_executable(test_ble_gatt
+    test_ble_gatt.cpp
+    ../network/AppCommandService.cpp
+    ../network/BleGattServer.cpp
+    ../policy/ReminderPolicy.cpp
+    ../policy/NotificationRouter.cpp
+    ../policy/ModeManager.cpp
+    ../device/DeviceManager.cpp
+    ../device/ScreenController.cpp
+    ../device/SoundController.cpp
+    ../device/BleBandController.cpp
+    ../device/GpioHelper.cpp
+    ../ui/StatusPage.cpp
+    ../ui/UIManager.cpp
+    ../ui/StatsPage.cpp
+    ../ui/ReviewPage.cpp
+    ../ui/SettingsPage.cpp
+    ../ui/FrameBuffer.cpp
+    ../storage/SQLiteStore.cpp
+    ../storage/ReportGenerator.cpp
+    ../app/AppContext.cpp
+    ../app/SystemStateStore.cpp
+    ../app/SessionController.cpp
+    ../app/Logger.cpp)
+target_include_directories(test_ble_gatt PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(test_ble_gatt PRIVATE Threads::Threads sqlite3_lib nlohmann_json::nlohmann_json)
+add_test(NAME test_ble_gatt COMMAND test_ble_gatt)
+
+# ===========================================================================
+# 9. Integration Test (module-to-module data contracts)
+#    Tests: FocusState flow, InterventionCommand flow, SessionInfo flow,
+#           snapshot fields, ModeManager sync, Report lifecycle
+#    Deps: all modules
+# ===========================================================================
+add_executable(test_integration
+    test_integration.cpp
+    ../network/AppCommandService.cpp
+    ../network/BleGattServer.cpp
+    ../policy/ReminderPolicy.cpp
+    ../policy/NotificationRouter.cpp
+    ../policy/ModeManager.cpp
+    ../behavior/SlidingWindow.cpp
+    ../behavior/EventDetector.cpp
+    ../behavior/RiskScorer.cpp
+    ../behavior/FocusStateMachine.cpp
+    ../behavior/BehaviorEngine.cpp
+    ../device/DeviceManager.cpp
+    ../device/ScreenController.cpp
+    ../device/SoundController.cpp
+    ../device/BleBandController.cpp
+    ../device/GpioHelper.cpp
+    ../ui/StatusPage.cpp
+    ../ui/UIManager.cpp
+    ../ui/StatsPage.cpp
+    ../ui/ReviewPage.cpp
+    ../ui/SettingsPage.cpp
+    ../ui/FrameBuffer.cpp
+    ../storage/SQLiteStore.cpp
+    ../storage/ReportGenerator.cpp
+    ../vision/FrameQuality.cpp
+    ../vision/ModelRegistry.cpp
+    ../vision/PoseModelAdapter.cpp
+    ../vision/MockVisionSource.cpp
+    ../vision/InferenceScheduler.cpp
+    ../vision/VisionEngine.cpp
+    ../app/AppContext.cpp
+    ../app/SystemStateStore.cpp
+    ../app/SessionController.cpp
+    ../app/Logger.cpp)
+target_include_directories(test_integration PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(test_integration PRIVATE Threads::Threads sqlite3_lib nlohmann_json::nlohmann_json)
+add_test(NAME test_integration COMMAND test_integration)
 
 if(EDGEFOCUS_WITH_OPENCV AND EDGEFOCUS_WITH_STAI_MPU)
     # Board-only smoke for the real STAI/NPU adapter. It is intentionally not
@@ -161,77 +241,14 @@ if(EDGEFOCUS_WITH_OPENCV AND EDGEFOCUS_WITH_STAI_MPU)
 endif()
 
 # ===========================================================================
-# 6. BLE GATT Server Test (BleGattServer API commands)
-#    Tests: all 9 API commands, JSON parsing, session lifecycle
-#    Deps: SQLiteStore, ReportGenerator, ReminderPolicy, DeviceManager
+# 10. Gimbal Controller Test (UART parser + state commands)
+#     Tests: STAT/ANGLE parsing, error response handling, allowed command set.
+#     Deps: none.
 # ===========================================================================
-add_executable(test_ble_gatt
-    test_ble_gatt.cpp
-    ../network/AppCommandService.cpp
-    ../network/BleGattServer.cpp
-    ../policy/ReminderPolicy.cpp
-    ../policy/NotificationRouter.cpp
-    ../policy/ModeManager.cpp
-    ../device/DeviceManager.cpp
-    ../device/ScreenController.cpp
-    ../device/BleBandController.cpp
-    ../device/GpioHelper.cpp
-    ../ui/StatusPage.cpp
-    ../ui/UIManager.cpp
-    ../ui/StatsPage.cpp
-    ../ui/ReviewPage.cpp
-    ../ui/SettingsPage.cpp
-    ../ui/FrameBuffer.cpp
-    ../storage/SQLiteStore.cpp
-    ../storage/ReportGenerator.cpp
-    ../app/AppContext.cpp
-    ../app/SystemStateStore.cpp
-    ../app/SessionController.cpp
+add_executable(test_gimbal_controller
+    test_gimbal_controller.cpp
+    ../device/GimbalController.cpp
     ../app/Logger.cpp)
-target_include_directories(test_ble_gatt PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
-target_link_libraries(test_ble_gatt PRIVATE Threads::Threads sqlite3_lib nlohmann_json::nlohmann_json)
-add_test(NAME test_ble_gatt COMMAND test_ble_gatt)
-
-# ===========================================================================
-# 7. Integration Test (module-to-module data contracts)
-#    Tests: FocusState flow, InterventionCommand flow, SessionInfo flow,
-#           snapshot fields, ModeManager sync, Report lifecycle
-#    Deps: all modules
-# ===========================================================================
-add_executable(test_integration
-    test_integration.cpp
-    ../network/AppCommandService.cpp
-    ../network/BleGattServer.cpp
-    ../policy/ReminderPolicy.cpp
-    ../policy/NotificationRouter.cpp
-    ../policy/ModeManager.cpp
-    ../behavior/SlidingWindow.cpp
-    ../behavior/EventDetector.cpp
-    ../behavior/RiskScorer.cpp
-    ../behavior/FocusStateMachine.cpp
-    ../behavior/BehaviorEngine.cpp
-    ../device/DeviceManager.cpp
-    ../device/ScreenController.cpp
-    ../device/BleBandController.cpp
-    ../device/GpioHelper.cpp
-    ../ui/StatusPage.cpp
-    ../ui/UIManager.cpp
-    ../ui/StatsPage.cpp
-    ../ui/ReviewPage.cpp
-    ../ui/SettingsPage.cpp
-    ../ui/FrameBuffer.cpp
-    ../storage/SQLiteStore.cpp
-    ../storage/ReportGenerator.cpp
-    ../vision/FrameQuality.cpp
-    ../vision/ModelRegistry.cpp
-    ../vision/PoseModelAdapter.cpp
-    ../vision/MockVisionSource.cpp
-    ../vision/InferenceScheduler.cpp
-    ../vision/VisionEngine.cpp
-    ../app/AppContext.cpp
-    ../app/SystemStateStore.cpp
-    ../app/SessionController.cpp
-    ../app/Logger.cpp)
-target_include_directories(test_integration PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
-target_link_libraries(test_integration PRIVATE Threads::Threads sqlite3_lib nlohmann_json::nlohmann_json)
-add_test(NAME test_integration COMMAND test_integration)
+target_include_directories(test_gimbal_controller PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(test_gimbal_controller PRIVATE Threads::Threads)
+add_test(NAME test_gimbal_controller COMMAND test_gimbal_controller)

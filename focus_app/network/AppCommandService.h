@@ -41,6 +41,7 @@ private:
     std::string handleSessionFeedback(const json& data, int req_id);
     std::string handleGetSessionHistory(const json& data, int req_id);
     std::string handleGetPreferences(int req_id);
+    std::string handleGetGimbalStatus(int req_id);
 };
 
 } // namespace edgefocus

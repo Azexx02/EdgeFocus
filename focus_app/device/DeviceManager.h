@@ -5,6 +5,7 @@
 #include "policy/InterventionCommand.h"
 #include "device/ScreenController.h"
 #include "device/BleBandController.h"
+#include "device/SoundController.h"
 #include <array>
 
 namespace edgefocus {
@@ -29,6 +30,7 @@ public:
     uint8_t lastBandAlertPattern() const { return ble_ctrl_.lastAlertPattern(); }
     uint8_t lastBandAlertLevel() const { return ble_ctrl_.lastAlertLevel(); }
     std::array<uint8_t, 3> lastBandAlertFrame() const { return ble_ctrl_.lastAlertFrame(); }
+    int soundPlayCount() const { return sound_ctrl_.playCount(); }
 
 private:
     void executeCommand(const InterventionCommand& cmd);
@@ -38,6 +40,7 @@ private:
     BoundedQueue<DeviceAction> action_queue_{20};
     ScreenController screen_ctrl_;
     BleBandController ble_ctrl_;
+    SoundController sound_ctrl_;
     SystemStateStore& store_;
     int executed_command_count_ = 0;
     CommandLevel last_executed_level_ = CommandLevel::NONE;

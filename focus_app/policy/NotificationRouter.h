@@ -12,6 +12,7 @@ enum class NotificationChannel {
     SCREEN,
     BAND,
     SOUND,
+    // Deprecated compatibility alias; kept for backward input mapping in migration code.
     LIGHT
 };
 

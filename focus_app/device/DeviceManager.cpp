@@ -61,6 +61,8 @@ void DeviceManager::executeCommand(const InterventionCommand& cmd) {
     LOGI("DeviceManager", "Executing command level: %d, message: %s",
          static_cast<int>(cmd.level), cmd.message.c_str());
 
+    // Legacy behavior: command-level routing maps ALERT levels directly to default
+    // legacy channels. New channel routing is expected to pass through issueAction().
     if (cmd.level == CommandLevel::LEVEL_1 || cmd.level == CommandLevel::REST_SUGGESTION) {
         executeAction({NotificationChannel::SCREEN, cmd.level});
     } else if (cmd.level == CommandLevel::LEVEL_2 || cmd.level == CommandLevel::LEVEL_3) {
@@ -78,11 +80,10 @@ void DeviceManager::executeAction(const DeviceAction& action) {
         if (alert_level < 1) alert_level = 1;
         if (alert_level > 3) alert_level = 3;
         ble_ctrl_.sendAlert(alert_level);
+    } else if (action.channel == NotificationChannel::SOUND) {
+        sound_ctrl_.playReminderSound();
     } else {
         screen_ctrl_.flashScreen();
-        if (action.channel == NotificationChannel::SOUND || action.channel == NotificationChannel::LIGHT) {
-            // Host-side observability path keeps behavior consistent with screen flash.
-        }
     }
 
     // Update band diagnostics for visibility in push/state snapshots.

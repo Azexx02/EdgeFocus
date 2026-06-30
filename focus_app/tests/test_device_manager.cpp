@@ -1,4 +1,5 @@
 #include "device/DeviceManager.h"
+#include "device/SoundController.h"
 #include "app/AppContext.h"
 #include "app/SystemStateStore.h"
 #include "policy/InterventionCommand.h"
@@ -116,11 +117,39 @@ void test_rest_suggestion_is_clamped_for_band_alert() {
     dev_mgr.shutdown(ctx);
 }
 
+void test_sound_action_uses_sound_channel() {
+    SoundController::setPlaybackEnabledForTests(false);
+    AppContext ctx;
+    SystemStateStore store;
+    DeviceManager dev_mgr(store);
+    dev_mgr.init(ctx);
+
+    int initial_sound_count = dev_mgr.soundPlayCount();
+    int initial_flashes = dev_mgr.screenFlashCount();
+    auto initial_band_level = dev_mgr.lastBandAlertLevel();
+    auto initial_band_pattern = dev_mgr.lastBandAlertPattern();
+
+    DeviceAction action{NotificationChannel::SOUND, CommandLevel::LEVEL_1};
+    assert(dev_mgr.issueAction(action) == true);
+    dev_mgr.runOnce(ctx);
+
+    assert(dev_mgr.executedCommandCount() == 1);
+    assert(dev_mgr.lastExecutedLevel() == CommandLevel::LEVEL_1);
+    assert(dev_mgr.soundPlayCount() == initial_sound_count + 1);
+    assert(dev_mgr.screenFlashCount() == initial_flashes);
+    assert(dev_mgr.lastBandAlertLevel() == initial_band_level);
+    assert(dev_mgr.lastBandAlertPattern() == initial_band_pattern);
+
+    dev_mgr.shutdown(ctx);
+}
+
 int main() {
+    SoundController::setPlaybackEnabledForTests(false);
     test_device_manager_queue();
     test_level2_uses_medium_band_alert();
     test_action_queue_issue_band_updates_device_status();
     test_rest_suggestion_is_clamped_for_band_alert();
+    test_sound_action_uses_sound_channel();
     std::cout << "All DeviceManager tests passed!\n";
     return 0;
 }

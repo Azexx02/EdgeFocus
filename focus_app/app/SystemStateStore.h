@@ -64,6 +64,18 @@ struct DeviceStatus {
     int         band_last_alert_pattern = 0;
     int         band_write_attempt_count = 0;
     std::string band_last_write_status;
+    bool        gimbal_connected = false;
+    bool        gimbal_online = false;
+    int         gimbal_boost = 0;
+    int         gimbal_motor = 0;
+    int         gimbal_en = 0;
+    int         gimbal_ix = 0;
+    int         gimbal_iy = 0;
+    bool        gimbal_safe = false;
+    float       gimbal_angle_x = 0.0f;
+    float       gimbal_angle_y = 0.0f;
+    int64_t     gimbal_last_seen_ms = 0;
+    std::string gimbal_last_error;
 };
 
 struct FrameQualityInfo {
@@ -79,10 +91,12 @@ struct Preferences {
     float       vibration_strength = 0.5f;
     int         led_brightness = 75;
     float       reminder_sensitivity = 0.5f;
-    // Bitmasks use stable channel bits:
-    // SCREEN=1, BAND=2, SOUND=4, LIGHT=8
-    int         normal_channels_mask = 3;
-    int         silent_channels_mask = 2;
+    // Reminder channel bitmasks:
+    // SCREEN=1, BAND=2, SOUND=4
+    // LIGHT=8 is legacy input compatibility and never returned as a normal
+    // channel option.
+    int         normal_channels_mask = 7;
+    int         silent_channels_mask = 3;
 };
 
 struct SystemSnapshot {

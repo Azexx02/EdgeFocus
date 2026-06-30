@@ -105,24 +105,27 @@ int parseNotificationMaskOrDefault(const std::string& value, int fallback) {
     return parseIntOrDefault(value, fallback);
 }
 
-int sanitizeNotificationChannelMask(int value) {
+int sanitizeNotificationChannelMask(int value, bool allow_sound) {
     int mask = 0;
     if (value & kNotificationChannelScreenMask) mask |= kNotificationChannelScreenMask;
     if (value & kNotificationChannelBandMask) mask |= kNotificationChannelBandMask;
-    if (value & kNotificationChannelSoundMask) mask |= kNotificationChannelSoundMask;
-    if (value & kNotificationChannelLightMask) mask |= kNotificationChannelLightMask;
+    if (allow_sound && (value & kNotificationChannelSoundMask)) {
+        mask |= kNotificationChannelSoundMask;
+    }
+    // Legacy LIGHT input still maps to SCREEN.
+    if (value & kNotificationChannelLightMask) mask |= kNotificationChannelScreenMask;
     return mask;
 }
 
-NotificationChannelMask parseChannelMaskFromValue(const json& value) {
+NotificationChannelMask parseChannelMaskFromValue(const json& value, bool allow_sound) {
     if (!value.is_number_integer()) {
         throw std::invalid_argument("normal/silent channels mask must be integer");
     }
     const int raw = value.get<int>();
-    return sanitizeNotificationChannelMask(raw);
+    return sanitizeNotificationChannelMask(raw, allow_sound);
 }
 
-NotificationChannelMask parseChannelMaskFromNames(const json& value) {
+NotificationChannelMask parseChannelMaskFromNames(const json& value, bool allow_sound) {
     if (!value.is_array()) {
         throw std::invalid_argument("normal/silent channels must be array");
     }
@@ -137,9 +140,12 @@ NotificationChannelMask parseChannelMaskFromNames(const json& value) {
         } else if (name == "band") {
             mask |= kNotificationChannelBandMask;
         } else if (name == "sound") {
-            mask |= kNotificationChannelSoundMask;
+            if (allow_sound) {
+                mask |= kNotificationChannelSoundMask;
+            }
         } else if (name == "light") {
-            mask |= kNotificationChannelLightMask;
+            // Legacy LIGHT input maps to SCREEN for backward compatibility.
+            mask |= kNotificationChannelScreenMask;
         } else {
             throw std::invalid_argument("unknown notification channel: " + name);
         }
@@ -181,11 +187,11 @@ AppCommandService::AppCommandService(SystemStateStore& store, SQLiteStore& sqlit
     prefs.normal_channels_mask = sanitizeNotificationChannelMask(
         parseNotificationMaskOrDefault(
             sqlite_store_.getPreference("normal_channels_mask", std::to_string(prefs.normal_channels_mask)),
-            prefs.normal_channels_mask));
+            prefs.normal_channels_mask), true);
     prefs.silent_channels_mask = sanitizeNotificationChannelMask(
         parseNotificationMaskOrDefault(
             sqlite_store_.getPreference("silent_channels_mask", std::to_string(prefs.silent_channels_mask)),
-            prefs.silent_channels_mask));
+            prefs.silent_channels_mask), false);
     store_.updatePreferences(prefs);
     mode_mgr_.setMode(static_cast<SystemMode>(prefs.system_mode));
 
@@ -240,6 +246,7 @@ std::string AppCommandService::handleCommand(const std::string& json_cmd) {
         if (cmd == "session_feedback")       return handleSessionFeedback(data, req_id);
         if (cmd == "get_session_history")    return handleGetSessionHistory(data, req_id);
         if (cmd == "get_preferences")        return handleGetPreferences(req_id);
+        if (cmd == "get_gimbal_status")      return handleGetGimbalStatus(req_id);
     } catch (const json::exception& e) {
         return makeError(req_id, std::string("Invalid command data: ") + e.what());
     } catch (const std::exception& e) {
@@ -256,6 +263,8 @@ std::string AppCommandService::handleGetDeviceStatus(int req_id) {
         {"system_mode", static_cast<int>(snap.device.system_mode)},
         {"camera_ok", snap.device.camera_ok},
         {"bracelet_connected", snap.device.bracelet_connected},
+        {"gimbal_connected", snap.device.gimbal_connected},
+        {"gimbal_online", snap.device.gimbal_online},
         {"is_session_active", snap.session.active}
     };
     return makeResponse(req_id, data);
@@ -446,14 +455,14 @@ std::string AppCommandService::handleUpdatePreferences(const json& data, int req
         prefs.reminder_sensitivity = data["reminder_sensitivity"].get<float>();
     }
     if (data.contains("normal_channels_mask")) {
-        prefs.normal_channels_mask = parseChannelMaskFromValue(data["normal_channels_mask"]);
+        prefs.normal_channels_mask = parseChannelMaskFromValue(data["normal_channels_mask"], true);
     } else if (data.contains("normal_channels")) {
-        prefs.normal_channels_mask = parseChannelMaskFromNames(data["normal_channels"]);
+        prefs.normal_channels_mask = parseChannelMaskFromNames(data["normal_channels"], true);
     }
     if (data.contains("silent_channels_mask")) {
-        prefs.silent_channels_mask = parseChannelMaskFromValue(data["silent_channels_mask"]);
+        prefs.silent_channels_mask = parseChannelMaskFromValue(data["silent_channels_mask"], false);
     } else if (data.contains("silent_channels")) {
-        prefs.silent_channels_mask = parseChannelMaskFromNames(data["silent_channels"]);
+        prefs.silent_channels_mask = parseChannelMaskFromNames(data["silent_channels"], false);
     }
 
     store_.updatePreferences(prefs);
@@ -564,7 +573,21 @@ std::string AppCommandService::handleGetConsoleData(int req_id) {
             {"band_last_alert_level", snap.device.band_last_alert_level},
             {"band_last_alert_pattern", snap.device.band_last_alert_pattern},
             {"band_write_attempt_count", snap.device.band_write_attempt_count},
-            {"band_last_write_status", snap.device.band_last_write_status}
+            {"band_last_write_status", snap.device.band_last_write_status},
+            {"gimbal", {
+                {"connected", snap.device.gimbal_connected},
+                {"online", snap.device.gimbal_online},
+                {"safe", snap.device.gimbal_safe},
+                {"boost", snap.device.gimbal_boost},
+                {"motor", snap.device.gimbal_motor},
+                {"en", snap.device.gimbal_en},
+                {"ix", snap.device.gimbal_ix},
+                {"iy", snap.device.gimbal_iy},
+                {"angle_x", snap.device.gimbal_angle_x},
+                {"angle_y", snap.device.gimbal_angle_y},
+                {"last_seen_ms", snap.device.gimbal_last_seen_ms},
+                {"last_error", snap.device.gimbal_last_error}
+            }}
         }},
         {"reminder", {
             {"level", static_cast<int>(snap.reminder.level)},
@@ -653,6 +676,25 @@ std::string AppCommandService::handleGetPreferences(int req_id) {
         {"silent_channels", notificationMaskToNames(snap.preferences.silent_channels_mask)}
     };
     return makeResponse(req_id, resp);
+}
+
+std::string AppCommandService::handleGetGimbalStatus(int req_id) {
+    auto snap = store_.snapshot();
+    json gimbal = {
+        {"connected", snap.device.gimbal_connected},
+        {"online", snap.device.gimbal_online},
+        {"safe", snap.device.gimbal_safe},
+        {"boost", snap.device.gimbal_boost},
+        {"motor", snap.device.gimbal_motor},
+        {"en", snap.device.gimbal_en},
+        {"ix", snap.device.gimbal_ix},
+        {"iy", snap.device.gimbal_iy},
+        {"angle_x", snap.device.gimbal_angle_x},
+        {"angle_y", snap.device.gimbal_angle_y},
+        {"last_seen_ms", snap.device.gimbal_last_seen_ms},
+        {"last_error", snap.device.gimbal_last_error}
+    };
+    return makeResponse(req_id, gimbal);
 }
 
 } // namespace edgefocus
