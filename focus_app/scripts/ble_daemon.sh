@@ -88,11 +88,27 @@ fi
 set_status "connected $MAC"
 echo "Connected and ready"
 
-# Command loop with disconnection monitoring
+# Command loop with disconnection monitoring.
+# Supported commands:
+#   buzz
+#   alert <level>
+# Alert frame follows docs/BLE_Signal_Protocol.md: {0x01, vibration_pattern, level}.
 while true; do
     if read -t 1 line <"$FIFO" 2>/dev/null; then
         if [ "$line" == "buzz" ]; then
-            echo "write \"0x01\"" >&7
+            echo "write \"0x01 0x01 0x01\"" >&7
+        elif echo "$line" | grep -qE '^alert [0-9]+$'; then
+            level=$(echo "$line" | awk '{print $2}')
+            if [ "$level" -ge 3 ]; then
+                pattern=3
+            elif [ "$level" -ge 2 ]; then
+                pattern=2
+            else
+                pattern=1
+            fi
+            pattern_hex=$(printf "%02x" "$pattern")
+            level_hex=$(printf "%02x" "$level")
+            echo "write \"0x01 0x${pattern_hex} 0x${level_hex}\"" >&7
         elif [ "$line" == "quit" ]; then
             break
         fi

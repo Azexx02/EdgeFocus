@@ -7,7 +7,7 @@ import time
 HOST = "192.168.10.6"
 USER = "hu"
 PASS = "REDACTED_BUILD_PASSWORD"
-BOARD = "192.168.10.210"
+BOARD = os.environ.get("EDGEFOCUS_BOARD_IP", "192.168.10.210")
 REMOTE_DIR = "/home/hu/edgefocus_test"
 BOARD_DIR = "/root/tests"
 

@@ -1,10 +1,13 @@
 import paramiko
 import sys
+import os
+
+BOARD_IP = os.environ.get("EDGEFOCUS_BOARD_IP", "192.168.10.210")
 
 def start_bg():
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    ssh.connect('192.168.10.210', username='root', password='', timeout=5)
+    ssh.connect(BOARD_IP, username='root', password='', timeout=5)
     
     # Check if focus_app is already running and kill it
     ssh.exec_command('pkill -9 focus_app')

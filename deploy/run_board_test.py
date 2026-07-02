@@ -12,7 +12,7 @@ import sys
 import time
 import os
 
-BOARD = "192.168.10.210"
+BOARD = os.environ.get("EDGEFOCUS_BOARD_IP", "192.168.10.210")
 BOARD_USER = "root"
 BOARD_PASS = ""
 BOARD_TEST_DIR = "/root/tests"

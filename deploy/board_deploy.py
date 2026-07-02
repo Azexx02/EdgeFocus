@@ -3,7 +3,7 @@ import tarfile
 import paramiko
 import time
 
-BOARD_IP = "192.168.10.210"
+BOARD_IP = os.environ.get("EDGEFOCUS_BOARD_IP", "192.168.10.210")
 USER = "root"
 PASSWORDS_TO_TRY = ["", "root"]
 
@@ -26,6 +26,7 @@ def create_tar():
         # Add models and config
         tar.add(os.path.join(base_dir, "focus_app", "models"), arcname="models")
         tar.add(os.path.join(base_dir, "focus_app", "config"), arcname="config")
+        tar.add(os.path.join(base_dir, "focus_app", "scripts"), arcname="scripts")
         
     print(f"    Created {tar_path}")
     return tar_path
@@ -61,6 +62,9 @@ def board_deploy(tar_path):
     tar -xzf /tmp/board_package.tar.gz -C /opt/edgefocus/
     chmod +x /opt/edgefocus/focus_app
     chmod +x /opt/edgefocus/export_logs.sh
+    mkdir -p /root/scripts
+    cp /opt/edgefocus/scripts/*.sh /root/scripts/ 2>/dev/null || true
+    chmod +x /root/scripts/*.sh 2>/dev/null || true
     cp /opt/edgefocus/focus_app.service /etc/systemd/system/
     systemctl daemon-reload
     systemctl enable focus_app

@@ -17,11 +17,38 @@ import tempfile
 HOST = "192.168.10.6"
 USER = "hu"
 PASS = "REDACTED_BUILD_PASSWORD"
-BOARD = "192.168.10.210"
+BOARD = os.environ.get("EDGEFOCUS_BOARD_IP", "192.168.10.210")
 BOARD_USER = "root"
 BOARD_PASS = ""
 REMOTE_DIR = "/home/hu/edgefocus_test"
 BOARD_DIR = "/root/tests"
+
+
+def connect_ssh(host, username, password, timeout=15, attempts=5, delay=3):
+    """Connect with retries; the board sometimes accepts TCP before SSH banner is ready."""
+    last_error = None
+    for attempt in range(1, attempts + 1):
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        try:
+            client.connect(
+                host,
+                username=username,
+                password=password,
+                timeout=timeout,
+                banner_timeout=timeout,
+                auth_timeout=timeout,
+            )
+            if attempt > 1:
+                print(f"  Connected to {host} on attempt {attempt}")
+            return client
+        except Exception as exc:
+            last_error = exc
+            client.close()
+            print(f"  SSH connect to {host} failed on attempt {attempt}/{attempts}: {exc}")
+            if attempt < attempts:
+                time.sleep(delay)
+    raise last_error
 
 # Per-test: sources needed (relative to focus_app/)
 TEST_DEPS = {
@@ -107,8 +134,11 @@ TEST_DEPS = {
             "policy/InterventionCommand.h",
             "app/Module.h", "app/BoundedQueue.h",
             "app/AppContext.h", "app/SystemStateStore.h", "app/Logger.h",
-            "behavior/FocusState.h", "policy/ModeManager.h",
+            "behavior/FocusState.h", "behavior/EventDetector.h",
+            "behavior/SlidingWindow.h", "policy/ModeManager.h",
             "storage/ReportGenerator.h",
+            "vision/VisionResult.h", "vision/MockVisionSource.h",
+            "camera/CameraFrame.h", "config/BehaviorConfig.h",
         ],
         "extra_libs": "",
         "timeout": 15,
@@ -153,6 +183,7 @@ TEST_DEPS = {
             "device/GpioHelper.cpp",
             "storage/SQLiteStore.cpp",
             "storage/ReportGenerator.cpp",
+            "app/SessionController.cpp",
             "app/AppContext.cpp",
             "app/SystemStateStore.cpp",
             "app/Logger.cpp",
@@ -166,6 +197,7 @@ TEST_DEPS = {
             "device/BleBandController.h", "device/GpioHelper.h",
             "storage/StorageEvent.h", "storage/schema.h",
             "storage/SQLiteStore.h", "storage/ReportGenerator.h",
+            "app/SessionController.h",
             "app/Module.h", "app/BoundedQueue.h",
             "app/AppContext.h", "app/SystemStateStore.h", "app/Logger.h",
             "behavior/FocusState.h", "behavior/EventDetector.h",
@@ -174,7 +206,7 @@ TEST_DEPS = {
             "camera/CameraFrame.h",
             "config/BehaviorConfig.h",
         ],
-        "extra_libs": "sqlite3_lib",
+        "extra_libs": "sqlite3_lib nlohmann_json::nlohmann_json",
         "timeout": 10,
     },
 }
@@ -186,6 +218,12 @@ def generate_cmake(test_name, deps):
     """Generate a minimal CMakeLists.txt for a single test."""
     sources_list = "\n".join(f"    {s}" for s in deps["sources"])
     extra_libs = deps.get("extra_libs", "")
+
+    needs_json = "nlohmann_json::nlohmann_json" in extra_libs
+    json_fetch = """
+FetchContent_Declare(json URL https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+FetchContent_MakeAvailable(json)
+""" if needs_json else ""
 
     cmake = f"""cmake_minimum_required(VERSION 3.14)
 project(focus_test LANGUAGES C CXX)
@@ -206,6 +244,7 @@ endif()
 
 add_library(sqlite3_lib STATIC ${{sqlite3_SOURCE_DIR}}/sqlite3.c)
 target_include_directories(sqlite3_lib PUBLIC ${{sqlite3_SOURCE_DIR}})
+{json_fetch}
 
 add_executable({test_name}
 {sources_list}
@@ -257,10 +296,9 @@ def create_test_zip(test_name):
 
 def remote_build_test(zip_path, test_name):
     """Cross-compile the test on ARM SDK server."""
+    remote_dir = f"{REMOTE_DIR}_{test_name}"
     print(f"[2] Connecting to {HOST}...")
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    client.connect(HOST, username=USER, password=PASS)
+    client = connect_ssh(HOST, USER, PASS)
 
     print("[3] Uploading source...")
     sftp = client.open_sftp()
@@ -269,10 +307,10 @@ def remote_build_test(zip_path, test_name):
 
     print(f"[4] Cross-compiling {test_name}...")
     commands = f"""
-    rm -rf {REMOTE_DIR}
-    mkdir -p {REMOTE_DIR}
-    unzip -o -q {remote_zip} -d {REMOTE_DIR}
-    cd {REMOTE_DIR}/focus_app
+    rm -rf {remote_dir}
+    mkdir -p {remote_dir}
+    unzip -o -q {remote_zip} -d {remote_dir}
+    cd {remote_dir}/focus_app
     mkdir -p build_arm
     cd build_arm
     source /opt/st/stm32mp2/5.0.3-snapshot/environment-setup-cortexa35-ostl-linux
@@ -298,7 +336,7 @@ def remote_build_test(zip_path, test_name):
 
     # Find the compiled binary
     stdin, stdout, stderr = client.exec_command(
-        f"find {REMOTE_DIR}/focus_app/build_arm -name '{test_name}' -type f | head -1"
+        f"find {remote_dir}/focus_app/build_arm -name '{test_name}' -type f | head -1"
     )
     remote_bin = stdout.read().decode().strip()
 
@@ -320,9 +358,7 @@ def remote_build_test(zip_path, test_name):
 def deploy_and_run(local_bin, test_name):
     """Deploy binary to board and run it."""
     print(f"[5] Deploying to board {BOARD}...")
-    ssh = paramiko.SSHClient()
-    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    ssh.connect(BOARD, username=BOARD_USER, password=BOARD_PASS, timeout=10)
+    ssh = connect_ssh(BOARD, BOARD_USER, BOARD_PASS)
 
     ssh.exec_command(f"mkdir -p {BOARD_DIR}")
     time.sleep(0.3)
