@@ -122,6 +122,130 @@ Do not prioritize:
 - cloud/server features
 - over-polishing UI text
 
+## Current Round Tasks
+
+This session continues final development with two concrete tasks:
+
+1. Integrate the completed gimbal sub-board protocol.
+2. Add App-facing fallback/control surfaces for display, sound, and visual reminders in case the new self-designed baseboard cannot bring up the local screen or speaker in time.
+
+### Gimbal Protocol Entry
+
+Protocol document:
+
+```text
+docs/gimbal_uart_control_protocol(1).md
+```
+
+The file currently renders Chinese text with encoding issues in this workspace, but the command names, responses, and constraints are readable. Implement from the command contract, not from guessed UI behavior.
+
+Known protocol summary:
+
+- UART: UART4, PC10 TX / PC11 RX
+- Electrical: 3.3 V TTL, not RS232
+- Serial format: `115200 8N1`, no flow control
+- Encoding: ASCII
+- Command terminator: `\r\n` or `\n`
+- Max command length: 63 bytes excluding terminator
+- One outstanding normal command at a time
+- Emergency stop byte: `!`, no newline required
+- Main program must wait for `*_OK` or `ERR,...` after `*_START` before sending the next normal command
+
+V1 business commands:
+
+```text
+VER
+PING
+STOP
+STAT
+ANGLE
+FAULT
+SET XY <x_deg> <y_deg>
+MOVE XY <x_deg> <y_deg> <speed>
+DEG X <x_deg>
+DEG Y <y_deg>
+CENTER X
+```
+
+Commands explicitly not part of V1 product flow:
+
+```text
+TRACK
+FOCSTAT
+HOLD
+```
+
+Startup flow:
+
+```text
+VER
+PING
+STOP
+STAT
+FAULT
+ANGLE
+```
+
+Allowed motion precondition from `STAT`:
+
+```text
+SAFE=0,XHOME=1,YHOME=1,CAL=1
+```
+
+Timeouts:
+
+- `VER/PING/STOP/STAT/ANGLE/FAULT`: 500 ms
+- `DEG Y`: 10 s
+- `DEG X`: 30 s
+- `CENTER X`: 30 s
+- `SET XY`: 45 s
+- `MOVE XY`: 60 s
+
+Motion timeout behavior:
+
+1. Send `!`.
+2. Wait 200 ms.
+3. Send `STOP`.
+4. Query `FAULT` and `ANGLE`.
+5. Do not automatically retry motion commands.
+
+### App Fallback Interface Requirement
+
+New baseboard risk:
+
+- Local screen driver may fail.
+- Local sound driver may fail.
+- Local screen flash reminder may fail because it depends on local display.
+
+Fallback product rule:
+
+- The host remains the authority for session state, behavior judgment, reminders, report/history, and feedback.
+- If board-local display/sound is unavailable, the App must be able to render all interaction surfaces and play/flash reminders from host state and push events.
+- Do not move authority to the App; only move presentation and output channels.
+
+Expose enough App-facing API/push data for:
+
+- current session state and phase
+- countdown/progress display
+- precheck/gimbal status and manual skip
+- camera/vision basic health
+- phone_sync input status
+- current focus/behavior state
+- reminder event with severity, allowed channels, and message/category
+- sound reminder fallback trigger
+- visual flash fallback trigger
+- band availability and last band alert status if known
+- session end report
+- session history
+- feedback submission
+- preferences for normal/silent reminder channel masks and `sound_volume`
+
+Preserve reminder semantics:
+
+- `PHONE_IN_USE` and `PHONE_IN_PLAYING` remain behavior inputs, not fixed reminder levels.
+- Silent mode only filters channels; it does not downgrade severity.
+- If local board sound/screen channels fail, App fallback can execute those presentation channels while host still records reminder decisions/counts.
+
 ## Important Semantics
 
 Phone state:
