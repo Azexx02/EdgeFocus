@@ -5,6 +5,7 @@
 #include "policy/InterventionCommand.h"
 #include <cassert>
 #include <cstdio>
+#include <chrono>
 #include <fstream>
 #include <iostream>
 #include <string>
@@ -145,7 +146,21 @@ void test_sound_action_uses_sound_channel() {
     dev_mgr.shutdown(ctx);
 }
 
+void test_sound_controller_disabled_is_fast_and_unavailable() {
+    SoundController::setPlaybackEnabledForTests(false);
+
+    SoundController sound;
+    const auto start = std::chrono::steady_clock::now();
+    sound.playReminderSound(0.5f);
+    const auto elapsed = std::chrono::steady_clock::now() - start;
+
+    assert(SoundController::isAvailable() == false);
+    assert(sound.playCount() == 1);
+    assert(elapsed < std::chrono::milliseconds(50));
+}
+
 void test_sound_controller_generates_short_tone_wav() {
+#if defined(__linux__)
     const std::string path = "/tmp/edgefocus_test_reminder_tone.wav";
     std::remove(path.c_str());
 
@@ -167,6 +182,9 @@ void test_sound_controller_generates_short_tone_wav() {
     assert(size < 20000);
 
     std::remove(path.c_str());
+#else
+    // The tone file helper is Linux-only; keep the test binary portable on Windows hosts.
+#endif
 }
 
 int main() {
@@ -175,6 +193,7 @@ int main() {
     test_level2_uses_medium_band_alert();
     test_action_queue_issue_band_updates_device_status();
     test_rest_suggestion_is_clamped_for_band_alert();
+    test_sound_controller_disabled_is_fast_and_unavailable();
     test_sound_action_uses_sound_channel();
     test_sound_controller_generates_short_tone_wav();
     std::cout << "All DeviceManager tests passed!\n";

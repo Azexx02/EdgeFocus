@@ -10,10 +10,13 @@
 
 namespace edgefocus {
 
+class GimbalMonitor;
+
 class AppCommandService {
 public:
     AppCommandService(SystemStateStore& store, SQLiteStore& sqlite_store,
-                      ReminderPolicy& reminder_policy, ModeManager& mode_mgr);
+                      ReminderPolicy& reminder_policy, ModeManager& mode_mgr,
+                      GimbalMonitor* gimbal_monitor = nullptr);
 
     std::string handleCommand(const std::string& json_cmd);
 
@@ -28,6 +31,7 @@ private:
     SQLiteStore& sqlite_store_;
     ReminderPolicy& reminder_policy_;
     ModeManager& mode_mgr_;
+    GimbalMonitor* gimbal_monitor_;
 
     std::string handleGetDeviceStatus(int req_id);
     std::string handleGetCurrentState(int req_id);
@@ -42,6 +46,8 @@ private:
     std::string handleGetSessionHistory(const json& data, int req_id);
     std::string handleGetPreferences(int req_id);
     std::string handleGetGimbalStatus(int req_id);
+    std::string handleGimbalControl(const json& data, int req_id);
+    std::string handleGetCameraPreviewImage(int req_id);
 };
 
 } // namespace edgefocus

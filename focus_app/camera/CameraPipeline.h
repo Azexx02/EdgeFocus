@@ -43,6 +43,8 @@ private:
     int64_t next_open_attempt_ms_ = 0;
     int64_t captured_frames_ = 0;
     int64_t dropped_frames_ = 0;
+    int64_t last_preview_ms_ = 0;
+    int64_t preview_sequence_ = 0;
 };
 
 } // namespace edgefocus

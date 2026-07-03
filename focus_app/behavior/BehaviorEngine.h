@@ -27,6 +27,13 @@ private:
     bool session_was_active_ = false;
     int64_t focus_accumulated_ms_ = 0;
     int64_t last_focus_update_ms_ = 0;
+    std::string stable_distance_hint_;
+    std::string stable_pose_hint_;
+    bool stable_precheck_ready_ = false;
+    std::string pending_distance_hint_;
+    std::string pending_pose_hint_;
+    bool pending_precheck_ready_ = false;
+    int64_t pending_guidance_since_ms_ = 0;
 };
 
 } // namespace edgefocus

@@ -9,20 +9,23 @@ void test_parse_stat_kv_payload() {
     using namespace edgefocus;
     GimbalSnapshot snap;
     std::string error;
-    const std::string line = "STAT connected=1 online=1 safe=1 boost=2 motor=0 en=1 ix=34 iy=-12 angle_x=5.5 angle_y=-3.2";
+    const std::string line = "STAT,SAFE=0,BOOST=2,MOTOR=0,HOLD=0,XHOME=1,YHOME=1,CAL=1,XT=5,YT=3,EN=1,IX=34,IY=-12,XLIM=180,YLIM=359";
 
     assert(GimbalController::parseStat(line, snap, &error));
     assert(error.empty());
     assert(snap.connected == true);
     assert(snap.online == true);
     assert(snap.safe == true);
+    assert(snap.xhome == true);
+    assert(snap.yhome == true);
+    assert(snap.cal == true);
     assert(snap.boost == 2);
     assert(snap.motor == 0);
     assert(snap.en == 1);
     assert(snap.ix == 34);
     assert(snap.iy == -12);
-    assert(snap.angle_x > 5.49f && snap.angle_x < 5.51f);
-    assert(snap.angle_y > -3.21f && snap.angle_y < -3.19f);
+    assert(snap.angle_x > 4.99f && snap.angle_x < 5.01f);
+    assert(snap.angle_y > 2.99f && snap.angle_y < 3.01f);
 }
 
 void test_parse_stat_comma_payload() {
@@ -32,7 +35,7 @@ void test_parse_stat_comma_payload() {
     assert(GimbalController::parseStat("STAT:1,0,1,1,1,0,1,0,1.2,2.4", snap, &error));
     assert(error.empty());
     assert(snap.connected == true);
-    assert(snap.online == false);
+    assert(snap.online == true);
     assert(snap.safe == true);
     assert(snap.boost == 1);
     assert(snap.motor == 1);
@@ -48,10 +51,10 @@ void test_parse_angle_payload() {
     assert(x > 12.49f && x < 12.51f);
     assert(y > -4.81f && y < -4.79f);
 
-    assert(GimbalController::parseAngle("ANGLE X=13.3, Y=-5.0", x, y, &error));
+    assert(GimbalController::parseAngle("ANGLE,X=123,Y=456,XD=13.3,YD=5.0,XHOME=120,YHOME=450,EN=1", x, y, &error));
     assert(error.empty());
     assert(x > 13.29f && x < 13.31f);
-    assert(y < -4.99f && y > -5.01f);
+    assert(y > 4.99f && y < 5.01f);
 }
 
 void test_parse_error_response() {
@@ -65,11 +68,14 @@ void test_parse_error_response() {
 
 void test_no_motion_commands() {
     using namespace edgefocus;
-    assert(GimbalController::commandForState(GimbalController::PollState::OFFLINE) == "PING");
+    assert(GimbalController::commandForState(GimbalController::PollState::OFFLINE) == "VER");
+    assert(GimbalController::commandForState(GimbalController::PollState::VER) == "VER");
     assert(GimbalController::commandForState(GimbalController::PollState::PING) == "PING");
-    assert(GimbalController::commandForState(GimbalController::PollState::SAFE) == "SAFE");
+    assert(GimbalController::commandForState(GimbalController::PollState::STOP) == "STOP");
     assert(GimbalController::commandForState(GimbalController::PollState::STAT) == "STAT");
-    assert(GimbalController::commandForState((GimbalController::PollState)99) == "PING");
+    assert(GimbalController::commandForState(GimbalController::PollState::FAULT) == "FAULT");
+    assert(GimbalController::commandForState(GimbalController::PollState::ANGLE) == "ANGLE");
+    assert(GimbalController::commandForState((GimbalController::PollState)99) == "VER");
 
     std::string cmd = GimbalController::commandForState(GimbalController::PollState::OFFLINE);
     assert(cmd.find("BOOST") == std::string::npos);

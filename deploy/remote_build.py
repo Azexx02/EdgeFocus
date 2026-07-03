@@ -9,6 +9,7 @@ PASS = "REDACTED_BUILD_PASSWORD"
 REMOTE_DIR = "/home/hu/edgefocus_build"
 ZIP_NAME = "focus_app_src.zip"
 REMOTE_ZIP = f"/home/hu/{ZIP_NAME}"
+DEMO_HTTP = os.environ.get("EDGEFOCUS_DEPLOY_DEMO_HTTP", "OFF").upper() in ("1", "ON", "TRUE", "YES")
 
 def create_zip():
     print("[1] Creating source zip...")
@@ -49,7 +50,7 @@ def remote_build(zip_path):
     mkdir -p build_arm
     cd build_arm
     source /opt/st/stm32mp2/5.0.3-snapshot/environment-setup-cortexa35-ostl-linux
-    cmake .. -DEDGEFOCUS_WITH_STAI_MPU=ON -DEDGEFOCUS_WITH_OPENCV=ON -DCMAKE_BUILD_TYPE=Release
+    cmake .. -DEDGEFOCUS_WITH_STAI_MPU=ON -DEDGEFOCUS_WITH_OPENCV=ON -DEDGEFOCUS_WITH_DEMO_HTTP={'ON' if DEMO_HTTP else 'OFF'} -DCMAKE_BUILD_TYPE=Release
     make -j$(nproc)
     """
     

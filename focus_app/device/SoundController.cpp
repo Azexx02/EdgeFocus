@@ -5,6 +5,7 @@
 #include <cstdlib>
 #include <cstdint>
 #include <fstream>
+#include <filesystem>
 #include <cctype>
 #include <string>
 #include <system_error>
@@ -67,6 +68,10 @@ bool SoundController::isPlaybackAllowed() {
     return playbackEnabledForTests() && !isEnvPlaybackDisabled();
 }
 
+bool SoundController::isAvailable() {
+    return isPlaybackAllowed() && hasAlsaPlaybackDevice();
+}
+
 bool SoundController::hasCommand(const std::string& command) {
 #if defined(__linux__)
     const std::string probe = "command -v " + command + " >/dev/null 2>&1";
@@ -78,7 +83,20 @@ bool SoundController::hasCommand(const std::string& command) {
 
 bool SoundController::hasAlsaPlaybackDevice() {
 #if defined(__linux__)
-    return std::system("aplay -l 2>/dev/null | grep -q '^card '") == 0;
+    std::error_code ec;
+    if (std::filesystem::exists("/proc/asound/cards", ec) && !ec) {
+        std::ifstream cards("/proc/asound/cards");
+        if (cards.is_open()) {
+            return true;
+        }
+    }
+
+    ec.clear();
+    if (std::filesystem::exists("/dev/snd", ec) && !ec && std::filesystem::is_directory("/dev/snd", ec) && !ec) {
+        return true;
+    }
+
+    return false;
 #else
     return false;
 #endif

@@ -43,6 +43,8 @@ add_executable(test_reminder_policy
     ../policy/NotificationRouter.cpp
     ../policy/ModeManager.cpp
     ../device/DeviceManager.cpp
+    ../device/GimbalMonitor.cpp
+    ../device/GimbalController.cpp
     ../device/ScreenController.cpp
     ../device/SoundController.cpp
     ../device/BleBandController.cpp
@@ -151,6 +153,8 @@ add_executable(test_ble_gatt
     ../policy/NotificationRouter.cpp
     ../policy/ModeManager.cpp
     ../device/DeviceManager.cpp
+    ../device/GimbalMonitor.cpp
+    ../device/GimbalController.cpp
     ../device/ScreenController.cpp
     ../device/SoundController.cpp
     ../device/BleBandController.cpp
@@ -190,6 +194,8 @@ add_executable(test_integration
     ../behavior/FocusStateMachine.cpp
     ../behavior/BehaviorEngine.cpp
     ../device/DeviceManager.cpp
+    ../device/GimbalMonitor.cpp
+    ../device/GimbalController.cpp
     ../device/ScreenController.cpp
     ../device/SoundController.cpp
     ../device/BleBandController.cpp

@@ -117,11 +117,12 @@ GVariant* buildAdvertisementProperties() {
 } // namespace
 
 BleGattServer::BleGattServer(SystemStateStore& store, SQLiteStore& sqlite_store,
-                             ReminderPolicy& reminder_policy, ModeManager& mode_mgr)
+                             ReminderPolicy& reminder_policy, ModeManager& mode_mgr,
+                             GimbalMonitor* gimbal_monitor)
     : Module("BleGattServer")
     , store_(store)
     , sqlite_store_(sqlite_store)
-    , app_commands_(store, sqlite_store, reminder_policy, mode_mgr) {}
+    , app_commands_(store, sqlite_store, reminder_policy, mode_mgr, gimbal_monitor) {}
 
 BleGattServer::~BleGattServer() = default;
 

@@ -114,14 +114,20 @@ int GimbalController::readTimeoutMsFromEnv() {
 std::string GimbalController::commandForState(PollState state) {
     switch (state) {
         case PollState::OFFLINE:
+        case PollState::VER:
+            return "VER";
         case PollState::PING:
             return "PING";
-        case PollState::SAFE:
-            return "SAFE";
+        case PollState::STOP:
+            return "STOP";
         case PollState::STAT:
             return "STAT";
+        case PollState::FAULT:
+            return "FAULT";
+        case PollState::ANGLE:
+            return "ANGLE";
         default:
-            return "PING";
+            return "VER";
     }
 }
 
@@ -213,7 +219,17 @@ bool GimbalController::parseStat(const std::string& line, GimbalSnapshot& out, s
             } else if (key == "ONLINE") {
                 if (parseBoolValue(raw_value, parsed.online)) parsed_any = true;
             } else if (key == "SAFE") {
-                if (parseBoolValue(raw_value, parsed.safe)) parsed_any = true;
+                bool firmware_safe_disabled = false;
+                if (parseBoolValue(raw_value, firmware_safe_disabled)) {
+                    parsed.safe = !firmware_safe_disabled;
+                    parsed_any = true;
+                }
+            } else if (key == "XHOME") {
+                if (parseBoolValue(raw_value, parsed.xhome)) parsed_any = true;
+            } else if (key == "YHOME") {
+                if (parseBoolValue(raw_value, parsed.yhome)) parsed_any = true;
+            } else if (key == "CAL") {
+                if (parseBoolValue(raw_value, parsed.cal)) parsed_any = true;
             } else if (key == "BOOST") {
                 if (parseIntValue(raw_value, parsed.boost)) parsed_any = true;
             } else if (key == "MOTOR") {
@@ -228,7 +244,14 @@ bool GimbalController::parseStat(const std::string& line, GimbalSnapshot& out, s
                 if (parseFloatValue(raw_value, parsed.angle_x)) parsed_any = true;
             } else if (key == "ANGLE_Y") {
                 if (parseFloatValue(raw_value, parsed.angle_y)) parsed_any = true;
+            } else if (key == "XT" || key == "XD") {
+                if (parseFloatValue(raw_value, parsed.angle_x)) parsed_any = true;
+            } else if (key == "YT" || key == "YD") {
+                if (parseFloatValue(raw_value, parsed.angle_y)) parsed_any = true;
             }
+        }
+        if (parsed.xhome || parsed.yhome || parsed.cal) {
+            parsed.safe = parsed.safe && parsed.xhome && parsed.yhome && parsed.cal;
         }
     } else {
         if (tokens.size() < 3) {
@@ -264,6 +287,8 @@ bool GimbalController::parseStat(const std::string& line, GimbalSnapshot& out, s
         if (error) *error = "no STAT field parsed";
         return false;
     }
+    parsed.connected = true;
+    parsed.online = true;
     parsed.last_seen_ms = nowMs();
     parsed.last_error.clear();
     out = parsed;
@@ -310,9 +335,9 @@ bool GimbalController::parseAngle(const std::string& line, float& angle_x, float
             if (eq == std::string::npos) continue;
             const std::string key = toUpper(trimCopy(token.substr(0, eq)));
             const std::string raw_value = trimCopy(token.substr(eq + 1));
-            if (key == "X" || key == "ANGLE_X") {
+            if (key == "XD" || key == "ANGLE_X") {
                 if (parseFloatValue(raw_value, x)) has_x = true;
-            } else if (key == "Y" || key == "ANGLE_Y") {
+            } else if (key == "YD" || key == "ANGLE_Y") {
                 if (parseFloatValue(raw_value, y)) has_y = true;
             }
         }
@@ -415,10 +440,20 @@ bool GimbalController::writeCommand(const std::string& cmd) {
     return written == static_cast<ssize_t>(payload.size());
 }
 
+bool GimbalController::writeEmergencyStop() {
+    if (!isDeviceOpen()) return false;
+    const char payload = '!';
+    return ::write(fd_, &payload, 1) == 1;
+}
+
 GimbalController::Response GimbalController::readLine() {
+    return readLineWithTimeout(read_timeout_ms_);
+}
+
+GimbalController::Response GimbalController::readLineWithTimeout(int timeout_ms) {
     Response result;
     auto deadline = std::chrono::steady_clock::now() +
-                    std::chrono::milliseconds(read_timeout_ms_);
+                    std::chrono::milliseconds(timeout_ms);
     std::string line;
 
     while (std::chrono::steady_clock::now() < deadline) {
@@ -456,6 +491,95 @@ GimbalController::Response GimbalController::readLine() {
     return result;
 }
 #endif
+
+GimbalCommandResult GimbalController::executeBusinessCommand(const std::string& command,
+                                                            int timeout_ms) {
+    GimbalCommandResult result;
+    result.command = command;
+#ifdef __linux__
+    if (!openDevice()) {
+        result.error = "open_failed";
+        recordFailure(result.error, false);
+        return result;
+    }
+    if (!writeCommand(command)) {
+        result.error = "write_failed";
+        recordFailure(result.error, false);
+        return result;
+    }
+
+    Response first = readLineWithTimeout(read_timeout_ms_);
+    if (first.timeout) {
+        result.timeout = true;
+        result.error = "start_timeout";
+        recordFailure(result.error, true);
+        return result;
+    }
+    if (!first.ok || first.empty) {
+        result.error = first.empty ? "empty_response" : "read_failed";
+        recordFailure(result.error, false);
+        return result;
+    }
+    result.start_response = first.line;
+    const std::string first_upper = toUpper(first.line);
+    if (first_upper.rfind("ERR", 0) == 0) {
+        result.error = first.line;
+        recordFailure(result.error, false);
+        return result;
+    }
+
+    const bool motion_command =
+        first_upper.find("_START") != std::string::npos ||
+        first_upper.find("XY_START") != std::string::npos;
+    if (!motion_command) {
+        result.success = true;
+        result.final_response = first.line;
+        clearFailureState();
+        return result;
+    }
+
+    Response final = readLineWithTimeout(timeout_ms);
+    if (final.timeout) {
+        result.timeout = true;
+        result.error = "motion_timeout";
+        writeEmergencyStop();
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        writeCommand("STOP");
+        recordFailure(result.error, true);
+        return result;
+    }
+    if (!final.ok || final.empty) {
+        result.error = final.empty ? "empty_response" : "read_failed";
+        recordFailure(result.error, false);
+        return result;
+    }
+    result.final_response = final.line;
+    const std::string final_upper = toUpper(final.line);
+    if (final_upper.rfind("ERR", 0) == 0) {
+        result.error = final.line;
+        writeEmergencyStop();
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        writeCommand("STOP");
+        recordFailure(result.error, false);
+        return result;
+    }
+    result.success = final_upper.find("_OK") != std::string::npos ||
+                     final_upper.find("OK") != std::string::npos ||
+                     final_upper.rfind("DEG,", 0) == 0;
+    if (!result.success) {
+        result.error = "unexpected_final_response";
+        recordFailure(result.error, false);
+        return result;
+    }
+    clearFailureState();
+    return result;
+#else
+    (void)timeout_ms;
+    result.error = "offline_platform";
+    recordFailure(result.error, false);
+    return result;
+#endif
+}
 
 bool GimbalController::processPingResponse(const Response& response, std::string& error) {
     const std::string upper = toUpper(response.line);
@@ -544,15 +668,33 @@ bool GimbalController::pollOnce() {
 
     std::string error;
     bool ok = false;
-    if (state_ == PollState::OFFLINE || state_ == PollState::PING) {
+    if (state_ == PollState::OFFLINE || state_ == PollState::VER) {
+        const std::string upper = toUpper(response.line);
+        ok = upper.rfind("VER", 0) == 0 && upper.find("PROTO=1.") != std::string::npos;
+        if (!ok) error = "unexpected VER response";
+        if (ok) {
+            status_.online = true;
+            state_ = PollState::PING;
+        }
+    } else if (state_ == PollState::PING) {
         ok = processPingResponse(response, error);
+        if (ok) state_ = PollState::STOP;
+    } else if (state_ == PollState::STOP) {
+        const std::string upper = toUpper(response.line);
+        ok = upper.find("OK") != std::string::npos && upper.find("STOP") != std::string::npos;
+        if (!ok) error = "unexpected STOP response";
         if (ok) state_ = PollState::STAT;
-    } else if (state_ == PollState::SAFE) {
-        ok = processSafeResponse(response, error);
-        if (ok) state_ = PollState::STAT;
-    } else {
+    } else if (state_ == PollState::STAT) {
         ok = processStatResponse(response, error);
-        if (ok) state_ = PollState::SAFE;
+        if (ok) state_ = PollState::FAULT;
+    } else if (state_ == PollState::FAULT) {
+        const std::string upper = toUpper(response.line);
+        ok = upper.rfind("FAULT", 0) == 0;
+        if (!ok) error = "unexpected FAULT response";
+        if (ok) state_ = PollState::ANGLE;
+    } else if (state_ == PollState::ANGLE) {
+        ok = processStatResponse(response, error);
+        if (ok) state_ = PollState::STAT;
     }
 
     if (!ok) {

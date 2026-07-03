@@ -7,6 +7,7 @@
 #include "storage/StorageEvent.h"
 #include <algorithm>
 #include <sstream>
+#include <vector>
 
 namespace edgefocus {
 
@@ -29,7 +30,7 @@ std::string jsonEscape(const std::string& value) {
 
 CommandLevel phoneContextLevel(const BehaviorContext& ctx) {
     const int risk_score = std::clamp(ctx.risk_score, 0, 100);
-    const int distraction_level = std::clamp(ctx.phone_distraction_level, 1, 3);
+    const int distraction_level = std::clamp(ctx.phone_distraction_level, 0, 3);
 
     if (!ctx.phone_signal) {
         if (risk_score >= 95) return CommandLevel::LEVEL_3;
@@ -37,9 +38,34 @@ CommandLevel phoneContextLevel(const BehaviorContext& ctx) {
         return CommandLevel::LEVEL_1;
     }
 
-    if (distraction_level >= 3 || risk_score >= 90) return CommandLevel::LEVEL_3;
-    if (distraction_level >= 2 || risk_score >= 70) return CommandLevel::LEVEL_2;
+    if (distraction_level >= 3 && risk_score >= 80) return CommandLevel::LEVEL_3;
+    if (distraction_level >= 3 && risk_score >= 45) return CommandLevel::LEVEL_2;
+    if (distraction_level == 2 && risk_score >= 65) return CommandLevel::LEVEL_2;
     return CommandLevel::LEVEL_1;
+}
+
+bool isPhoneRoute(const Preferences& prefs, NotificationChannel channel) {
+    if (channel == NotificationChannel::SCREEN || channel == NotificationChannel::LIGHT) {
+        return prefs.board_output_route == "phone";
+    }
+    if (channel == NotificationChannel::SOUND) {
+        return prefs.board_output_route == "phone";
+    }
+    return false;
+}
+
+std::string notificationChannelName(NotificationChannel channel) {
+    switch (channel) {
+        case NotificationChannel::SCREEN:
+        case NotificationChannel::LIGHT:
+            return "SCREEN";
+        case NotificationChannel::SOUND:
+            return "SOUND";
+        case NotificationChannel::BAND:
+            return "BAND";
+        default:
+            return "";
+    }
 }
 
 } // namespace
@@ -76,7 +102,28 @@ void ReminderPolicy::runOnce(AppContext& /*ctx*/) {
                 notificationMaskToChannels(snap.preferences.normal_channels_mask),
                 notificationMaskToChannels(snap.preferences.silent_channels_mask)
             });
+        std::vector<DeviceAction> board_actions;
+        std::vector<std::string> phone_actions;
+        board_actions.reserve(actions.size());
+        phone_actions.reserve(actions.size());
         for (const auto& action : actions) {
+            if (isPhoneRoute(snap.preferences, action.channel)) {
+                phone_actions.push_back(notificationChannelName(action.channel));
+            } else {
+                board_actions.push_back(action);
+            }
+        }
+        const int attempted_mask = notificationChannelsToMask([&board_actions]() {
+            std::vector<NotificationChannel> channels;
+            channels.reserve(board_actions.size());
+            for (const auto& action : board_actions) channels.push_back(action.channel);
+            return channels;
+        }());
+        DeviceStatus device_status = snap.device;
+        device_status.last_attempted_channels_mask = attempted_mask;
+        device_status.last_delivered_channels_mask = 0;
+        store_.updateDeviceStatus(device_status);
+        for (const auto& action : board_actions) {
             device_mgr_.issueAction(action);
         }
 
@@ -94,6 +141,13 @@ void ReminderPolicy::runOnce(AppContext& /*ctx*/) {
              << "\"vision_signal\":" << (after.behavior_context.vision_signal ? "true" : "false") << ","
              << "\"phone_signal\":" << (after.behavior_context.phone_signal ? "true" : "false") << ","
              << "\"reason\":\"" << jsonEscape(after.behavior_context.reason) << "\","
+             << "\"phone_actions\":[";
+        for (size_t i = 0; i < phone_actions.size(); ++i) {
+            if (i > 0) push << ",";
+            push << "\"" << phone_actions[i] << "\"";
+        }
+        push << "],"
+             << "\"sound_volume\":" << after.preferences.sound_volume << ","
              << "\"since_ms\":" << now_ms << ","
              << "\"focus_state\":" << static_cast<int>(snap.focus_state) << ","
              << "\"reminder_count\":" << after.session.reminder_count

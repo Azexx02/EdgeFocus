@@ -1,6 +1,7 @@
 #include "CameraPipeline.h"
 #include "app/AppContext.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <memory>
@@ -16,9 +17,79 @@ namespace edgefocus {
 
 namespace {
 
+constexpr int kPreviewWidth = 40;
+constexpr int kPreviewHeight = 30;
+constexpr int64_t kPreviewIntervalMs = 1200;
+
 int64_t nowMs() {
     const auto now = std::chrono::steady_clock::now();
     return std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
+}
+
+std::string base64Encode(const std::vector<uint8_t>& bytes) {
+    static constexpr char kTable[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    out.reserve(((bytes.size() + 2) / 3) * 4);
+    for (size_t i = 0; i < bytes.size(); i += 3) {
+        const uint32_t b0 = bytes[i];
+        const uint32_t b1 = (i + 1 < bytes.size()) ? bytes[i + 1] : 0;
+        const uint32_t b2 = (i + 2 < bytes.size()) ? bytes[i + 2] : 0;
+        const uint32_t triple = (b0 << 16) | (b1 << 8) | b2;
+        out.push_back(kTable[(triple >> 18) & 0x3f]);
+        out.push_back(kTable[(triple >> 12) & 0x3f]);
+        out.push_back(i + 1 < bytes.size() ? kTable[(triple >> 6) & 0x3f] : '=');
+        out.push_back(i + 2 < bytes.size() ? kTable[triple & 0x3f] : '=');
+    }
+    return out;
+}
+
+uint8_t grayAt(const CameraFrame& frame, int x, int y) {
+    const size_t index = static_cast<size_t>((y * frame.width + x) * frame.channels);
+    if (index >= frame.data.size()) return 0;
+    if (frame.channels == 1) return frame.data[index];
+
+    uint8_t r = 0;
+    uint8_t g = 0;
+    uint8_t b = 0;
+    if (frame.format == PixelFormat::RGB24) {
+        r = frame.data[index];
+        g = index + 1 < frame.data.size() ? frame.data[index + 1] : r;
+        b = index + 2 < frame.data.size() ? frame.data[index + 2] : r;
+    } else {
+        b = frame.data[index];
+        g = index + 1 < frame.data.size() ? frame.data[index + 1] : b;
+        r = index + 2 < frame.data.size() ? frame.data[index + 2] : b;
+    }
+    return static_cast<uint8_t>((static_cast<int>(r) * 30 +
+                                 static_cast<int>(g) * 59 +
+                                 static_cast<int>(b) * 11) / 100);
+}
+
+CameraPreviewImage makePreviewImage(const CameraFrame& frame, int64_t sequence) {
+    CameraPreviewImage preview;
+    if (!frame.valid()) return preview;
+
+    preview.available = true;
+    preview.timestamp_ms = frame.timestamp_ms;
+    preview.sequence = sequence;
+    preview.width = kPreviewWidth;
+    preview.height = kPreviewHeight;
+    preview.pixel_format = "GRAY8";
+    preview.encoding = "base64";
+    preview.source = frame.source;
+
+    std::vector<uint8_t> gray;
+    gray.reserve(static_cast<size_t>(kPreviewWidth * kPreviewHeight));
+    for (int y = 0; y < kPreviewHeight; ++y) {
+        const int src_y = std::min(frame.height - 1, y * frame.height / kPreviewHeight);
+        for (int x = 0; x < kPreviewWidth; ++x) {
+            const int src_x = std::min(frame.width - 1, x * frame.width / kPreviewWidth);
+            gray.push_back(grayAt(frame, src_x, src_y));
+        }
+    }
+    preview.data_base64 = base64Encode(gray);
+    return preview;
 }
 
 std::vector<int> parseCandidates(const char* value) {
@@ -78,6 +149,8 @@ CameraPipeline::~CameraPipeline() = default;
 bool CameraPipeline::init(AppContext& /*ctx*/) {
     captured_frames_ = 0;
     dropped_frames_ = 0;
+    last_preview_ms_ = 0;
+    preview_sequence_ = 0;
     next_open_attempt_ms_ = 0;
     // Camera opens on-demand when session starts
     if (cameraDisabled()) {
@@ -216,6 +289,10 @@ void CameraPipeline::runOnce(AppContext& ctx) {
     if (!readFrame(&frame)) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         return;
+    }
+    if (frame.timestamp_ms - last_preview_ms_ >= kPreviewIntervalMs) {
+        last_preview_ms_ = frame.timestamp_ms;
+        store_.updateCameraPreviewImage(makePreviewImage(frame, ++preview_sequence_));
     }
     if (!output_queue_.push(std::move(frame))) {
         ++dropped_frames_;

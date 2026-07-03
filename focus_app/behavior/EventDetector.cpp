@@ -64,7 +64,8 @@ FocusEvent EventDetector::detect(const SlidingWindow& win, const BehaviorConfig&
         appendReason(event.reason, "phone_signal");
     } else {
         event.phone_signal = false;
-        event.phone_usage_state_raw = static_cast<int>(event.phone_usage_state);
+        event.phone_distraction_level = -1;
+        event.phone_usage_state_raw = -1;
     }
 
     if (event.is_low_confidence) {

@@ -11,6 +11,7 @@ endif()
 
 option(EDGEFOCUS_WITH_OPENCV "Build camera capture and CPU/STAI preprocessing with OpenCV" OFF)
 option(EDGEFOCUS_WITH_STAI_MPU "Build STAI_MPU pose model adapter" OFF)
+option(EDGEFOCUS_WITH_DEMO_HTTP "Build optional HTTP demo console" OFF)
 
 include(FetchContent)
 FetchContent_Declare(sqlite3 URL https://www.sqlite.org/2024/sqlite-amalgamation-3450100.zip DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
@@ -70,6 +71,11 @@ set(APP_SOURCES
 add_executable(focus_app ${APP_SOURCES})
 target_include_directories(focus_app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(focus_app PRIVATE sqlite3_lib nlohmann_json::nlohmann_json)
+
+if(EDGEFOCUS_WITH_DEMO_HTTP)
+    target_sources(focus_app PRIVATE network/DemoHttpServer.cpp)
+    target_compile_definitions(focus_app PRIVATE EDGEFOCUS_WITH_DEMO_HTTP)
+endif()
 
 if(EDGEFOCUS_WITH_OPENCV)
     find_package(OpenCV REQUIRED COMPONENTS core imgproc videoio)

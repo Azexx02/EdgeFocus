@@ -49,6 +49,20 @@ void SystemStateStore::updateFrameQuality(float score, const std::string& reason
     state_.frame_quality.guidance_needed = guidance_needed;
 }
 
+void SystemStateStore::updatePrecheckGuidance(const std::string& distance_hint,
+                                               const std::string& pose_hint,
+                                               bool precheck_ready) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    state_.frame_quality.distance_hint = distance_hint;
+    state_.frame_quality.pose_hint = pose_hint;
+    state_.frame_quality.precheck_ready = precheck_ready;
+}
+
+void SystemStateStore::updateCameraPreviewImage(const CameraPreviewImage& preview) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    state_.camera_preview_image = preview;
+}
+
 void SystemStateStore::updateLastReport(const SessionReport& report) {
     std::lock_guard<std::mutex> lock(mutex_);
     state_.last_report = report;
@@ -62,6 +76,16 @@ void SystemStateStore::updatePreferences(const Preferences& prefs) {
 void SystemStateStore::updateBehaviorContext(const BehaviorContext& context) {
     std::lock_guard<std::mutex> lock(mutex_);
     state_.behavior_context = context;
+}
+
+void SystemStateStore::updateDemoOverride(const DemoOverride& demo_override) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    state_.demo_override = demo_override;
+}
+
+void SystemStateStore::clearDemoOverride() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    state_.demo_override = DemoOverride{};
 }
 
 void SystemStateStore::incrementDistraction() {

@@ -4,6 +4,7 @@
 namespace edgefocus {
 class ScreenController {
 public:
+    static bool isAvailable();
     void flashScreen();
     int flashCount() const { return flash_count_; }
 

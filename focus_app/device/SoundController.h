@@ -16,6 +16,7 @@ public:
 
     /// Ensure a short non-speech WAV reminder tone exists at path.
     static bool ensureReminderToneFile(const std::string& path);
+    static bool isAvailable();
 
     /// Trigger a short reminder sound asynchronously.
     void playReminderSound(float volume);

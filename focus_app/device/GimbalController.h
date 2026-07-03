@@ -9,6 +9,9 @@ struct GimbalSnapshot {
     bool connected = false;
     bool online = false;
     bool safe = false;
+    bool xhome = false;
+    bool yhome = false;
+    bool cal = false;
     int boost = 0;
     int motor = 0;
     int en = 0;
@@ -20,13 +23,25 @@ struct GimbalSnapshot {
     std::string last_error;
 };
 
+struct GimbalCommandResult {
+    bool success = false;
+    bool timeout = false;
+    std::string command;
+    std::string start_response;
+    std::string final_response;
+    std::string error;
+};
+
 class GimbalController {
 public:
     enum class PollState {
         OFFLINE,
+        VER,
         PING,
-        SAFE,
-        STAT
+        STOP,
+        STAT,
+        FAULT,
+        ANGLE
     };
 
     GimbalController();
@@ -35,10 +50,11 @@ public:
     const GimbalSnapshot& status() const { return status_; }
     PollState state() const { return state_; }
 
-    // One-cycle polling function. State machine flow:
-    // OFFLINE -> PING -> SAFE -> STAT -> SAFE -> ...
+    // One-cycle polling function for the frozen V1 startup/query sequence:
+    // VER -> PING -> STOP -> STAT -> FAULT -> ANGLE -> STAT -> ...
     bool pollOnce();
     void shutdown();
+    GimbalCommandResult executeBusinessCommand(const std::string& command, int timeout_ms);
 
     std::string nextCommand() const;
     static std::string commandForState(PollState state);
@@ -62,13 +78,16 @@ private:
     void closeDevice();
     bool isDeviceOpen() const;
     bool writeCommand(const std::string& cmd);
+    bool writeEmergencyStop();
     Response readLine();
+    Response readLineWithTimeout(int timeout_ms);
     bool initializeSerial();
 #else
     bool openDevice() { return false; }
     void closeDevice() {}
     bool isDeviceOpen() const { return false; }
     bool writeCommand(const std::string& cmd) { (void)cmd; return false; }
+    bool writeEmergencyStop() { return false; }
     Response readLine() { return {}; }
 #endif
 

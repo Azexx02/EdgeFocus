@@ -15,11 +15,13 @@
 namespace edgefocus {
 
 class AppContext;
+class GimbalMonitor;
 
 class BleGattServer : public Module {
 public:
     BleGattServer(SystemStateStore& store, SQLiteStore& sqlite_store,
-                  ReminderPolicy& reminder_policy, ModeManager& mode_mgr);
+                  ReminderPolicy& reminder_policy, ModeManager& mode_mgr,
+                  GimbalMonitor* gimbal_monitor = nullptr);
     ~BleGattServer() override;
 
     bool init(AppContext& ctx) override;

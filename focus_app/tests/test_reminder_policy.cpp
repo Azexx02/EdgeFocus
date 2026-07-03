@@ -4,6 +4,7 @@
 #include "device/DeviceManager.h"
 #include <cassert>
 #include <iostream>
+#include <string>
 
 using namespace edgefocus;
 
@@ -57,6 +58,21 @@ void test_use_state_can_escalate_to_level3() {
     auto cmd = policy.processState(FocusState::PHONE_IN_USE, 1000);
     assert(cmd.has_value());
     assert(cmd->level == CommandLevel::LEVEL_3);
+}
+
+void test_playing_state_can_be_low_when_risk_is_low() {
+    SystemStateStore store;
+    makeFocusedSession(store);
+    SQLiteStore sqlite_store;
+    DeviceManager dev_mgr(store);
+    ReminderPolicy policy(store, sqlite_store, dev_mgr);
+    AppContext ctx;
+    policy.init(ctx);
+
+    setContext(store, 3, 20);
+    auto cmd = policy.processState(FocusState::PHONE_IN_PLAYING, 1000);
+    assert(cmd.has_value());
+    assert(cmd->level == CommandLevel::LEVEL_1);
 }
 
 void test_silent_does_not_change_level_for_same_context() {
@@ -166,8 +182,46 @@ void test_risk_and_distraction_context_in_command() {
     assert(cmd->phone_distraction_level == 3);
 }
 
+void test_phone_output_routes_do_not_execute_board_screen_or_sound() {
+    SystemStateStore store;
+    makeFocusedSession(store);
+    SQLiteStore sqlite_store;
+    DeviceManager dev_mgr(store);
+    ReminderPolicy policy(store, sqlite_store, dev_mgr);
+    AppContext ctx;
+    policy.init(ctx);
+
+    auto prefs = store.snapshot().preferences;
+    prefs.normal_channels_mask = kNotificationChannelScreenMask | kNotificationChannelSoundMask;
+    prefs.board_output_route = "phone";
+    prefs.screen_output_route = "phone";
+    prefs.sound_output_route = "phone";
+    prefs.sound_volume = 0.42f;
+    store.updatePreferences(prefs);
+
+    std::string push;
+    store.setPushCallback([&push](const std::string& event_json) {
+        push = event_json;
+    });
+
+    setContext(store, 1);
+    store.updateFocusState(FocusState::LOOKING_AWAY, 1000, "focused");
+
+    policy.runOnce(ctx);
+    dev_mgr.runOnce(ctx);
+
+    assert(dev_mgr.screenFlashCount() == 0);
+    assert(dev_mgr.soundPlayCount() == 0);
+    auto snap = store.snapshot();
+    assert(snap.device.last_attempted_channels_mask == 0);
+    assert(snap.device.last_delivered_channels_mask == 0);
+    assert(push.find("\"phone_actions\":[\"SCREEN\",\"SOUND\"]") != std::string::npos);
+    assert(push.find("\"sound_volume\":0.42") != std::string::npos);
+}
+
 int main() {
     test_playing_state_not_fixed_to_level3();
+    test_playing_state_can_be_low_when_risk_is_low();
     test_use_state_can_escalate_to_level3();
     test_silent_does_not_change_level_for_same_context();
     test_run_once_uses_configured_preference_channels();
@@ -175,6 +229,7 @@ int main() {
     test_looking_away_is_level1();
     test_user_ack_increases_cooldown();
     test_risk_and_distraction_context_in_command();
+    test_phone_output_routes_do_not_execute_board_screen_or_sound();
 
     std::cout << "All reminder policy tests passed!\n";
     return 0;

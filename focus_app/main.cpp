@@ -13,6 +13,9 @@
 #include "storage/SQLiteStore.h"
 #include "storage/ReportGenerator.h"
 #include "network/BleGattServer.h"
+#ifdef EDGEFOCUS_WITH_DEMO_HTTP
+#include "network/DemoHttpServer.h"
+#endif
 #include "ui/UIManager.h"
 
 #include <memory>
@@ -50,6 +53,9 @@ private:
 int main(int argc, char* argv[]) {
     // Parse --log-level if provided
     LogLevel logLevel = LogLevel::INFO;
+#ifdef EDGEFOCUS_WITH_DEMO_HTTP
+    int demo_http_port = 0;
+#endif
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
         if (arg == "--log-level" && i + 1 < argc) {
@@ -59,12 +65,22 @@ int main(int argc, char* argv[]) {
             else if (lv == "warn")  logLevel = LogLevel::WARN;
             else if (lv == "error") logLevel = LogLevel::ERROR;
             ++i;
+#ifdef EDGEFOCUS_WITH_DEMO_HTTP
+        } else if (arg == "--demo-http-port" && i + 1 < argc) {
+            demo_http_port = std::stoi(argv[i + 1]);
+            ++i;
+#endif
         }
     }
 
     Logger::setLevel(logLevel);
     LOGI("Main", "=== EdgeFocus focus_app starting ===");
     LOGI("Main", "Log level: %d", static_cast<int>(logLevel));
+#ifdef EDGEFOCUS_WITH_DEMO_HTTP
+    if (demo_http_port > 0) {
+        LOGW("Main", "Demo HTTP enabled on port %d", demo_http_port);
+    }
+#endif
 
     // Initialize SystemStateStore and SQLiteStore
     SystemStateStore store;
@@ -92,7 +108,9 @@ int main(int argc, char* argv[]) {
     auto device_mgr_ptr = std::make_unique<DeviceManager>(store);
     DeviceManager& device_mgr = *device_mgr_ptr;
     ctx.addModule(std::move(device_mgr_ptr));
-    ctx.addModule(std::make_unique<GimbalMonitor>(store));
+    auto gimbal_monitor_ptr = std::make_unique<GimbalMonitor>(store);
+    GimbalMonitor& gimbal_monitor = *gimbal_monitor_ptr;
+    ctx.addModule(std::move(gimbal_monitor_ptr));
     auto reminder_policy_ptr = std::make_unique<ReminderPolicy>(store, sqlite_store, device_mgr);
     ReminderPolicy& reminder_policy = *reminder_policy_ptr;
     ctx.addModule(std::move(reminder_policy_ptr));
@@ -103,8 +121,16 @@ int main(int argc, char* argv[]) {
 
     // Create BLE GATT Server
     auto ble_server = std::make_unique<BleGattServer>(store, sqlite_store, reminder_policy,
-                                                       reminder_policy.getModeManager());
+                                                       reminder_policy.getModeManager(),
+                                                       &gimbal_monitor);
     ctx.addModule(std::move(ble_server));
+
+#ifdef EDGEFOCUS_WITH_DEMO_HTTP
+    if (demo_http_port > 0) {
+        ctx.addModule(std::make_unique<DemoHttpServer>(store, sqlite_store, device_mgr,
+                                                       gimbal_monitor, demo_http_port));
+    }
+#endif
 
     auto ui_mgr = std::make_unique<UIManager>(store);
     ui_mgr->setReportGenerator(&report_gen);

@@ -3,6 +3,7 @@
 #include <cstring>
 #include <cmath>
 #include <algorithm>
+#include <cctype>
 #include <fstream>
 #include <cstdlib>
 
@@ -133,6 +134,33 @@ static int env_int_fb(const char *name, int fallback) {
     char *end = nullptr;
     long parsed = std::strtol(value, &end, 0);
     return end && *end == '\0' ? (int)parsed : fallback;
+}
+
+static bool env_bool_fb(const char *name, bool fallback = false) {
+    const char *value = std::getenv(name);
+    if (!value || !*value) return fallback;
+    char lower[16] = {0};
+    size_t i = 0;
+    for (; value[i] && i + 1 < sizeof(lower); ++i) {
+        lower[i] = (char)std::tolower((unsigned char)value[i]);
+    }
+    lower[i] = '\0';
+    return strcmp(lower, "1") == 0 || strcmp(lower, "true") == 0 ||
+           strcmp(lower, "yes") == 0 || strcmp(lower, "on") == 0 ||
+           strcmp(lower, "disable") == 0 || strcmp(lower, "disabled") == 0;
+}
+
+static bool env_string_eq_fb(const char *name, const char *expected) {
+    const char *value = std::getenv(name);
+    if (!value || !*value) return false;
+    while (*value && *expected) {
+        if (std::tolower((unsigned char)*value) != std::tolower((unsigned char)*expected)) {
+            return false;
+        }
+        ++value;
+        ++expected;
+    }
+    return *value == '\0' && *expected == '\0';
 }
 
 static void spi_write_all_fb(int fd, const uint8_t *buf, size_t len) {
@@ -405,6 +433,13 @@ static const uint8_t FONT_8X16[][16] = {
 
 bool FrameBuffer::initSpiLcd() {
 #ifdef __linux__
+    if (env_bool_fb("EDGEFOCUS_DISABLE_LCD") ||
+        env_string_eq_fb("EDGEFOCUS_LCD_BACKEND", "offscreen") ||
+        env_string_eq_fb("EDGEFOCUS_LCD_BACKEND", "fbdev")) {
+        LOGW("FrameBuffer", "SPI LCD disabled by environment; using fallback framebuffer/offscreen path");
+        return false;
+    }
+
     int spi_speed = env_int_fb("EDGEFOCUS_LCD_SPI_SPEED", 4000000);
     int madctl = env_int_fb("EDGEFOCUS_LCD_MADCTL", 0x48);
     int invert_bl = env_int_fb("EDGEFOCUS_LCD_INVERT_BL", 0);

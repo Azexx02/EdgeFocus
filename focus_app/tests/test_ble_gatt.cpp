@@ -61,9 +61,15 @@ int main() {
         json resp = parseResponse(server.handleCommand(R"({"cmd":"get_device_status","id":1})"));
         assertSuccess(resp, 1);
         assert(resp["data"].contains("battery_percent"));
+        assert(resp["data"].contains("battery_voltage_mv"));
+        assert(resp["data"].contains("battery_charging"));
+        assert(resp["data"].contains("power_source"));
         assert(resp["data"].contains("system_mode"));
         assert(resp["data"].contains("gimbal_connected"));
         assert(resp["data"].contains("gimbal_online"));
+        assert(resp["data"].contains("board_screen_available"));
+        assert(resp["data"].contains("board_sound_available"));
+        assert(resp["data"].contains("output_capability"));
         std::cout << "  get_device_status: OK\n";
     }
 
@@ -73,6 +79,10 @@ int main() {
         assertSuccess(resp, 2);
         assert(resp["data"].contains("focus_state"));
         assert(resp["data"].contains("session_phase"));
+        assert(resp["data"].contains("reminder"));
+        assert(resp["data"].contains("output_capability"));
+        assert(resp["data"].contains("precheck_guidance"));
+        assert(resp["data"].contains("camera_preview"));
         assert(resp["data"]["session_phase"] == "idle");
         assert(resp["data"].contains("elapsed_ms"));
         assert(resp["data"].contains("active"));
@@ -244,6 +254,11 @@ int main() {
         assert(resp["data"]["normal_channels_mask"] == 7);
         assert(resp["data"]["silent_channels_mask"] == 3);
         assert(resp["data"]["sound_volume"] == 0.7f);
+        assert(resp["data"]["board_output_route"] == "board");
+        assert(resp["data"]["board_output_disabled"] == false);
+        assert(resp["data"]["screen_output_route"] == "board");
+        assert(resp["data"]["sound_output_route"] == "board");
+        assert(resp["data"]["gimbal_enabled"] == true);
         assert(resp["data"]["normal_channels"] == json::array({"SCREEN", "BAND", "SOUND"}));
         assert(resp["data"]["silent_channels"] == json::array({"SCREEN", "BAND"}));
         std::cout << "  get_preferences defaults: OK\n";
@@ -310,6 +325,18 @@ int main() {
         assert(resp["data"]["sound_volume"] == 1.0f);
     }
 
+    // Test 11f: update_preferences stores board/phone output routes.
+    {
+        json resp = parseResponse(server.handleCommand(
+            R"({"cmd":"update_preferences","id":115,"data":{"board_output_route":"phone","gimbal_enabled":false}})"));
+        assertSuccess(resp, 115);
+        assert(resp["data"]["board_output_route"] == "phone");
+        assert(resp["data"]["board_output_disabled"] == true);
+        assert(resp["data"]["screen_output_route"] == "phone");
+        assert(resp["data"]["sound_output_route"] == "phone");
+        assert(resp["data"]["gimbal_enabled"] == false);
+    }
+
     // Test 12: get_preferences
     {
         json resp = parseResponse(server.handleCommand(
@@ -327,6 +354,11 @@ int main() {
         assert(resp["data"].contains("silent_channels_mask"));
         assert(resp["data"].contains("normal_channels"));
         assert(resp["data"].contains("silent_channels"));
+        assert(resp["data"]["board_output_route"] == "phone");
+        assert(resp["data"]["board_output_disabled"] == true);
+        assert(resp["data"]["screen_output_route"] == "phone");
+        assert(resp["data"]["sound_output_route"] == "phone");
+        assert(resp["data"]["gimbal_enabled"] == false);
         std::cout << "  get_preferences: OK\n";
     }
 
@@ -417,6 +449,7 @@ int main() {
         assert(resp["data"].contains("device"));
         assert(resp["data"].contains("reminder"));
         assert(resp["data"].contains("frame_quality"));
+        assert(resp["data"].contains("camera_preview"));
         assert(resp["data"].contains("today"));
         assert(resp["data"]["session"].contains("active"));
         assert(resp["data"]["session"].contains("session_id"));
@@ -427,6 +460,9 @@ int main() {
         assert(resp["data"]["device"]["gimbal"].contains("connected"));
         assert(resp["data"]["device"]["gimbal"].contains("online"));
         assert(resp["data"]["device"]["gimbal"].contains("safe"));
+        assert(resp["data"]["device"]["gimbal"].contains("xhome"));
+        assert(resp["data"]["device"]["gimbal"].contains("yhome"));
+        assert(resp["data"]["device"]["gimbal"].contains("calibrated"));
         assert(resp["data"]["device"]["gimbal"].contains("boost"));
         assert(resp["data"]["device"]["gimbal"].contains("motor"));
         assert(resp["data"]["device"]["gimbal"].contains("en"));
@@ -447,6 +483,9 @@ int main() {
         assert(resp["data"].contains("connected"));
         assert(resp["data"].contains("online"));
         assert(resp["data"].contains("safe"));
+        assert(resp["data"].contains("xhome"));
+        assert(resp["data"].contains("yhome"));
+        assert(resp["data"].contains("calibrated"));
         assert(resp["data"].contains("boost"));
         assert(resp["data"].contains("motor"));
         assert(resp["data"].contains("en"));
@@ -457,6 +496,33 @@ int main() {
         assert(resp["data"].contains("last_seen_ms"));
         assert(resp["data"].contains("last_error"));
         std::cout << "  get_gimbal_status: OK\n";
+    }
+
+    // Test 17c: gimbal nudge actions are exposed through the App control API.
+    {
+        json resp = parseResponse(server.handleCommand(
+            R"({"cmd":"gimbal_control","id":172,"data":{"action":"nudge_left","step_deg":3}})"));
+        assert(resp["status"] == "error");
+        assert(resp["id"] == 172);
+        const auto error = resp["error"].get<std::string>();
+        assert(error.find("unavailable") != std::string::npos ||
+               error.find("disabled") != std::string::npos);
+        std::cout << "  gimbal_control nudge unavailable without monitor: OK\n";
+    }
+
+    // Test 17d: get_camera_preview_image returns the latest low-bandwidth snapshot container.
+    {
+        json resp = parseResponse(server.handleCommand(
+            R"({"cmd":"get_camera_preview_image","id":171})"));
+        assertSuccess(resp, 171);
+        assert(resp["data"].contains("available"));
+        assert(resp["data"].contains("width"));
+        assert(resp["data"].contains("height"));
+        assert(resp["data"].contains("pixel_format"));
+        assert(resp["data"].contains("encoding"));
+        assert(resp["data"].contains("data_base64"));
+        assert(resp["data"].contains("quality"));
+        std::cout << "  get_camera_preview_image: OK\n";
     }
 
     // Test 18: session_feedback

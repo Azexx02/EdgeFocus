@@ -28,9 +28,9 @@ struct FocusEvent {
     bool is_low_confidence = false;
     bool vision_signal = false;
     bool phone_signal = false;
-    int phone_distraction_level = 1; // 1=weak, 2=strong, 3=unclassified/high
+    int phone_distraction_level = -1; // 1=weak, 2=strong, 3=unclassified/high
     PhoneUsageState phone_usage_state = PhoneUsageState::IN_USE;
-    int phone_usage_state_raw = 0;
+    int phone_usage_state_raw = -1;
     int risk_score = 0;
     std::string reason;
 };

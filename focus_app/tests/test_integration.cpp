@@ -46,12 +46,17 @@ int tests_failed = 0;
     } \
 } while(0)
 
-void setBehaviorContext(SystemStateStore& store, int level, int risk = 70) {
+void setBehaviorContext(SystemStateStore& store, int level, int risk = 70, bool phone_signal = true) {
     BehaviorContext ctx;
-    ctx.phone_signal = true;
+    ctx.phone_signal = phone_signal;
     ctx.vision_signal = false;
-    ctx.phone_distraction_level = level;
-    ctx.phone_usage_state = 1;
+    if (phone_signal) {
+        ctx.phone_distraction_level = level;
+        ctx.phone_usage_state = 1;
+    } else {
+        ctx.phone_distraction_level = -1;
+        ctx.phone_usage_state = -1;
+    }
     ctx.risk_score = risk;
     ctx.reason = "integration";
     store.updateBehaviorContext(ctx);
@@ -115,32 +120,40 @@ void test_behavior_to_policy_contract() {
     CHECK(cmd.has_value(), "LOOKING_AWAY → policy generates command");
     CHECK(cmd->level == CommandLevel::LEVEL_1, "LOOKING_AWAY → LEVEL_1");
 
-    setBehaviorContext(store, 2);
+    setBehaviorContext(store, 2, 70);
     // PHONE_IN_USE is a behavior-layer state and maps via behavior context.
     store.updateFocusState(FocusState::PHONE_IN_USE, 5000, "test");
     snap = store.snapshot();
     cmd = policy.processState(snap.focus_state, 12000);
     CHECK(cmd.has_value(), "PHONE_IN_USE → policy generates command");
-    CHECK(cmd->level == CommandLevel::LEVEL_2, "PHONE_IN_USE → LEVEL_2");
+    CHECK(cmd->level == CommandLevel::LEVEL_2, "PHONE_IN_USE can produce LEVEL_2");
 
-    // PHONE_IN_LEARNING → no intervention
-    store.updateFocusState(FocusState::PHONE_IN_LEARNING, 13000, "test");
+    setBehaviorContext(store, 1, 20);
+    // Low-risk PHONE_IN_PLAYING should stay lower than LEVEL_3.
+    store.updateFocusState(FocusState::PHONE_IN_PLAYING, 17000, "test");
     snap = store.snapshot();
-    cmd = policy.processState(snap.focus_state, 20000);
-    CHECK(!cmd.has_value(), "PHONE_IN_LEARNING → no intervention");
+    cmd = policy.processState(snap.focus_state, 22000);
+    CHECK(cmd.has_value(), "PHONE_IN_PLAYING low-risk generates command");
+    CHECK(cmd->level == CommandLevel::LEVEL_1, "PHONE_IN_PLAYING low-risk is LEVEL_1");
 
     setBehaviorContext(store, 3, 95);
-    // PHONE_IN_PLAYING is a behavior-layer state and maps via behavior context.
-    store.updateFocusState(FocusState::PHONE_IN_PLAYING, 21000, "test");
+    // High-risk PHONE_IN_USE can escalate to LEVEL_3.
+    store.updateFocusState(FocusState::PHONE_IN_USE, 25000, "test");
     snap = store.snapshot();
     cmd = policy.processState(snap.focus_state, 28000);
-    CHECK(cmd.has_value(), "PHONE_IN_PLAYING → policy generates command");
-    CHECK(cmd->level == CommandLevel::LEVEL_3, "PHONE_IN_PLAYING → LEVEL_3");
+    CHECK(cmd.has_value(), "PHONE_IN_USE high-risk can escalate");
+    CHECK(cmd->level == CommandLevel::LEVEL_3, "PHONE_IN_USE high-risk can be LEVEL_3");
+
+    // PHONE_IN_LEARNING → no intervention
+    store.updateFocusState(FocusState::PHONE_IN_LEARNING, 33000, "test");
+    snap = store.snapshot();
+    cmd = policy.processState(snap.focus_state, 34000);
+    CHECK(!cmd.has_value(), "PHONE_IN_LEARNING → no intervention");
 
     // SLEEPY_OR_SLUMPED → REST_SUGGESTION
-    store.updateFocusState(FocusState::SLEEPY_OR_SLUMPED, 29000, "test");
+    store.updateFocusState(FocusState::SLEEPY_OR_SLUMPED, 39000, "test");
     snap = store.snapshot();
-    cmd = policy.processState(snap.focus_state, 36000);
+    cmd = policy.processState(snap.focus_state, 40000);
     CHECK(cmd.has_value(), "SLEEPY → policy generates command");
     CHECK(cmd->level == CommandLevel::REST_SUGGESTION, "SLEEPY → REST_SUGGESTION");
 }
@@ -1105,6 +1118,67 @@ void test_phone_signal_updates_focus_state_immediately() {
     CHECK(snap.session.current_phone_distraction_level == 3, "Active phone signal stores phone-reported strength for behavior tuning");
 }
 
+void test_inactive_phone_sync_clears_stale_pressure() {
+    std::cout << "\n[Test 14.1] phone_sync inactive clears stale phone pressure\n";
+
+    SystemStateStore store;
+    SQLiteStore sqlite(":memory:");
+    AppContext ctx;
+    sqlite.init(ctx);
+
+    BoundedQueue<VisionResult> vision_queue(4, false);
+    BehaviorEngine behavior(vision_queue, store, sqlite);
+    behavior.init(ctx);
+
+    DeviceManager dev_mgr(store);
+    ReminderPolicy policy(store, sqlite, dev_mgr);
+    policy.init(ctx);
+
+    auto initial = store.snapshot();
+    SessionInfo s;
+    s.active = true;
+    s.session_id = "inactive_phone_sync_session";
+    s.start_ms = initial.snapshot_ms;
+    s.target_duration_ms = 25 * 60000;
+    s.remaining_ms = s.target_duration_ms;
+    s.calibrating = false;
+    s.calibration_completed = true;
+    store.updateSession(s);
+    store.updateFocusState(FocusState::FOCUSED, initial.snapshot_ms, "test focused");
+
+    PhoneUsageSignal active;
+    active.active = true;
+    active.distraction_level = 2;
+    active.timestamp_ms = initial.snapshot_ms + 1000;
+    active.usage_state = PhoneUsageState::PLAYING;
+    store.setPhoneSignal(active);
+    behavior.runOnce(ctx);
+
+    auto running = store.snapshot();
+    CHECK(running.focus_state == FocusState::PHONE_IN_PLAYING, "Active phone_sync enters phone state");
+    CHECK(running.behavior_context.phone_signal == true, "Active phone_sync sets phone context");
+    CHECK(running.behavior_context.phone_distraction_level == 2, "Active phone_sync stores distraction level");
+
+    PhoneUsageSignal inactive;
+    inactive.active = false;
+    inactive.distraction_level = 2;
+    inactive.timestamp_ms = initial.snapshot_ms + 2000;
+    store.setPhoneSignal(inactive);
+    behavior.runOnce(ctx);
+
+    auto after = store.snapshot();
+    CHECK(after.focus_state == FocusState::FOCUSED, "Inactive phone_sync drives FOCUSED reset");
+    CHECK(after.focus_reason == "phone_sync_inactive", "Inactive phone_sync records explicit reason");
+    CHECK(after.behavior_context.phone_signal == false, "Inactive phone_sync clears phone signal");
+    CHECK(after.behavior_context.phone_distraction_level == -1,
+          "Inactive phone_sync clears phone distraction level");
+    CHECK(after.behavior_context.phone_usage_state == -1, "Inactive phone_sync clears phone usage state");
+    CHECK(after.session.current_phone_distraction_level == 0, "Inactive phone_sync clears current phone level");
+
+    auto cmd = policy.processState(after.focus_state, after.snapshot_ms + 10);
+    CHECK(!cmd.has_value(), "FOCUSED state after inactive phone_sync emits no reminder");
+}
+
 void test_distraction_count_is_episode_based() {
     std::cout << "\n[Test 14.0.5] Distraction count increments on episode entry\n";
 
@@ -1330,6 +1404,7 @@ int main() {
     test_session_controller_end_refreshes_stale_elapsed();
     test_session_controller_precheck_does_not_count_as_focus_time();
     test_phone_signal_updates_focus_state_immediately();
+    test_inactive_phone_sync_clears_stale_pressure();
     test_distraction_count_is_episode_based();
     test_behavior_updates_frame_quality_snapshot();
     test_session_start_clears_stale_phone_signal();

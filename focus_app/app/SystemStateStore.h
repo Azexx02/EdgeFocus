@@ -49,8 +49,8 @@ struct BehaviorContext {
     int         risk_score = 0;
     bool        vision_signal = false;
     bool        phone_signal = false;
-    int         phone_distraction_level = 1;
-    int         phone_usage_state = 0;
+    int         phone_distraction_level = -1;
+    int         phone_usage_state = -1;
     std::string reason;
 };
 
@@ -60,6 +60,9 @@ struct DeviceStatus {
     bool        bracelet_connected = false;
     bool        ble_enabled = false;
     int         battery_percent = -1;
+    int         battery_voltage_mv = -1;
+    bool        battery_charging = false;
+    std::string power_source = "unknown";
     int         band_last_alert_level = 0;
     int         band_last_alert_pattern = 0;
     int         band_write_attempt_count = 0;
@@ -72,16 +75,54 @@ struct DeviceStatus {
     int         gimbal_ix = 0;
     int         gimbal_iy = 0;
     bool        gimbal_safe = false;
+    bool        gimbal_xhome = false;
+    bool        gimbal_yhome = false;
+    bool        gimbal_calibrated = false;
     float       gimbal_angle_x = 0.0f;
     float       gimbal_angle_y = 0.0f;
     int64_t     gimbal_last_seen_ms = 0;
     std::string gimbal_last_error;
+    bool        gimbal_initializing = false;
+    bool        gimbal_auto_initialized = false;
+    std::string gimbal_last_command;
+    std::string gimbal_last_command_status;
+    std::string gimbal_last_command_response;
+    bool        board_screen_available = false;
+    bool        board_sound_available = false;
+    int         last_attempted_channels_mask = 0;
+    int         last_delivered_channels_mask = 0;
 };
 
 struct FrameQualityInfo {
     float       score = 0.0f;
     std::string reason;
     bool        guidance_needed = false;
+    std::string distance_hint;
+    std::string pose_hint;
+    bool        precheck_ready = false;
+};
+
+struct CameraPreviewImage {
+    bool        available = false;
+    int64_t     timestamp_ms = 0;
+    int64_t     sequence = 0;
+    int         width = 0;
+    int         height = 0;
+    std::string pixel_format;
+    std::string encoding;
+    std::string source;
+    std::string data_base64;
+};
+
+struct DemoOverride {
+    bool        focus_override_enabled = false;
+    FocusState  focus_state = FocusState::FOCUSED;
+    int         risk_score = 0;
+    std::string reason;
+    bool        precheck_guidance_override_enabled = false;
+    std::string distance_hint;
+    std::string pose_hint;
+    bool        precheck_ready = false;
 };
 
 struct Preferences {
@@ -98,6 +139,12 @@ struct Preferences {
     // channel option.
     int         normal_channels_mask = 7;
     int         silent_channels_mask = 3;
+    // Unified output route for board screen + board sound. "phone" means the
+    // board display/audio path is unavailable and App must render/play alerts.
+    std::string board_output_route = "board";
+    std::string screen_output_route = "board";
+    std::string sound_output_route = "board";
+    bool        gimbal_enabled = true;
 };
 
 struct SystemSnapshot {
@@ -110,9 +157,11 @@ struct SystemSnapshot {
     ActiveReminder reminder;
     DeviceStatus device;
     FrameQualityInfo frame_quality;
+    CameraPreviewImage camera_preview_image;
     SessionReport last_report;
     Preferences preferences;
     BehaviorContext behavior_context;
+    DemoOverride demo_override;
 
     int64_t snapshot_ms = 0;
 };
@@ -130,9 +179,14 @@ public:
     void clearReminder();
     void updateDeviceStatus(const DeviceStatus& status);
     void updateFrameQuality(float score, const std::string& reason, bool guidance_needed);
+    void updatePrecheckGuidance(const std::string& distance_hint, const std::string& pose_hint,
+                                bool precheck_ready);
+    void updateCameraPreviewImage(const CameraPreviewImage& preview);
     void updateLastReport(const SessionReport& report);
     void updatePreferences(const Preferences& prefs);
     void updateBehaviorContext(const BehaviorContext& context);
+    void updateDemoOverride(const DemoOverride& demo_override);
+    void clearDemoOverride();
 
     void incrementDistraction();
     void incrementReminder();
