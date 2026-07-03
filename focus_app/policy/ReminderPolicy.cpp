@@ -46,10 +46,10 @@ CommandLevel phoneContextLevel(const BehaviorContext& ctx) {
 
 bool isPhoneRoute(const Preferences& prefs, NotificationChannel channel) {
     if (channel == NotificationChannel::SCREEN || channel == NotificationChannel::LIGHT) {
-        return prefs.board_output_route == "phone";
+        return prefs.screen_output_route == "phone";
     }
     if (channel == NotificationChannel::SOUND) {
-        return prefs.board_output_route == "phone";
+        return prefs.sound_output_route == "phone";
     }
     return false;
 }

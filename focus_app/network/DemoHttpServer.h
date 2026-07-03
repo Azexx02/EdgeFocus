@@ -35,7 +35,6 @@ private:
     json forcePrecheckGuidance(const json& data);
     json forcePhoneState(const json& data);
     json triggerReminder(const json& data);
-    json setOutputRoute(const json& data);
     json setDemoCounts(const json& data);
     json gimbalNudge(const json& data);
 

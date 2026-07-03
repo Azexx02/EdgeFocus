@@ -115,9 +115,7 @@ pre{white-space:pre-wrap;background:#111;color:#eee;padding:12px;border-radius:8
 <button onclick="precheck('distance_ok','pose_ok',true)">画面合适</button>
 </section>
 <section>
-<h3>提醒与路由</h3>
-<button onclick="route('board','board')">板端输出</button>
-<button onclick="route('phone','phone')">手机输出</button>
+<h3>提醒</h3>
 <button onclick="cmd('trigger_reminder',{level:1,message:'保持专注'})">提醒 L1</button>
 <button onclick="cmd('trigger_reminder',{level:2,message:'注意回到学习'})">提醒 L2</button>
 <button onclick="cmd('trigger_reminder',{level:3,message:'请放下手机'})">提醒 L3</button>
@@ -144,7 +142,6 @@ async function snapshot(){const r=await fetch('/demo/snapshot');show(await r.jso
 function cmd(c,data={}){post({cmd:c,data})}
 function forceState(s,risk){cmd('force_focus_state',{focus_state:s,risk_score:risk,reason:'demo_console'})}
 function precheck(d,p,ready){cmd('force_precheck_guidance',{distance_hint:d,pose_hint:p,ready})}
-function route(screen,sound){cmd('set_output_route',{board_output_route:screen})}
 function nudge(direction){cmd('gimbal_nudge',{direction,step_deg:3})}
 function counts(){cmd('set_demo_counts',{distraction_count:+d.value,reminder_count:+r.value,phone_distraction_count:+p.value})}
 snapshot()
@@ -283,8 +280,6 @@ DemoHttpServer::json DemoHttpServer::snapshotJson() const {
             {"reminder_count", snap.session.reminder_count},
             {"phone_distraction_count", snap.session.phone_distraction_count},
             {"risk_score", snap.behavior_context.risk_score},
-            {"board_output_route", snap.preferences.board_output_route},
-            {"board_output_disabled", snap.preferences.board_output_route == "phone"},
             {"gimbal_enabled", snap.preferences.gimbal_enabled},
             {"demo_focus_override", snap.demo_override.focus_override_enabled},
             {"demo_precheck_override", snap.demo_override.precheck_guidance_override_enabled},
@@ -308,7 +303,6 @@ DemoHttpServer::json DemoHttpServer::handleCommand(const json& req) {
     if (cmd == "force_precheck_guidance") return forcePrecheckGuidance(data);
     if (cmd == "force_phone_state") return forcePhoneState(data);
     if (cmd == "trigger_reminder") return triggerReminder(data);
-    if (cmd == "set_output_route") return setOutputRoute(data);
     if (cmd == "set_demo_counts") return setDemoCounts(data);
     if (cmd == "gimbal_nudge") return gimbalNudge(data);
     if (cmd == "clear_overrides") {
@@ -358,11 +352,11 @@ DemoHttpServer::json DemoHttpServer::triggerReminder(const json& data) {
     json phone_actions = json::array();
 
     auto maybeIssue = [&](NotificationChannel channel) {
-        if (channel == NotificationChannel::SCREEN && prefs.board_output_route == "phone") {
+        if (channel == NotificationChannel::SCREEN && prefs.screen_output_route == "phone") {
             phone_actions.push_back("SCREEN");
             return;
         }
-        if (channel == NotificationChannel::SOUND && prefs.board_output_route == "phone") {
+        if (channel == NotificationChannel::SOUND && prefs.sound_output_route == "phone") {
             phone_actions.push_back("SOUND");
             return;
         }
@@ -391,43 +385,6 @@ DemoHttpServer::json DemoHttpServer::triggerReminder(const json& data) {
     };
     store_.pushEvent(push.dump());
     return json{{"status", "success"}, {"data", {{"phone_actions", phone_actions}}}};
-}
-
-DemoHttpServer::json DemoHttpServer::setOutputRoute(const json& data) {
-    auto prefs = store_.snapshot().preferences;
-    auto normalize = [](std::string route, std::string fallback) {
-        route = lowerCopy(route);
-        return (route == "board" || route == "phone") ? route : fallback;
-    };
-    std::string route = prefs.board_output_route;
-    if (data.contains("board_output_route")) {
-        route = normalize(data["board_output_route"].get<std::string>(), prefs.board_output_route);
-    } else if (data.contains("output_route")) {
-        route = normalize(data["output_route"].get<std::string>(), prefs.board_output_route);
-    } else if (data.contains("screen_output_route")) {
-        route = normalize(data["screen_output_route"].get<std::string>(), prefs.board_output_route);
-    } else if (data.contains("sound_output_route")) {
-        route = normalize(data["sound_output_route"].get<std::string>(), prefs.board_output_route);
-    }
-    if (data.contains("board_output_disabled")) {
-        route = data["board_output_disabled"].get<bool>() ? "phone" : "board";
-    }
-    prefs.board_output_route = route;
-    prefs.screen_output_route = route;
-    prefs.sound_output_route = route;
-    sqlite_store_.savePreference("board_output_route", route);
-    sqlite_store_.savePreference("screen_output_route", route);
-    sqlite_store_.savePreference("sound_output_route", route);
-    if (data.contains("gimbal_enabled")) {
-        prefs.gimbal_enabled = data["gimbal_enabled"].get<bool>();
-        sqlite_store_.savePreference("gimbal_enabled", prefs.gimbal_enabled ? "1" : "0");
-    }
-    store_.updatePreferences(prefs);
-    return json{{"status", "success"}, {"data", {{"board_output_route", prefs.board_output_route},
-                                                  {"board_output_disabled", prefs.board_output_route == "phone"},
-                                                  {"screen_output_route", prefs.board_output_route},
-                                                  {"sound_output_route", prefs.board_output_route},
-                                                  {"gimbal_enabled", prefs.gimbal_enabled}}}};
 }
 
 DemoHttpServer::json DemoHttpServer::setDemoCounts(const json& data) {

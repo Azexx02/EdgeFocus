@@ -42,12 +42,13 @@
    - 小步默认 3 度，最大不超过 8 度。
 
 4. 提醒输出路由
-   - 在设置页增加一个总开关：
-     - `board_output_route`: `board / phone`
-     - 或布尔开关 `board_output_disabled`
+   - 在设置页增加两个独立路由：
+     - `screen_output_route`: `board / phone`
+     - `sound_output_route`: `board / phone`
    - 当前开发机可默认 `board`。
-   - 自研底板屏幕/声卡不可用时默认 `phone`。
-   - 选择 `phone` 表示板载屏幕和板载声卡整体不可用，App 承接显示提醒和提示音；不要把屏幕、声音拆成两个独立路由设置。
+   - 屏幕不可用时把 `screen_output_route` 设为 `phone`，App 承接视觉提醒。
+   - 声卡不可用时把 `sound_output_route` 设为 `phone`，App 承接提示音。
+   - 这两个字段同时也是主机硬件旁路配置：设为 `phone` 后主机跳过对应板载硬件调用，避免驱动异常卡住主流程。
 
 5. 提醒渠道配置
    - normal 模式可选：屏幕、手环、声音，默认全选。
@@ -58,7 +59,7 @@
 6. 声音音量
    - 设置页增加 `sound_volume`。
    - 范围 0..1，可展示为 0..100%。
-   - 当 `board_output_route=phone` 且 `push_alert.phone_actions` 包含 `SOUND` 时，App 按该音量播放提示音。
+   - 当 `sound_output_route=phone` 且 `push_alert.phone_actions` 包含 `SOUND` 时，App 按该音量播放提示音。
 
 7. 云台禁用
    - 设置页增加 `gimbal_enabled`。

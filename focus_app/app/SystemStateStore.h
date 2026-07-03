@@ -139,9 +139,6 @@ struct Preferences {
     // channel option.
     int         normal_channels_mask = 7;
     int         silent_channels_mask = 3;
-    // Unified output route for board screen + board sound. "phone" means the
-    // board display/audio path is unavailable and App must render/play alerts.
-    std::string board_output_route = "board";
     std::string screen_output_route = "board";
     std::string sound_output_route = "board";
     bool        gimbal_enabled = true;

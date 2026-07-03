@@ -193,7 +193,6 @@ void test_phone_output_routes_do_not_execute_board_screen_or_sound() {
 
     auto prefs = store.snapshot().preferences;
     prefs.normal_channels_mask = kNotificationChannelScreenMask | kNotificationChannelSoundMask;
-    prefs.board_output_route = "phone";
     prefs.screen_output_route = "phone";
     prefs.sound_output_route = "phone";
     prefs.sound_volume = 0.42f;

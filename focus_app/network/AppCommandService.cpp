@@ -51,8 +51,8 @@ json outputCapabilityData(const SystemSnapshot& snap) {
     return {
         {"board_screen_available", snap.device.board_screen_available},
         {"board_sound_available", snap.device.board_sound_available},
-        {"board_output_route", snap.preferences.board_output_route},
-        {"board_output_disabled", snap.preferences.board_output_route == "phone"},
+        {"screen_output_route", snap.preferences.screen_output_route},
+        {"sound_output_route", snap.preferences.sound_output_route},
         {"band_available", snap.device.bracelet_connected},
         {"last_attempted_channels_mask", snap.device.last_attempted_channels_mask},
         {"last_delivered_channels_mask", snap.device.last_delivered_channels_mask},
@@ -237,11 +237,6 @@ std::string normalizeOutputRoute(std::string value, const std::string& fallback)
     return fallback;
 }
 
-void applyBoardOutputRoute(Preferences& prefs, const std::string& route) {
-    prefs.board_output_route = route;
-    prefs.screen_output_route = route;
-    prefs.sound_output_route = route;
-}
 } // namespace
 
 AppCommandService::AppCommandService(SystemStateStore& store, SQLiteStore& sqlite_store,
@@ -286,23 +281,21 @@ AppCommandService::AppCommandService(SystemStateStore& store, SQLiteStore& sqlit
     const auto legacy_sound_route = normalizeOutputRoute(
         sqlite_store_.getPreference("sound_output_route", prefs.sound_output_route),
         prefs.sound_output_route);
-    auto board_route = normalizeOutputRoute(
-        sqlite_store_.getPreference("board_output_route",
-                                    legacy_screen_route == "phone" && legacy_sound_route == "phone"
-                                        ? "phone"
-                                        : prefs.board_output_route),
-        prefs.board_output_route);
-    applyBoardOutputRoute(prefs, board_route);
+    prefs.screen_output_route = legacy_screen_route;
+    prefs.sound_output_route = legacy_sound_route;
     prefs.gimbal_enabled = parseIntOrDefault(
         sqlite_store_.getPreference("gimbal_enabled", prefs.gimbal_enabled ? "1" : "0"),
         prefs.gimbal_enabled ? 1 : 0) != 0;
-    if (const char* route = std::getenv("EDGEFOCUS_BOARD_OUTPUT_ROUTE")) {
-        applyBoardOutputRoute(prefs, normalizeOutputRoute(route, prefs.board_output_route));
-    }
-    if (const char* disabled = std::getenv("EDGEFOCUS_DISABLE_BOARD_OUTPUT")) {
+    if (const char* disabled = std::getenv("EDGEFOCUS_DISABLE_LCD")) {
         const auto value = lowerCopy(disabled);
         if (value == "1" || value == "true" || value == "yes" || value == "on") {
-            applyBoardOutputRoute(prefs, "phone");
+            prefs.screen_output_route = "phone";
+        }
+    }
+    if (const char* disabled = std::getenv("EDGEFOCUS_DISABLE_SOUND")) {
+        const auto value = lowerCopy(disabled);
+        if (value == "1" || value == "true" || value == "yes" || value == "on") {
+            prefs.sound_output_route = "phone";
         }
     }
     if (const char* disabled = std::getenv("EDGEFOCUS_DISABLE_GIMBAL")) {
@@ -601,21 +594,13 @@ std::string AppCommandService::handleUpdatePreferences(const json& data, int req
     } else if (data.contains("silent_channels")) {
         prefs.silent_channels_mask = parseChannelMaskFromNames(data["silent_channels"], false);
     }
-    if (data.contains("board_output_route")) {
-        applyBoardOutputRoute(prefs, normalizeOutputRoute(data["board_output_route"].get<std::string>(),
-                                                          prefs.board_output_route));
-    } else if (data.contains("output_route")) {
-        applyBoardOutputRoute(prefs, normalizeOutputRoute(data["output_route"].get<std::string>(),
-                                                          prefs.board_output_route));
-    } else if (data.contains("screen_output_route")) {
-        applyBoardOutputRoute(prefs, normalizeOutputRoute(data["screen_output_route"].get<std::string>(),
-                                                          prefs.board_output_route));
-    } else if (data.contains("sound_output_route")) {
-        applyBoardOutputRoute(prefs, normalizeOutputRoute(data["sound_output_route"].get<std::string>(),
-                                                          prefs.board_output_route));
+    if (data.contains("screen_output_route")) {
+        prefs.screen_output_route = normalizeOutputRoute(data["screen_output_route"].get<std::string>(),
+                                                         prefs.screen_output_route);
     }
-    if (data.contains("board_output_disabled")) {
-        applyBoardOutputRoute(prefs, data["board_output_disabled"].get<bool>() ? "phone" : "board");
+    if (data.contains("sound_output_route")) {
+        prefs.sound_output_route = normalizeOutputRoute(data["sound_output_route"].get<std::string>(),
+                                                        prefs.sound_output_route);
     }
     if (data.contains("gimbal_enabled")) {
         prefs.gimbal_enabled = data["gimbal_enabled"].get<bool>();
@@ -632,9 +617,8 @@ std::string AppCommandService::handleUpdatePreferences(const json& data, int req
     sqlite_store_.savePreference("reminder_sensitivity", std::to_string(prefs.reminder_sensitivity));
     sqlite_store_.savePreference("normal_channels_mask", std::to_string(prefs.normal_channels_mask));
     sqlite_store_.savePreference("silent_channels_mask", std::to_string(prefs.silent_channels_mask));
-    sqlite_store_.savePreference("board_output_route", prefs.board_output_route);
-    sqlite_store_.savePreference("screen_output_route", prefs.board_output_route);
-    sqlite_store_.savePreference("sound_output_route", prefs.board_output_route);
+    sqlite_store_.savePreference("screen_output_route", prefs.screen_output_route);
+    sqlite_store_.savePreference("sound_output_route", prefs.sound_output_route);
     sqlite_store_.savePreference("gimbal_enabled", prefs.gimbal_enabled ? "1" : "0");
 
     json resp = {
@@ -649,10 +633,8 @@ std::string AppCommandService::handleUpdatePreferences(const json& data, int req
         {"silent_channels_mask", prefs.silent_channels_mask},
         {"normal_channels", notificationMaskToNames(prefs.normal_channels_mask)},
         {"silent_channels", notificationMaskToNames(prefs.silent_channels_mask)},
-        {"board_output_route", prefs.board_output_route},
-        {"board_output_disabled", prefs.board_output_route == "phone"},
-        {"screen_output_route", prefs.board_output_route},
-        {"sound_output_route", prefs.board_output_route},
+        {"screen_output_route", prefs.screen_output_route},
+        {"sound_output_route", prefs.sound_output_route},
         {"gimbal_enabled", prefs.gimbal_enabled}
     };
     return makeResponse(req_id, resp);
@@ -840,10 +822,8 @@ std::string AppCommandService::handleGetPreferences(int req_id) {
         {"silent_channels_mask", snap.preferences.silent_channels_mask},
         {"normal_channels", notificationMaskToNames(snap.preferences.normal_channels_mask)},
         {"silent_channels", notificationMaskToNames(snap.preferences.silent_channels_mask)},
-        {"board_output_route", snap.preferences.board_output_route},
-        {"board_output_disabled", snap.preferences.board_output_route == "phone"},
-        {"screen_output_route", snap.preferences.board_output_route},
-        {"sound_output_route", snap.preferences.board_output_route},
+        {"screen_output_route", snap.preferences.screen_output_route},
+        {"sound_output_route", snap.preferences.sound_output_route},
         {"gimbal_enabled", snap.preferences.gimbal_enabled}
     };
     return makeResponse(req_id, resp);

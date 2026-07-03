@@ -26,9 +26,10 @@ bool DeviceManager::init(AppContext& /*ctx*/) {
     LOGI("DeviceManager", "Init DeviceManager");
     auto snap = store_.snapshot();
     DeviceStatus status = snap.device;
-    const bool board_output_enabled = snap.preferences.board_output_route != "phone";
-    status.board_screen_available = board_output_enabled && ScreenController::isAvailable();
-    status.board_sound_available = board_output_enabled && SoundController::isAvailable();
+    status.board_screen_available = snap.preferences.screen_output_route != "phone" &&
+                                    ScreenController::isAvailable();
+    status.board_sound_available = snap.preferences.sound_output_route != "phone" &&
+                                   SoundController::isAvailable();
     store_.updateDeviceStatus(status);
     return true;
 }
@@ -64,14 +65,15 @@ void DeviceManager::runOnce(AppContext& /*ctx*/) {
         last_status_update = now;
         auto snap = store_.snapshot();
         DeviceStatus status = snap.device;
-        const bool board_output_enabled = snap.preferences.board_output_route != "phone";
         status.bracelet_connected = status.ble_enabled && ble_ctrl_.isConnected();
         status.band_last_alert_level = ble_ctrl_.lastAlertLevel();
         status.band_last_alert_pattern = ble_ctrl_.lastAlertPattern();
         status.band_write_attempt_count = ble_ctrl_.writeAttemptCount();
         status.band_last_write_status = ble_ctrl_.lastWriteStatus();
-        status.board_screen_available = board_output_enabled && ScreenController::isAvailable();
-        status.board_sound_available = board_output_enabled && SoundController::isAvailable();
+        status.board_screen_available = snap.preferences.screen_output_route != "phone" &&
+                                        ScreenController::isAvailable();
+        status.board_sound_available = snap.preferences.sound_output_route != "phone" &&
+                                       SoundController::isAvailable();
         store_.updateDeviceStatus(status);
     }
 
@@ -112,7 +114,7 @@ void DeviceManager::executeAction(const DeviceAction& action) {
         ble_ctrl_.sendAlert(alert_level);
         status.last_delivered_channels_mask |= channel_mask;
     } else if (action.channel == NotificationChannel::SOUND) {
-        if (store_.snapshot().preferences.board_output_route != "phone") {
+        if (store_.snapshot().preferences.sound_output_route != "phone") {
             sound_ctrl_.playReminderSound(store_.snapshot().preferences.sound_volume);
             status.board_sound_available = SoundController::isAvailable();
         } else {
@@ -120,7 +122,7 @@ void DeviceManager::executeAction(const DeviceAction& action) {
         }
         if (status.board_sound_available) status.last_delivered_channels_mask |= channel_mask;
     } else {
-        if (store_.snapshot().preferences.board_output_route != "phone") {
+        if (store_.snapshot().preferences.screen_output_route != "phone") {
             screen_ctrl_.flashScreen();
             status.board_screen_available = ScreenController::isAvailable();
         } else {

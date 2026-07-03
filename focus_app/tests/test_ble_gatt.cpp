@@ -254,8 +254,6 @@ int main() {
         assert(resp["data"]["normal_channels_mask"] == 7);
         assert(resp["data"]["silent_channels_mask"] == 3);
         assert(resp["data"]["sound_volume"] == 0.7f);
-        assert(resp["data"]["board_output_route"] == "board");
-        assert(resp["data"]["board_output_disabled"] == false);
         assert(resp["data"]["screen_output_route"] == "board");
         assert(resp["data"]["sound_output_route"] == "board");
         assert(resp["data"]["gimbal_enabled"] == true);
@@ -325,15 +323,13 @@ int main() {
         assert(resp["data"]["sound_volume"] == 1.0f);
     }
 
-    // Test 11f: update_preferences stores board/phone output routes.
+    // Test 11f: update_preferences stores independent board/phone output routes.
     {
         json resp = parseResponse(server.handleCommand(
-            R"({"cmd":"update_preferences","id":115,"data":{"board_output_route":"phone","gimbal_enabled":false}})"));
+            R"({"cmd":"update_preferences","id":115,"data":{"screen_output_route":"phone","sound_output_route":"board","gimbal_enabled":false}})"));
         assertSuccess(resp, 115);
-        assert(resp["data"]["board_output_route"] == "phone");
-        assert(resp["data"]["board_output_disabled"] == true);
         assert(resp["data"]["screen_output_route"] == "phone");
-        assert(resp["data"]["sound_output_route"] == "phone");
+        assert(resp["data"]["sound_output_route"] == "board");
         assert(resp["data"]["gimbal_enabled"] == false);
     }
 
@@ -354,10 +350,8 @@ int main() {
         assert(resp["data"].contains("silent_channels_mask"));
         assert(resp["data"].contains("normal_channels"));
         assert(resp["data"].contains("silent_channels"));
-        assert(resp["data"]["board_output_route"] == "phone");
-        assert(resp["data"]["board_output_disabled"] == true);
         assert(resp["data"]["screen_output_route"] == "phone");
-        assert(resp["data"]["sound_output_route"] == "phone");
+        assert(resp["data"]["sound_output_route"] == "board");
         assert(resp["data"]["gimbal_enabled"] == false);
         std::cout << "  get_preferences: OK\n";
     }
