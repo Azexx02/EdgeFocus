@@ -140,7 +140,8 @@ json gimbalStatusData(const SystemSnapshot& snap) {
 
 bool gimbalPrecheckAvailable(const SystemSnapshot& snap, const GimbalMonitor* gimbal_monitor) {
     if (!gimbal_monitor) return false;
-    return snap.preferences.gimbal_enabled;
+    if (!snap.preferences.gimbal_enabled) return false;
+    return snap.device.gimbal_online && snap.device.gimbal_safe;
 }
 
 bool isGimbalMotionAction(const std::string& action) {
