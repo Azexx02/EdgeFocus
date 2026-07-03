@@ -56,18 +56,22 @@
    - 普通用户主流程优先使用 `nudge_* / move_xy / set_xy / stop`；`ver/ping/stat/fault/angle` 如保留，应放入调试/诊断入口。
 
 4. 提醒输出路由
-   - 在设置页增加两个独立路由：
+   - 需要适配两个独立路由：
      - `screen_output_route`: `board / phone`
      - `sound_output_route`: `board / phone`
    - 当前开发机可默认 `board`。
-   - 屏幕不可用时把 `screen_output_route` 设为 `phone`，App 承接视觉提醒。
-   - 声卡不可用时把 `sound_output_route` 设为 `phone`，App 承接提示音。
-   - 这两个字段同时也是主机硬件旁路配置：设为 `phone` 后主机跳过对应板载硬件调用，避免驱动异常卡住主流程。
+   - 屏幕不可用时把 `screen_output_route` 设为 `phone`，App 承接主展示、预检画面、报告展示和屏幕类提醒。
+   - 声卡不可用时把 `sound_output_route` 设为 `phone`，App 承接提示音播放。
+   - 这两个字段是主机硬件旁路配置：设为 `phone` 后主机跳过对应板载硬件调用，避免驱动异常卡住主流程。
+   - 它们不是普通用户提醒偏好；普通用户设置页不要暴露成随手切换项。
 
 5. 提醒渠道配置
    - normal 模式可选：屏幕、手环、声音，默认全选。
    - silent 模式可选：屏幕、手环，默认全选。
    - silent 不提供声音选项，或即使展示也要解释为不可用。
+   - App 调 `update_preferences` 时可传 `normal_channels` / `silent_channels` 字符串数组；不建议普通 UI 直接传 mask。
+   - `normal_channels_mask` / `silent_channels_mask` 是兼容字段；如果和数组同时传，主机优先使用 mask。
+   - 未传字段保持主机原配置，不要在局部设置更新时把其他配置重置成 App 本地默认。
    - normal/silent 只筛渠道，不改变提醒等级。
 
 6. 声音音量
@@ -103,6 +107,7 @@
    - 设置页增加默认专注时间。
    - App 首页刚启动或会话结束后使用主机 `default_focus_duration_min`。
    - 首页临时调节只影响本次 start 的 `target_duration_min`。
+   - App 不要把首页临时调节写入 `update_preferences.default_focus_duration_min`，除非用户明确在设置页修改默认时长。
 
 2. 中文化
    - 会话状态、提醒、云台控制、历史报告、设置页都需要中文化。
