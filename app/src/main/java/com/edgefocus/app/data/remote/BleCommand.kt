@@ -3,9 +3,22 @@ package com.edgefocus.app.data.remote
 data class PhoneUsage(
     val isInUse: Boolean,
     val appCategory: String? = null,
-    val distractionLevel: Int = 3,
+    val usageState: String? = appCategory,
+    val distractionLevel: Int = 0,
     val appName: String? = null,
     val durationSec: Int? = null
+)
+
+data class LocalSessionUpload(
+    val sessionId: String,
+    val startTimeMs: Long,
+    val endTimeMs: Long,
+    val totalDurationSec: Int,
+    val focusDurationSec: Int,
+    val distractionCount: Int,
+    val reminderCount: Int,
+    val phoneDistractionCount: Int,
+    val source: String = "app_local"
 )
 
 interface BleCommand {
@@ -31,5 +44,6 @@ interface BleCommand {
     suspend fun sessionFeedback(sessionId: String, feedback: String): Result<ByteArray>
     suspend fun reminderAck(alertId: String): Result<ByteArray>
     suspend fun phoneSync(usage: PhoneUsage): Result<ByteArray>
+    suspend fun uploadLocalSession(session: LocalSessionUpload): Result<ByteArray>
     suspend fun getConsoleData(): Result<ByteArray>
 }

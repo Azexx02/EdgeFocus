@@ -73,6 +73,7 @@ class BleManager @Inject constructor(
     private var pendingWriteCallback: ((Boolean) -> Unit)? = null
     private val nextRequestId = AtomicInteger(1)
     private val pendingResponseCallbacks = mutableMapOf<Int, (Result<ByteArray>) -> Unit>()
+    private val chunkAssembler = BleChunkAssembler()
 
     private val _connectionState = MutableStateFlow(ConnectionState.DISCONNECTED)
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
@@ -113,7 +114,7 @@ class BleManager @Inject constructor(
         simulateBoardInSession = prefs.getBoolean("simulate_board_in_session", false)
         simSessionActive = simulateBoardInSession
         simDurationMs = prefs.getInt("simulate_duration", 25) * 60 * 1000L
-        targetMacAddress = prefs.getString("edge_focus_mac", "") ?: ""
+        targetMacAddress = ""
     }
 
     fun setSimulatedConnected(value: Boolean) {
@@ -264,6 +265,7 @@ class BleManager @Inject constructor(
                         it(Result.failure(Exception("BLE disconnected")))
                     }
                     pendingResponseCallbacks.clear()
+                    chunkAssembler.clear()
                 }
             }
         }
@@ -408,6 +410,7 @@ class BleManager @Inject constructor(
                 it(Result.failure(Exception("BLE reconnecting")))
             }
             pendingResponseCallbacks.clear()
+            chunkAssembler.clear()
             gatt
         }
         previousGatt?.let { gatt ->
@@ -520,6 +523,7 @@ class BleManager @Inject constructor(
                 it(Result.failure(Exception(message)))
             }
             pendingResponseCallbacks.clear()
+            chunkAssembler.clear()
         }
     }
 
@@ -537,6 +541,7 @@ class BleManager @Inject constructor(
                 it(Result.failure(Exception("BLE disconnected")))
             }
             pendingResponseCallbacks.clear()
+            chunkAssembler.clear()
         }
         _connectionState.value = ConnectionState.DISCONNECTED
     }
@@ -544,7 +549,7 @@ class BleManager @Inject constructor(
     fun isConnected(): Boolean {
         if (simulatedConnected) return true
         if (_connectionState.value != ConnectionState.CONNECTED) return false
-        if (targetMacAddress.isEmpty()) return false
+        if (targetMacAddress.isEmpty()) return bluetoothGatt != null
         return bluetoothGatt?.device?.address == targetMacAddress
     }
 
@@ -923,18 +928,14 @@ class BleManager @Inject constructor(
 
     @SuppressLint("MissingPermission")
     override suspend fun phoneSync(usage: PhoneUsage): Result<ByteArray> {
-        val data = org.json.JSONObject().apply {
-            put("is_in_use", usage.isInUse)
-            put("app_category", usage.appCategory ?: "other")
-            put("distraction_level", usage.distractionLevel)
-            put("app_name", usage.appName ?: "")
-            usage.durationSec?.let { put("duration_sec", it) }
-        }
+        val root = BoardJsonParser.buildPhoneSync(usage)
 
-        val root = org.json.JSONObject().apply {
-            put("cmd", "phone_sync")
-            put("data", data)
-        }
+        return sendDataAndAwait(root.toString().toByteArray(Charsets.UTF_8))
+    }
+
+    @SuppressLint("MissingPermission")
+    override suspend fun uploadLocalSession(session: LocalSessionUpload): Result<ByteArray> {
+        val root = BoardJsonParser.buildUploadLocalSession(session)
 
         return sendDataAndAwait(root.toString().toByteArray(Charsets.UTF_8))
     }
@@ -953,6 +954,15 @@ class BleManager @Inject constructor(
 
         try {
             val json = org.json.JSONObject(jsonStr)
+            val assembled = chunkAssembler.accept(json)
+            if (assembled != null) {
+                logBle("RECV_ASSEMBLED", assembled.payload)
+                handleNotification(assembled.payload.toByteArray(Charsets.UTF_8))
+                return
+            }
+            if (json.optString("status") == "chunk" || json.optString("cmd") == "push_chunk") {
+                return
+            }
             if (json.has("status")) {
                 val responseId = json.optInt("id", -1)
                 if (responseId >= 0) {
@@ -979,26 +989,24 @@ class BleManager @Inject constructor(
                 cmd == "push_state" && eventData != null -> {
                     val snapshot = BoardJsonParser.parseSessionState(eventData)
                     pushEventHandlers.forEach { it.onPushStateSnapshot(snapshot) }
-                    val stateInt = eventData.optInt("focus_state", 0)
-                    val state = when (stateInt) {
-                        6 -> com.edgefocus.app.domain.model.TimerState.PAUSED
-                        in 0..5, 7, 8, 9 -> com.edgefocus.app.domain.model.TimerState.RUNNING
-                        else -> com.edgefocus.app.domain.model.TimerState.IDLE
+                    if (!eventData.has("session_phase")) {
+                        val stateInt = eventData.optInt("focus_state", 0)
+                        val state = when (stateInt) {
+                            6 -> com.edgefocus.app.domain.model.TimerState.PAUSED
+                            7 -> com.edgefocus.app.domain.model.TimerState.PRECHECK
+                            in 0..5, 8, 9 -> com.edgefocus.app.domain.model.TimerState.RUNNING
+                            else -> com.edgefocus.app.domain.model.TimerState.IDLE
+                        }
+                        val focusState = FocusState(state = state)
+                        pushEventHandlers.forEach { it.onPushState(focusState) }
                     }
-                    val focusState = FocusState(state = state)
-                    pushEventHandlers.forEach { it.onPushState(focusState) }
                 }
                 cmd == "push_session_end" && eventData != null -> {
                     val summary = eventData.toString()
                     pushEventHandlers.forEach { it.onPushSessionEnd(summary) }
                 }
                 cmd == "push_timer_complete" && eventData != null -> {
-                    val timerComplete = TimerComplete(
-                        elapsedMs = eventData.optLong("elapsed_ms", 0),
-                        targetDurationMs = eventData.optLong("target_duration_ms", 0),
-                        distractionCount = eventData.optInt("distraction_count", 0),
-                        reminderCount = eventData.optInt("reminder_count", 0)
-                    )
+                    val timerComplete = BoardJsonParser.parseTimerComplete(eventData)
                     pushEventHandlers.forEach { it.onPushTimerComplete(timerComplete) }
                 }
                 cmd == "push_alert" && eventData != null -> {

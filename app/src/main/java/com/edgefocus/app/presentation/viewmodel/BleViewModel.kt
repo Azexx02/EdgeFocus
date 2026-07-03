@@ -12,6 +12,7 @@ import com.edgefocus.app.data.remote.PushEventHandler
 import com.edgefocus.app.data.remote.TimerComplete
 import com.edgefocus.app.domain.model.DeviceStatus
 import com.edgefocus.app.domain.model.FocusState
+import com.edgefocus.app.domain.repository.ISettingsRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -25,7 +26,8 @@ import javax.inject.Inject
 @HiltViewModel
 class BleViewModel @Inject constructor(
     application: Application,
-    private val bleManager: BleManager
+    private val bleManager: BleManager,
+    private val settingsRepository: ISettingsRepository
 ) : AndroidViewModel(application) {
 
     companion object {
@@ -73,6 +75,23 @@ class BleViewModel @Inject constructor(
         }
 
         // 设置推送事件处理器
+        viewModelScope.launch {
+            val settings = settingsRepository.getSettingsOnce()
+            val decision = BleMacAddressPolicy.decide(
+                roomMac = settings?.edgeFocusMacAddress.orEmpty(),
+                legacyMac = prefs.getString("edge_focus_mac", "").orEmpty()
+            )
+            if (decision.shouldMigrateLegacy) {
+                settingsRepository.updateSettings(
+                    (settings ?: com.edgefocus.app.data.local.entity.Settings())
+                        .copy(edgeFocusMacAddress = decision.preferredMac)
+                )
+            }
+            if (decision.preferredMac.isNotBlank()) {
+                bleManager.setTargetMac(decision.preferredMac)
+            }
+        }
+
         bleManager.setPushEventHandler(pushEventHandler)
     }
 
@@ -129,8 +148,12 @@ class BleViewModel @Inject constructor(
     }
 
     fun saveMacAddress(mac: String) {
-        prefs.edit().putString("edge_focus_mac", mac).apply()
         bleManager.setTargetMac(mac)
+        viewModelScope.launch {
+            val settings = settingsRepository.getSettingsOnce()
+                ?: com.edgefocus.app.data.local.entity.Settings()
+            settingsRepository.updateSettings(settings.copy(edgeFocusMacAddress = mac))
+        }
     }
 
     suspend fun sendSessionCommand(action: String, targetDurationMin: Int? = null): Boolean {

@@ -16,6 +16,30 @@ enum class BoardSessionPhase(val wireValue: String) {
     }
 }
 
+enum class NotificationMode(val wireValue: String) {
+    NORMAL("normal"),
+    SILENT("silent");
+
+    companion object {
+        fun fromWire(value: String?): NotificationMode? {
+            val normalized = value?.trim()?.lowercase()?.takeIf { it.isNotBlank() } ?: return null
+            return entries.firstOrNull { it.wireValue == normalized }
+        }
+    }
+}
+
+enum class PowerProfile(val wireValue: String) {
+    HOME("home"),
+    GO("go");
+
+    companion object {
+        fun fromWire(value: String?): PowerProfile? {
+            val normalized = value?.trim()?.lowercase()?.takeIf { it.isNotBlank() } ?: return null
+            return entries.firstOrNull { it.wireValue == normalized }
+        }
+    }
+}
+
 data class BoardSessionState(
     val success: Boolean = true,
     val alreadyActive: Boolean = false,
@@ -25,19 +49,29 @@ data class BoardSessionState(
     val focusState: Int = 0,
     val elapsedMs: Long = 0L,
     val remainingMs: Long = 0L,
+    val hasRemainingMs: Boolean = false,
     val targetDurationMs: Long = 0L,
+    val hasTargetDurationMs: Boolean = false,
     val distractionCount: Int = 0,
     val reminderCount: Int = 0,
     val phoneDistractionCount: Int = 0,
     val calibrationCompleted: Boolean = false,
     val sessionPhase: BoardSessionPhase = BoardSessionPhase.IDLE,
+    val sessionStartSource: String? = null,
     val precheck: BoardPrecheck? = null,
+    val precheckControl: PrecheckControl? = null,
     val outputCapability: OutputCapability? = null,
     val reminder: String? = null,
     val precheckGuidance: String? = null,
     val cameraPreview: CameraPreviewImage? = null,
     val focusReason: String? = null,
     val behaviorContext: String? = null
+)
+
+data class PrecheckControl(
+    val owner: String = "board",
+    val appCanSkipPrecheck: Boolean = false,
+    val boardCanContinue: Boolean = false
 )
 
 data class BoardPrecheck(
@@ -111,6 +145,8 @@ data class PushAlert(
 
 data class BoardPreferences(
     val systemMode: Int = 0,
+    val notificationMode: NotificationMode = NotificationMode.NORMAL,
+    val powerProfile: PowerProfile = PowerProfile.GO,
     val awayTimeoutMin: Int = 15,
     val defaultFocusDurationMin: Int = 25,
     val vibrationStrength: Float = 0.5f,
@@ -178,6 +214,40 @@ object BoardJsonParser {
         }
     }
 
+    fun buildPhoneSync(usage: PhoneUsage): JSONObject {
+        val data = JSONObject().apply {
+            put("is_in_use", usage.isInUse)
+            val category = usage.appCategory ?: usage.usageState ?: "other"
+            put("app_category", category)
+            put("usage_state", usage.usageState ?: category)
+            put("distraction_level", usage.distractionLevel.coerceIn(0, 3))
+            put("app_name", usage.appName ?: "")
+            usage.durationSec?.let { put("duration_sec", it) }
+        }
+        return JSONObject().apply {
+            put("cmd", "phone_sync")
+            put("data", data)
+        }
+    }
+
+    fun buildUploadLocalSession(session: LocalSessionUpload): JSONObject {
+        val data = JSONObject().apply {
+            put("session_id", session.sessionId)
+            put("start_time_ms", session.startTimeMs)
+            put("end_time_ms", session.endTimeMs)
+            put("total_duration", session.totalDurationSec)
+            put("focus_duration", session.focusDurationSec)
+            put("distraction_count", session.distractionCount)
+            put("reminder_count", session.reminderCount)
+            put("phone_distraction_count", session.phoneDistractionCount)
+            put("source", session.source)
+        }
+        return JSONObject().apply {
+            put("cmd", "upload_local_session")
+            put("data", data)
+        }
+    }
+
     fun parseSessionState(jsonString: String): BoardSessionState {
         val root = JSONObject(jsonString)
         val data = root.optJSONObject("data") ?: JSONObject()
@@ -185,9 +255,9 @@ object BoardJsonParser {
     }
 
     fun parseSessionState(data: JSONObject): BoardSessionState {
-        val phase = BoardSessionPhase.fromWire(
-            data.optString("session_phase").takeIf { it.isNotBlank() }
-        )
+        val hasRemainingMs = data.has("remaining_ms") && !data.isNull("remaining_ms")
+        val hasTargetDurationMs = data.has("target_duration_ms") && !data.isNull("target_duration_ms")
+        val phase = BoardSessionPhase.fromWire(data.optString("session_phase").takeIf { it.isNotBlank() })
         return BoardSessionState(
             success = data.optBoolean("success", true),
             alreadyActive = data.optBoolean("already_active", false),
@@ -197,13 +267,17 @@ object BoardJsonParser {
             focusState = data.optInt("focus_state", 0),
             elapsedMs = data.optLong("elapsed_ms", 0L),
             remainingMs = data.optLong("remaining_ms", 0L),
+            hasRemainingMs = hasRemainingMs,
             targetDurationMs = data.optLong("target_duration_ms", 0L),
+            hasTargetDurationMs = hasTargetDurationMs,
             distractionCount = data.optInt("distraction_count", 0),
             reminderCount = data.optInt("reminder_count", 0),
             phoneDistractionCount = data.optInt("phone_distraction_count", 0),
             calibrationCompleted = data.optBoolean("calibration_completed", false),
             sessionPhase = phase,
+            sessionStartSource = data.optJsonString("session_start_source"),
             precheck = parsePrecheck(data.optJSONObject("precheck")),
+            precheckControl = parsePrecheckControl(data.optJSONObject("precheck_control")),
             outputCapability = parseOutputCapability(data.optJSONObject("output_capability")),
             reminder = data.optJsonString("reminder"),
             precheckGuidance = data.optJsonString("precheck_guidance")
@@ -257,6 +331,22 @@ object BoardJsonParser {
         )
     }
 
+    fun parseTimerComplete(data: JSONObject): TimerComplete {
+        return TimerComplete(
+            sessionId = data.optJsonString("session_id"),
+            startTimeMs = data.optLong("start_time_ms", 0L),
+            endTimeMs = data.optLong("end_time_ms", 0L),
+            totalDurationSec = data.optInt("total_duration", 0),
+            focusDurationSec = data.optInt("focus_duration", 0),
+            elapsedMs = data.optLong("elapsed_ms", 0L),
+            targetDurationMs = data.optLong("target_duration_ms", 0L),
+            distractionCount = data.optInt("distraction_count", 0),
+            reminderCount = data.optInt("reminder_count", 0),
+            phoneDistractionCount = data.optInt("phone_distraction_count", 0),
+            endReason = data.optJsonString("end_reason")
+        )
+    }
+
     fun parseChannelNames(array: JSONArray?): Set<String> {
         if (array == null) return emptySet()
         return buildSet {
@@ -271,8 +361,21 @@ object BoardJsonParser {
     }
 
     fun parsePreferences(data: JSONObject, defaults: BoardPreferences = BoardPreferences()): BoardPreferences {
+        val systemMode = data.optInt("system_mode", defaults.systemMode)
+        val legacyNotificationMode = when (systemMode) {
+            1 -> NotificationMode.SILENT
+            else -> NotificationMode.NORMAL
+        }
+        val legacyPowerProfile = when (systemMode) {
+            2 -> PowerProfile.HOME
+            else -> PowerProfile.GO
+        }
         return BoardPreferences(
-            systemMode = data.optInt("system_mode", defaults.systemMode),
+            systemMode = systemMode,
+            notificationMode = NotificationMode.fromWire(data.optJsonString("notification_mode"))
+                ?: legacyNotificationMode,
+            powerProfile = PowerProfile.fromWire(data.optJsonString("power_profile"))
+                ?: legacyPowerProfile,
             awayTimeoutMin = data.optInt("away_timeout_min", defaults.awayTimeoutMin),
             defaultFocusDurationMin = data.optInt(
                 "default_focus_duration_min",
@@ -314,6 +417,15 @@ object BoardJsonParser {
                     angleY = it.optDoubleOrNull("angle_y")
                 )
             }
+        )
+    }
+
+    private fun parsePrecheckControl(json: JSONObject?): PrecheckControl? {
+        if (json == null) return null
+        return PrecheckControl(
+            owner = json.optString("owner", "board"),
+            appCanSkipPrecheck = json.optBoolean("app_can_skip_precheck", false),
+            boardCanContinue = json.optBoolean("board_can_continue", false)
         )
     }
 

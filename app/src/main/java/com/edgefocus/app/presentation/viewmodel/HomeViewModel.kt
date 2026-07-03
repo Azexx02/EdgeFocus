@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.edgefocus.app.data.SessionMode
 import com.edgefocus.app.data.TimerStateHolder
 import com.edgefocus.app.data.local.entity.Session
+import com.edgefocus.app.data.remote.LocalSessionUpload
 import com.edgefocus.app.domain.model.SessionType
 import com.edgefocus.app.domain.model.TimerState
 import com.edgefocus.app.domain.repository.ISessionRepository
@@ -121,12 +122,8 @@ class HomeViewModel @Inject constructor(
                 }
 
                 if (prevTimerState != TimerState.FINISHED && sharedState.timerState == TimerState.FINISHED) {
-                    val elapsedSeconds = ((sharedState.totalTime - sharedState.timeRemaining) / 1000).toInt()
                     handleSessionFinished()
                     stopAppMonitor()
-                    if (sharedState.sessionMode == SessionMode.LOCAL && sharedState.isBoardConnected) {
-                        syncLocalSessionToBoard(elapsedSeconds)
-                    }
                 }
                 prevTimerState = sharedState.timerState
             }
@@ -162,16 +159,12 @@ class HomeViewModel @Inject constructor(
      * 根据设置自动选择模式启动
      */
     fun startTimer(useBoard: Boolean) {
-        val currentState = _uiState.value.timerState
-
-        if (currentState == TimerState.IDLE || currentState == TimerState.FINISHED) {
-            if (useBoard) {
-                startEdgeFocusSession()
-            } else {
-                startLocalSession()
-            }
-        } else if (currentState == TimerState.PAUSED) {
-            timerStateHolder.resumeSession()
+        when (HomeStartActionPolicy.decide(_uiState.value.timerState, useBoard)) {
+            HomeStartAction.START_EDGEFOCUS -> startEdgeFocusSession()
+            HomeStartAction.START_LOCAL -> startLocalSession()
+            HomeStartAction.SKIP_PRECHECK -> timerStateHolder.skipPrecheck()
+            HomeStartAction.RESUME -> timerStateHolder.resumeSession()
+            HomeStartAction.NONE -> Unit
         }
     }
 
@@ -191,12 +184,6 @@ class HomeViewModel @Inject constructor(
             stopAppMonitor()
         } else if (!isLocalMode) {
             stopAppMonitor()
-        }
-
-        // Local mode: sync finished record to board when a board is connected.
-        if (isLocalMode && timerStateHolder.isBoardConnected()) {
-            val elapsedSeconds = ((_uiState.value.totalTime - _uiState.value.timeRemaining) / 1000).toInt()
-            syncLocalSessionToBoard(elapsedSeconds)
         }
 
         timerStateHolder.stopSession()
@@ -222,26 +209,32 @@ class HomeViewModel @Inject constructor(
             } else {
                 elapsedSeconds
             }
+            val startTime = if (sessionStartTime > 0) sessionStartTime else System.currentTimeMillis()
+            val endTime = System.currentTimeMillis()
+            val session = Session(
+                id = sessionId,
+                startTime = startTime,
+                endTime = endTime,
+                duration = elapsedSeconds,
+                focusDuration = focusSeconds,
+                distractionCount = if (isEdgeFocus) timerStateHolder.getBoardSessionDistractionCount() else 0,
+                reminderCount = if (isEdgeFocus) timerStateHolder.getBoardSessionReminderCount() else 0,
+                phoneDistractionCount = if (isEdgeFocus) {
+                    timerStateHolder.getBoardSessionPhoneDistractionCount()
+                } else {
+                    ui.phoneDistractionCount
+                },
+                feedback = "just_right",
+                boardSessionId = if (isEdgeFocus) sessionId else null,
+                source = if (isEdgeFocus) "EDGEFOCUS" else "LOCAL",
+                synced = isEdgeFocus && hasBoardReport
+            )
+            val shouldUploadLocalSession = !isEdgeFocus && ui.isBoardConnected
             viewModelScope.launch {
-                val session = Session(
-                    id = sessionId,
-                    startTime = if (sessionStartTime > 0) sessionStartTime else System.currentTimeMillis(),
-                    endTime = System.currentTimeMillis(),
-                    duration = elapsedSeconds,
-                    focusDuration = focusSeconds,
-                    distractionCount = if (isEdgeFocus) timerStateHolder.getBoardSessionDistractionCount() else 0,
-                    reminderCount = if (isEdgeFocus) timerStateHolder.getBoardSessionReminderCount() else 0,
-                    phoneDistractionCount = if (isEdgeFocus) {
-                        timerStateHolder.getBoardSessionPhoneDistractionCount()
-                    } else {
-                        ui.phoneDistractionCount
-                    },
-                    feedback = "just_right",
-                    boardSessionId = if (isEdgeFocus) sessionId else null,
-                    source = if (isEdgeFocus) "EDGEFOCUS" else "LOCAL",
-                    synced = isEdgeFocus && hasBoardReport
-                )
                 sessionRepository.insertSession(session)
+                if (shouldUploadLocalSession) {
+                    timerStateHolder.syncSessionToBoard(session.toLocalSessionUpload())
+                }
             }
 
             hasSavedCurrentSession = true
@@ -273,10 +266,16 @@ class HomeViewModel @Inject constructor(
         }
     }
 
-    private fun syncLocalSessionToBoard(elapsedSeconds: Int) {
-        viewModelScope.launch {
-            timerStateHolder.syncSessionToBoard(elapsedSeconds.coerceAtLeast(1))
-        }
-    }
+    private fun Session.toLocalSessionUpload(): LocalSessionUpload =
+        LocalSessionUpload(
+            sessionId = id,
+            startTimeMs = startTime,
+            endTimeMs = endTime ?: System.currentTimeMillis(),
+            totalDurationSec = duration.coerceAtLeast(0),
+            focusDurationSec = focusDuration.coerceAtLeast(0),
+            distractionCount = distractionCount,
+            reminderCount = reminderCount,
+            phoneDistractionCount = phoneDistractionCount
+        )
 
 }

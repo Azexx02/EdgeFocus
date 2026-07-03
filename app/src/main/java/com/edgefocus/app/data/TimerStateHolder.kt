@@ -11,6 +11,7 @@ import com.edgefocus.app.data.remote.BleManager
 import com.edgefocus.app.data.remote.CameraPreviewImage
 import com.edgefocus.app.data.remote.ConnectionState
 import com.edgefocus.app.data.remote.GimbalStatus
+import com.edgefocus.app.data.remote.LocalSessionUpload
 import com.edgefocus.app.data.remote.OutputCapability
 import com.edgefocus.app.data.remote.PushAlert
 import com.edgefocus.app.data.remote.PushEventHandler
@@ -182,7 +183,7 @@ class TimerStateHolder @Inject constructor(
             override fun onPushStateSnapshot(state: BoardSessionState) {
                 if (_state.value.sessionMode != SessionMode.EDGEFOCUS) return
                 if (state.sessionPhase != BoardSessionPhase.IDLE ||
-                    state.remainingMs > 0L ||
+                    state.hasRemainingMs ||
                     state.precheck != null
                 ) {
                     applyBoardSessionState(state)
@@ -211,12 +212,17 @@ class TimerStateHolder @Inject constructor(
                         completedSessions = completedSessions,
                         isSyncingWithBoard = false,
                         timeRemaining = 0L,
-                        boardTotalDuration = (timerComplete.targetDurationMs / 1000).toInt(),
-                        boardFocusDuration = (timerComplete.elapsedMs / 1000).toInt(),
+                        boardTotalDuration = timerComplete.totalDurationSec.takeIf { value -> value > 0 }
+                            ?: (timerComplete.targetDurationMs / 1000).toInt(),
+                        boardFocusDuration = timerComplete.focusDurationSec.takeIf { value -> value > 0 }
+                            ?: (timerComplete.elapsedMs / 1000).toInt(),
                         distractionCount = timerComplete.distractionCount,
                         reminderCount = timerComplete.reminderCount,
+                        phoneDistractionCount = timerComplete.phoneDistractionCount,
+                        sessionId = timerComplete.sessionId ?: it.sessionId,
                         boardSessionDistractionCount = timerComplete.distractionCount,
-                        boardSessionReminderCount = timerComplete.reminderCount
+                        boardSessionReminderCount = timerComplete.reminderCount,
+                        boardSessionPhoneDistractionCount = timerComplete.phoneDistractionCount
                     )
                 }
             }
@@ -309,7 +315,7 @@ class TimerStateHolder @Inject constructor(
                     // 板端响应成功
                     val json = String(data, Charsets.UTF_8)
                     val boardState = BoardJsonParser.parseSessionState(json)
-                    if (boardState.sessionPhase == BoardSessionPhase.PRECHECK) {
+                    if (boardState.sessionPhase != BoardSessionPhase.IDLE) {
                         applyBoardSessionState(boardState, targetDurationMinutes)
                         return@onSuccess
                     }
@@ -673,18 +679,15 @@ class TimerStateHolder @Inject constructor(
     /**
      * 用于本地模式结束后将记录同步
      */
-    suspend fun syncSessionToBoard(durationSeconds: Int) {
-        if (bleManager.isConnected()) {
-            val usage = com.edgefocus.app.data.remote.PhoneUsage(
-                isInUse = false,
-                appCategory = "other",
-                distractionLevel = 3,
-                appName = "local_session_sync",
-                durationSec = durationSeconds
-            )
-            bleManager.phoneSync(usage)
-            Log.d(TAG, "Local session synced to board: duration=${durationSeconds}s")
-        }
+    suspend fun syncSessionToBoard(session: LocalSessionUpload) {
+        if (!bleManager.isConnected()) return
+        bleManager.uploadLocalSession(session)
+            .onSuccess {
+                Log.d(TAG, "Uploaded local session to board: ${session.sessionId}")
+            }
+            .onFailure { error ->
+                Log.e(TAG, "Failed to upload local session to board: ${error.message}", error)
+            }
     }
 
     private fun finishFromBoardReport(report: JSONObject) {
@@ -713,13 +716,22 @@ class TimerStateHolder @Inject constructor(
         fallbackDurationMinutes: Int = _state.value.targetDurationMinutes
     ) {
         val fallbackTotalMs = TimeUtils.minutesToMillis(fallbackDurationMinutes)
-        val targetMs = boardState.targetDurationMs.takeIf { it > 0L } ?: _state.value.totalTime.takeIf { it > 0L } ?: fallbackTotalMs
-        val remainingMs = boardState.remainingMs.takeIf { it > 0L } ?: targetMs
+        val targetMs = when {
+            boardState.hasTargetDurationMs && boardState.targetDurationMs > 0L -> boardState.targetDurationMs
+            _state.value.totalTime > 0L -> _state.value.totalTime
+            else -> fallbackTotalMs
+        }
         val phase = when {
             boardState.sessionPhase != BoardSessionPhase.IDLE -> boardState.sessionPhase
             boardState.paused || boardState.focusState == 6 -> BoardSessionPhase.PAUSED
-            boardState.active || boardState.remainingMs > 0L -> BoardSessionPhase.FOCUSING
+            boardState.active || boardState.hasRemainingMs -> BoardSessionPhase.FOCUSING
             else -> BoardSessionPhase.IDLE
+        }
+        val remainingMs = when {
+            boardState.hasRemainingMs -> boardState.remainingMs.coerceAtLeast(0L)
+            phase == BoardSessionPhase.PRECHECK -> targetMs
+            _state.value.timeRemaining > 0L -> _state.value.timeRemaining
+            else -> targetMs
         }
         val timerState = when (phase) {
             BoardSessionPhase.PRECHECK -> TimerState.PRECHECK
@@ -855,9 +867,6 @@ class TimerStateHolder @Inject constructor(
 
 
     private fun startLocalCountdown() {
-        if (_state.value.sessionMode == SessionMode.EDGEFOCUS) {
-            return
-        }
         localCountdownJob?.cancel()
         localCountdownJob = scope.launch {
             while (_state.value.timeRemaining > 0 &&
@@ -1004,6 +1013,10 @@ class TimerStateHolder @Inject constructor(
     fun getBoardSessionPhoneDistractionCount(): Int = _state.value.boardSessionPhoneDistractionCount
         ?: _state.value.phoneDistractionCount
     fun hasBoardSessionReport(): Boolean = _state.value.boardTotalDuration != null
+    fun isActiveEdgeFocusSession(): Boolean =
+        _state.value.sessionMode == SessionMode.EDGEFOCUS &&
+            _state.value.timerState in setOf(TimerState.PRECHECK, TimerState.RUNNING, TimerState.PAUSED) &&
+            isBoardConnected()
 
     fun incrementPhoneDistraction() {
         _state.update { it.copy(phoneDistractionCount = it.phoneDistractionCount + 1) }

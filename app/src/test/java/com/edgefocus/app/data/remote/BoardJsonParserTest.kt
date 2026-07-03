@@ -59,6 +59,8 @@ class BoardJsonParserTest {
             """
                 {
                   "system_mode":1,
+                  "notification_mode":"silent",
+                  "power_profile":"go",
                   "away_timeout_min":12,
                   "default_focus_duration_min":45,
                   "vibration_strength":0.25,
@@ -77,6 +79,8 @@ class BoardJsonParserTest {
         val prefs = BoardJsonParser.parsePreferences(data)
 
         assertEquals(1, prefs.systemMode)
+        assertEquals(NotificationMode.SILENT, prefs.notificationMode)
+        assertEquals(PowerProfile.GO, prefs.powerProfile)
         assertEquals(12, prefs.awayTimeoutMin)
         assertEquals(45, prefs.defaultFocusDurationMin)
         assertEquals(0.25f, prefs.vibrationStrength, 0.001f)
@@ -88,6 +92,32 @@ class BoardJsonParserTest {
         assertEquals("phone", prefs.screenOutputRoute)
         assertEquals("board", prefs.soundOutputRoute)
         assertFalse(prefs.gimbalEnabled)
+    }
+
+    @Test
+    fun parsePreferencesKeepsLegacySystemModeCompatibilityWithoutOverridingNewFields() {
+        val explicit = BoardJsonParser.parsePreferences(
+            org.json.JSONObject(
+                """
+                    {
+                      "system_mode":0,
+                      "notification_mode":"silent",
+                      "power_profile":"home"
+                    }
+                """.trimIndent()
+            )
+        )
+
+        assertEquals(NotificationMode.SILENT, explicit.notificationMode)
+        assertEquals(PowerProfile.HOME, explicit.powerProfile)
+
+        val legacySilent = BoardJsonParser.parsePreferences(org.json.JSONObject("""{"system_mode":1}"""))
+        assertEquals(NotificationMode.SILENT, legacySilent.notificationMode)
+        assertEquals(PowerProfile.GO, legacySilent.powerProfile)
+
+        val legacyHome = BoardJsonParser.parsePreferences(org.json.JSONObject("""{"system_mode":2}"""))
+        assertEquals(NotificationMode.NORMAL, legacyHome.notificationMode)
+        assertEquals(PowerProfile.HOME, legacyHome.powerProfile)
     }
 
     @Test
@@ -144,6 +174,65 @@ class BoardJsonParserTest {
         assertNotNull(state.precheck?.camera)
         assertNotNull(state.precheck?.gimbal)
         assertTrue(state.precheck!!.gimbal!!.online)
+    }
+
+    @Test
+    fun parseSessionStateDistinguishesMissingRemainingFromExplicitZero() {
+        val explicitZero = BoardJsonParser.parseSessionState(
+            """
+                {
+                  "status":"success",
+                  "data":{
+                    "session_phase":"focusing",
+                    "remaining_ms":0,
+                    "target_duration_ms":1500000
+                  }
+                }
+            """.trimIndent()
+        )
+
+        assertTrue(explicitZero.hasRemainingMs)
+        assertEquals(0L, explicitZero.remainingMs)
+        assertTrue(explicitZero.hasTargetDurationMs)
+        assertEquals(1_500_000L, explicitZero.targetDurationMs)
+
+        val missing = BoardJsonParser.parseSessionState(
+            """
+                {
+                  "status":"success",
+                  "data":{"session_phase":"focusing"}
+                }
+            """.trimIndent()
+        )
+
+        assertFalse(missing.hasRemainingMs)
+        assertFalse(missing.hasTargetDurationMs)
+    }
+
+    @Test
+    fun parseSessionStateIncludesStartSourceAndPrecheckControl() {
+        val state = BoardJsonParser.parseSessionState(
+            """
+                {
+                  "status":"success",
+                  "data":{
+                    "active":true,
+                    "session_phase":"precheck",
+                    "session_start_source":"board",
+                    "precheck_control":{
+                      "owner":"board",
+                      "app_can_skip_precheck":false,
+                      "board_can_continue":true
+                    }
+                  }
+                }
+            """.trimIndent()
+        )
+
+        assertEquals("board", state.sessionStartSource)
+        assertEquals("board", state.precheckControl!!.owner)
+        assertFalse(state.precheckControl!!.appCanSkipPrecheck)
+        assertTrue(state.precheckControl!!.boardCanContinue)
     }
 
     @Test
@@ -301,5 +390,84 @@ class BoardJsonParserTest {
         assertEquals("playing", alert.phoneSignal)
         assertEquals("phone_playing", alert.reason)
         assertEquals("phone", alert.outputCapability!!.soundOutputRoute)
+    }
+
+    @Test
+    fun parseTimerCompleteUsesFocusDurationAndFullReportFields() {
+        val eventData = org.json.JSONObject(
+            """
+                {
+                  "session_id":"board_1",
+                  "start_time_ms":1000,
+                  "end_time_ms":61000,
+                  "total_duration":60,
+                  "focus_duration":42,
+                  "elapsed_ms":60000,
+                  "target_duration_ms":60000,
+                  "distraction_count":3,
+                  "reminder_count":2,
+                  "phone_distraction_count":1,
+                  "end_reason":"timer_completed"
+                }
+            """.trimIndent()
+        )
+
+        val complete = BoardJsonParser.parseTimerComplete(eventData)
+
+        assertEquals("board_1", complete.sessionId)
+        assertEquals(1000L, complete.startTimeMs)
+        assertEquals(61000L, complete.endTimeMs)
+        assertEquals(60, complete.totalDurationSec)
+        assertEquals(42, complete.focusDurationSec)
+        assertEquals(60_000L, complete.elapsedMs)
+        assertEquals(60_000L, complete.targetDurationMs)
+        assertEquals(1, complete.phoneDistractionCount)
+        assertEquals("timer_completed", complete.endReason)
+    }
+
+    @Test
+    fun buildPhoneSyncIncludesUsageStateAndAllowsZeroDistractionLevel() {
+        val json = BoardJsonParser.buildPhoneSync(
+            PhoneUsage(
+                isInUse = true,
+                appCategory = "learning",
+                usageState = "learning",
+                distractionLevel = 0,
+                appName = "com.edgefocus.app"
+            )
+        )
+
+        assertEquals("phone_sync", json.getString("cmd"))
+        val data = json.getJSONObject("data")
+        assertTrue(data.getBoolean("is_in_use"))
+        assertEquals("learning", data.getString("app_category"))
+        assertEquals("learning", data.getString("usage_state"))
+        assertEquals(0, data.getInt("distraction_level"))
+        assertEquals("com.edgefocus.app", data.getString("app_name"))
+    }
+
+    @Test
+    fun buildUploadLocalSessionUsesDedicatedCommand() {
+        val json = BoardJsonParser.buildUploadLocalSession(
+            LocalSessionUpload(
+                sessionId = "app_local_1",
+                startTimeMs = 1000L,
+                endTimeMs = 61000L,
+                totalDurationSec = 60,
+                focusDurationSec = 55,
+                distractionCount = 2,
+                reminderCount = 1,
+                phoneDistractionCount = 2
+            )
+        )
+
+        assertEquals("upload_local_session", json.getString("cmd"))
+        val data = json.getJSONObject("data")
+        assertEquals("app_local_1", data.getString("session_id"))
+        assertEquals(1000L, data.getLong("start_time_ms"))
+        assertEquals(61000L, data.getLong("end_time_ms"))
+        assertEquals(60, data.getInt("total_duration"))
+        assertEquals(55, data.getInt("focus_duration"))
+        assertEquals("app_local", data.getString("source"))
     }
 }

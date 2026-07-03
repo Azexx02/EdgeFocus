@@ -18,6 +18,7 @@ import com.edgefocus.app.data.local.entity.AppUsage
 import com.edgefocus.app.data.remote.AppEventLog
 import com.edgefocus.app.data.remote.BleManager
 import com.edgefocus.app.data.remote.PhoneUsage
+import com.edgefocus.app.data.remote.PhoneUsagePolicy
 import com.edgefocus.app.util.AppCategorizer
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
@@ -367,19 +368,24 @@ class AppMonitorService : Service() {
             return
         }
 
-        val settings = settingsDao.getSettingsOnce()
-        if (settings?.useEdgeFocusBoard != true) {
+        if (!AppMonitorBleReportPolicy.shouldReport(
+                bleConnected = bleManager.isConnected(),
+                activeEdgeFocusSession = timerStateHolder.isActiveEdgeFocusSession()
+            )
+        ) {
             return
         }
 
-        if (!bleManager.isConnected()) {
-            return
+        val usageState = when (category) {
+            "learning" -> "learning"
+            "playing" -> "playing"
+            else -> "other"
         }
-
         val result = bleManager.phoneSync(
             PhoneUsage(
                 isInUse = isInUse,
                 appCategory = category,
+                usageState = usageState,
                 distractionLevel = level,
                 appName = packageName,
                 durationSec = null
@@ -390,7 +396,16 @@ class AppMonitorService : Service() {
             lastBleReportedKey = key
             appEventLog.log("PHONE_SYNC", "$category, level=$level, pkg=$packageName")
             // 手机干扰计数（level > 0 表示干扰应用）
-            if (isInUse && level > 0) {
+            if (PhoneUsagePolicy.shouldCountPhoneDistraction(
+                    PhoneUsage(
+                        isInUse = isInUse,
+                        appCategory = category,
+                        usageState = usageState,
+                        distractionLevel = level,
+                        appName = packageName
+                    )
+                )
+            ) {
                 timerStateHolder.incrementPhoneDistraction()
             }
             Log.d(TAG, "BLE phoneSync sent: $key")
