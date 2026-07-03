@@ -19,13 +19,19 @@ int64_t monotonicMs() {
         std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
+int64_t wallClockMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
 int clampPhoneDistractionLevel(int level) {
-    if (level < 1) return 1;
+    if (level < 0) return 0;
     if (level > 3) return 3;
     return level;
 }
 
 int estimatePhoneRisk(int level) {
+    if (level <= 0) return 0;
     if (level <= 1) return 20;
     if (level == 2) return 40;
     return 60;
@@ -89,6 +95,48 @@ BehaviorContext makePhoneContext(const PhoneUsageSignal& sig) {
         ctx.reason = "phone_sync_inactive";
     }
     return ctx;
+}
+
+nlohmann::json behaviorContextJson(const BehaviorContext& ctx) {
+    return {
+        {"risk_score", ctx.risk_score},
+        {"vision_signal", ctx.vision_signal},
+        {"phone_signal", ctx.phone_signal},
+        {"phone_distraction_level", ctx.phone_distraction_level},
+        {"phone_usage_state", ctx.phone_usage_state},
+        {"reason", ctx.reason}
+    };
+}
+
+nlohmann::json makePushStateData(const SystemSnapshot& snap) {
+    const std::string owner = snap.session.precheck_owner.empty()
+        ? "board"
+        : snap.session.precheck_owner;
+    return {
+        {"active", snap.session.active},
+        {"paused", snap.session.paused},
+        {"session_id", snap.session.session_id},
+        {"session_phase", sessionPhaseToString(deriveSessionPhase(snap.session))},
+        {"session_start_source", owner == "app" ? "app" : "board"},
+        {"focus_state", static_cast<int>(snap.focus_state)},
+        {"focus_reason", snap.focus_reason},
+        {"elapsed_ms", snap.session.elapsed_ms},
+        {"remaining_ms", snap.session.remaining_ms},
+        {"target_duration_ms", snap.session.target_duration_ms},
+        {"distraction_count", snap.session.distraction_count},
+        {"reminder_count", snap.session.reminder_count},
+        {"phone_distraction_count", snap.session.phone_distraction_count},
+        {"calibration_completed", snap.session.calibration_completed},
+        {"precheck", nlohmann::json::object()},
+        {"precheck_control", {
+            {"owner", owner},
+            {"app_can_skip_precheck", owner == "app"},
+            {"board_can_continue", true}
+        }},
+        {"output_capability", nlohmann::json::object()},
+        {"camera_preview", nlohmann::json::object()},
+        {"behavior_context", behaviorContextJson(snap.behavior_context)}
+    };
 }
 
 BehaviorContext makeVisionContext(const FocusEvent& event, int64_t risk_score, int64_t frame_ts) {
@@ -224,26 +272,26 @@ void BehaviorEngine::runOnce(AppContext& /*ctx*/) {
             }
             const FocusState previous_state = current_snap.focus_state;
             if (phone_sig.active) {
-                if (!phone_episode_active_) {
+                const bool counts_as_distraction =
+                    phone_sig.usage_state != PhoneUsageState::LEARNING &&
+                    phone_sig.distraction_level > 0;
+                if (counts_as_distraction && !phone_episode_active_) {
                     s.phone_distraction_count++;
                     phone_episode_active_ = true;
+                } else if (!counts_as_distraction) {
+                    phone_episode_active_ = false;
                 }
                 s.current_phone_distraction_level = clampPhoneDistractionLevel(phone_sig.distraction_level);
                 store_.updateSessionIfCurrent(s);
 
                 FocusState phone_state = focusStateForPhoneUsage(phone_sig.usage_state);
-                if (!isDistractionState(previous_state) && isDistractionState(phone_state)) {
+                if (counts_as_distraction &&
+                    !isDistractionState(previous_state) && isDistractionState(phone_state)) {
                     store_.incrementDistraction();
                 }
                 if (previous_state != phone_state) {
                     store_.updateFocusState(phone_state, phone_sig.timestamp_ms, "Phone sync signal");
-                    nlohmann::json push_data = {
-                        {"focus_state", static_cast<int>(phone_state)},
-                        {"elapsed_ms", s.elapsed_ms},
-                        {"distraction_count", s.distraction_count},
-                        {"session_id", s.session_id},
-                        {"calibration_completed", s.calibration_completed}
-                    };
+                    nlohmann::json push_data = makePushStateData(store_.snapshot());
                     nlohmann::json push_event = {{"cmd", "push_state"}, {"data", push_data}};
                     store_.pushEvent(push_event.dump());
                 }
@@ -253,13 +301,7 @@ void BehaviorEngine::runOnce(AppContext& /*ctx*/) {
                 store_.updateSessionIfCurrent(s);
                 if (isPhoneState(previous_state)) {
                     store_.updateFocusState(FocusState::FOCUSED, phone_sig.timestamp_ms, "phone_sync_inactive");
-                    nlohmann::json push_data = {
-                        {"focus_state", static_cast<int>(FocusState::FOCUSED)},
-                        {"elapsed_ms", s.elapsed_ms},
-                        {"distraction_count", s.distraction_count},
-                        {"session_id", s.session_id},
-                        {"calibration_completed", s.calibration_completed}
-                    };
+                    nlohmann::json push_data = makePushStateData(store_.snapshot());
                     nlohmann::json push_event = {{"cmd", "push_state"}, {"data", push_data}};
                     store_.pushEvent(push_event.dump());
                 }
@@ -392,13 +434,19 @@ void BehaviorEngine::runOnce(AppContext& /*ctx*/) {
                     const SessionReport& report = ended.report;
 
                     if (ended.success && !report.session_id.empty()) {
+                        const int64_t end_wall_ms = wallClockMs();
                         nlohmann::json push_data = {
+                            {"start_time_ms", end_wall_ms - report.total_duration * 1000},
+                            {"end_time_ms", end_wall_ms},
+                            {"total_duration", report.total_duration},
+                            {"focus_duration", report.focus_duration},
                             {"elapsed_ms", report.total_duration * 1000},
                             {"target_duration_ms", ended.target_duration_ms},
                             {"distraction_count", report.distraction_count},
                             {"reminder_count", report.reminder_count},
                             {"phone_distraction_count", report.phone_distraction_count},
-                            {"session_id", report.session_id}
+                            {"session_id", report.session_id},
+                            {"end_reason", "timer_completed"}
                         };
                         nlohmann::json push_event = {{"cmd", "push_timer_complete"}, {"data", push_data}};
                         store_.pushEvent(push_event.dump());
@@ -431,13 +479,7 @@ void BehaviorEngine::runOnce(AppContext& /*ctx*/) {
                                     snap.demo_override.reason.empty() ? "demo_override"
                                                                       : snap.demo_override.reason);
             auto current_snap = store_.snapshot();
-            nlohmann::json push_data = {
-                {"focus_state", static_cast<int>(new_state)},
-                {"elapsed_ms", current_snap.session.elapsed_ms},
-                {"distraction_count", current_snap.session.distraction_count},
-                {"session_id", current_snap.session.session_id},
-                {"calibration_completed", current_snap.session.calibration_completed}
-            };
+            nlohmann::json push_data = makePushStateData(current_snap);
             nlohmann::json push_event = {{"cmd", "push_state"}, {"data", push_data}};
             store_.pushEvent(push_event.dump());
         }
@@ -479,13 +521,7 @@ void BehaviorEngine::runOnce(AppContext& /*ctx*/) {
         // Push state change event to phone
         {
             auto current_snap = store_.snapshot();
-            nlohmann::json push_data = {
-                {"focus_state", static_cast<int>(new_state)},
-                {"elapsed_ms", current_snap.session.elapsed_ms},
-                {"distraction_count", current_snap.session.distraction_count},
-                {"session_id", current_snap.session.session_id},
-                {"calibration_completed", current_snap.session.calibration_completed}
-            };
+            nlohmann::json push_data = makePushStateData(current_snap);
             nlohmann::json push_event = {{"cmd", "push_state"}, {"data", push_data}};
             store_.pushEvent(push_event.dump());
         }
@@ -534,13 +570,19 @@ void BehaviorEngine::runOnce(AppContext& /*ctx*/) {
                 const SessionReport& report = ended.report;
 
                 if (ended.success && !report.session_id.empty()) {
+                    const int64_t end_wall_ms = wallClockMs();
                     nlohmann::json push_data = {
+                        {"start_time_ms", end_wall_ms - report.total_duration * 1000},
+                        {"end_time_ms", end_wall_ms},
                         {"total_duration", report.total_duration},
                         {"focus_duration", report.focus_duration},
                         {"distraction_count", report.distraction_count},
                         {"reminder_count", report.reminder_count},
                         {"phone_distraction_count", report.phone_distraction_count},
-                        {"session_id", report.session_id}
+                        {"session_id", report.session_id},
+                        {"target_duration_ms", ended.target_duration_ms},
+                        {"remaining_ms", 0},
+                        {"end_reason", "away_timeout"}
                     };
                     nlohmann::json push_event = {{"cmd", "push_session_end"}, {"data", push_data}};
                     store_.pushEvent(push_event.dump());

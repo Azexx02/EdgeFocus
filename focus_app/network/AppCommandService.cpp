@@ -15,6 +15,8 @@
 #include <cstdlib>
 #include <stdexcept>
 #include <sstream>
+#include <thread>
+#include <utility>
 
 namespace edgefocus {
 
@@ -31,19 +33,40 @@ int64_t wallClockMs() {
         std::chrono::system_clock::now().time_since_epoch()).count();
 }
 
-json sessionStateData(const SystemSnapshot& snap) {
+json outputCapabilityData(const SystemSnapshot& snap);
+json cameraPreviewData(const SystemSnapshot& snap);
+json behaviorContextData(const SystemSnapshot& snap);
+json precheckFlowData(const SystemSnapshot& snap, bool gimbal_precheck_available);
+bool gimbalPrecheckAvailable(const SystemSnapshot& snap, const GimbalMonitor* gimbal_monitor);
+
+json sessionStateData(const SystemSnapshot& snap, bool gimbal_precheck_available = false) {
+    const std::string owner = snap.session.precheck_owner.empty()
+        ? "board"
+        : snap.session.precheck_owner;
     return {
         {"active", snap.session.active},
         {"paused", snap.session.paused},
         {"session_id", snap.session.session_id},
+        {"session_start_source", owner == "app" ? "app" : "board"},
         {"focus_state", static_cast<int>(snap.focus_state)},
+        {"focus_reason", snap.focus_reason},
         {"elapsed_ms", snap.session.elapsed_ms},
         {"remaining_ms", snap.session.remaining_ms},
         {"target_duration_ms", snap.session.target_duration_ms},
         {"distraction_count", snap.session.distraction_count},
         {"reminder_count", snap.session.reminder_count},
+        {"phone_distraction_count", snap.session.phone_distraction_count},
         {"calibration_completed", snap.session.calibration_completed},
-        {"session_phase", sessionPhaseToString(deriveSessionPhase(snap.session))}
+        {"session_phase", sessionPhaseToString(deriveSessionPhase(snap.session))},
+        {"precheck", precheckFlowData(snap, gimbal_precheck_available)},
+        {"precheck_control", {
+            {"owner", owner},
+            {"app_can_skip_precheck", owner == "app"},
+            {"board_can_continue", true}
+        }},
+        {"output_capability", outputCapabilityData(snap)},
+        {"camera_preview", cameraPreviewData(snap)},
+        {"behavior_context", behaviorContextData(snap)}
     };
 }
 
@@ -161,6 +184,45 @@ std::string lowerCopy(std::string value) {
         return static_cast<char>(std::tolower(c));
     });
     return value;
+}
+
+std::string notificationModeToString(NotificationMode mode) {
+    return mode == NotificationMode::SILENT ? "silent" : "normal";
+}
+
+std::string powerProfileToString(PowerProfile profile) {
+    return profile == PowerProfile::HOME ? "home" : "go";
+}
+
+NotificationMode notificationModeFromLegacySystemMode(int mode) {
+    return mode == static_cast<int>(SystemMode::SILENT)
+        ? NotificationMode::SILENT
+        : NotificationMode::NORMAL;
+}
+
+PowerProfile powerProfileFromLegacySystemMode(int mode) {
+    return mode == static_cast<int>(SystemMode::HOME)
+        ? PowerProfile::HOME
+        : PowerProfile::GO;
+}
+
+SystemMode systemModeFromNotificationMode(NotificationMode mode) {
+    return mode == NotificationMode::SILENT ? SystemMode::SILENT : SystemMode::NORMAL;
+}
+
+NotificationMode parseNotificationModeOrDefault(const std::string& value,
+                                                NotificationMode fallback) {
+    const auto normalized = lowerCopy(value);
+    if (normalized == "normal") return NotificationMode::NORMAL;
+    if (normalized == "silent") return NotificationMode::SILENT;
+    return fallback;
+}
+
+PowerProfile parsePowerProfileOrDefault(const std::string& value, PowerProfile fallback) {
+    const auto normalized = lowerCopy(value);
+    if (normalized == "home") return PowerProfile::HOME;
+    if (normalized == "go") return PowerProfile::GO;
+    return fallback;
 }
 
 int clampMinutes(int value, int min_value, int max_value) {
@@ -281,6 +343,47 @@ json precheckFlowData(const SystemSnapshot& snap, bool gimbal_precheck_available
     return data;
 }
 
+json sessionReportData(const SessionReport& report,
+                       int64_t target_duration_ms,
+                       const std::string& end_reason) {
+    const int64_t end_time_ms = wallClockMs();
+    const int64_t start_time_ms =
+        end_time_ms - std::max<int64_t>(0, report.total_duration * 1000);
+    return {
+        {"session_id", report.session_id},
+        {"start_time_ms", start_time_ms},
+        {"end_time_ms", end_time_ms},
+        {"total_duration", report.total_duration},
+        {"focus_duration", report.focus_duration},
+        {"elapsed_ms", report.total_duration * 1000},
+        {"target_duration_ms", target_duration_ms},
+        {"remaining_ms", 0},
+        {"distraction_count", report.distraction_count},
+        {"reminder_count", report.reminder_count},
+        {"phone_distraction_count", report.phone_distraction_count},
+        {"end_reason", end_reason}
+    };
+}
+
+int totalGimbalTimeoutMs(const std::vector<std::pair<std::string, int>>& commands) {
+    int total = 0;
+    for (const auto& item : commands) {
+        total += item.second;
+    }
+    return total;
+}
+
+json gimbalResultData(const GimbalCommandResult& result) {
+    return {
+        {"success", result.success},
+        {"timeout", result.timeout},
+        {"command", result.command},
+        {"start_response", result.start_response},
+        {"final_response", result.final_response},
+        {"error", result.error}
+    };
+}
+
 } // namespace
 
 AppCommandService::AppCommandService(SystemStateStore& store, SQLiteStore& sqlite_store,
@@ -292,11 +395,106 @@ AppCommandService::AppCommandService(SystemStateStore& store, SQLiteStore& sqlit
     , mode_mgr_(mode_mgr)
     , gimbal_monitor_(gimbal_monitor) {}
 
+AppCommandService::~AppCommandService() {
+    if (gimbal_task_thread_.joinable()) {
+        gimbal_task_thread_.join();
+    }
+}
+
+void AppCommandService::joinCompletedGimbalTaskLocked() {
+    if (gimbal_task_thread_.joinable() && !gimbal_task_running_.load()) {
+        gimbal_task_thread_.join();
+    }
+}
+
+std::string AppCommandService::startGimbalTask(
+    const std::string& action,
+    std::vector<std::pair<std::string, int>> commands,
+    int req_id) {
+    if (commands.empty()) {
+        return makeError(req_id, "Missing gimbal command");
+    }
+
+    const int estimated_timeout_ms = totalGimbalTimeoutMs(commands);
+    std::string task_id;
+    {
+        std::lock_guard<std::mutex> lock(gimbal_task_mutex_);
+        joinCompletedGimbalTaskLocked();
+        if (gimbal_task_running_.load()) {
+            return makeError(req_id, "Gimbal command already running");
+        }
+
+        gimbal_task_running_.store(true);
+        task_id = "gimbal_" + std::to_string(wallClockMs()) + "_" +
+                  std::to_string(++gimbal_task_seq_);
+        gimbal_task_thread_ = std::thread(
+            [this, task_id, action, commands = std::move(commands)]() mutable {
+                bool success = true;
+                bool timeout = false;
+                std::string error;
+                json steps = json::array();
+
+                try {
+                    for (const auto& item : commands) {
+                        auto result = gimbal_monitor_->executeBusinessCommand(item.first, item.second);
+                        steps.push_back(gimbalResultData(result));
+                        if (!result.success) {
+                            success = false;
+                            timeout = result.timeout;
+                            error = result.error;
+                            break;
+                        }
+                    }
+                } catch (const std::exception& e) {
+                    success = false;
+                    error = e.what();
+                } catch (...) {
+                    success = false;
+                    error = "unknown_gimbal_error";
+                }
+
+                json push_data = {
+                    {"task_id", task_id},
+                    {"action", action},
+                    {"success", success},
+                    {"timeout", timeout},
+                    {"state", success ? "finished" : "failed"},
+                    {"error", error},
+                    {"steps", steps}
+                };
+                if (!steps.empty()) {
+                    push_data["command"] = steps.back().value("command", "");
+                    push_data["start_response"] = steps.back().value("start_response", "");
+                    push_data["final_response"] = steps.back().value("final_response", "");
+                }
+                gimbal_task_running_.store(false);
+                store_.pushEvent(makePush("push_gimbal_result", push_data));
+            });
+    }
+
+    return makeResponse(req_id, {
+        {"accepted", true},
+        {"task_id", task_id},
+        {"action", action},
+        {"state", "running"},
+        {"estimated_timeout_ms", estimated_timeout_ms}
+    });
+}
+
 void AppCommandService::loadPreferences() {
     Preferences prefs = store_.snapshot().preferences;
     prefs.system_mode = parseSystemModeOrDefault(
         sqlite_store_.getPreference("system_mode", std::to_string(prefs.system_mode)),
         prefs.system_mode);
+    prefs.notification_mode = parseNotificationModeOrDefault(
+        sqlite_store_.getPreference("notification_mode",
+            notificationModeToString(notificationModeFromLegacySystemMode(prefs.system_mode))),
+        notificationModeFromLegacySystemMode(prefs.system_mode));
+    prefs.power_profile = parsePowerProfileOrDefault(
+        sqlite_store_.getPreference("power_profile",
+            powerProfileToString(powerProfileFromLegacySystemMode(prefs.system_mode))),
+        powerProfileFromLegacySystemMode(prefs.system_mode));
+    prefs.system_mode = static_cast<int>(systemModeFromNotificationMode(prefs.notification_mode));
     prefs.away_timeout_min = parseIntOrDefault(sqlite_store_.getPreference("away_timeout_min", std::to_string(prefs.away_timeout_min)),
                                                prefs.away_timeout_min);
     prefs.default_focus_duration_min = clampMinutes(
@@ -352,10 +550,12 @@ void AppCommandService::loadPreferences() {
         }
     }
     store_.updatePreferences(prefs);
-    mode_mgr_.setMode(static_cast<SystemMode>(prefs.system_mode));
+    mode_mgr_.setMode(systemModeFromNotificationMode(prefs.notification_mode));
 
     DeviceStatus device = store_.snapshot().device;
-    device.system_mode = static_cast<SystemMode>(prefs.system_mode);
+    device.system_mode = systemModeFromNotificationMode(prefs.notification_mode);
+    device.notification_mode = prefs.notification_mode;
+    device.power_profile = prefs.power_profile;
     store_.updateDeviceStatus(device);
 
     SessionInfo session = store_.snapshot().session;
@@ -403,6 +603,7 @@ std::string AppCommandService::handleCommand(const std::string& json_cmd) {
         if (cmd == "update_preferences")     return handleUpdatePreferences(data, req_id);
         if (cmd == "reminder_ack")           return handleReminderAck(data, req_id);
         if (cmd == "phone_sync")             return handlePhoneSync(data, req_id);
+        if (cmd == "upload_local_session")   return handleUploadLocalSession(data, req_id);
         if (cmd == "get_console_data")       return handleGetConsoleData(req_id);
         if (cmd == "session_feedback")       return handleSessionFeedback(data, req_id);
         if (cmd == "get_session_history")    return handleGetSessionHistory(data, req_id);
@@ -434,6 +635,8 @@ std::string AppCommandService::handleGetDeviceStatus(int req_id) {
         {"battery_charging", snap.device.battery_charging},
         {"power_source", snap.device.power_source},
         {"system_mode", static_cast<int>(snap.device.system_mode)},
+        {"notification_mode", notificationModeToString(snap.device.notification_mode)},
+        {"power_profile", powerProfileToString(snap.device.power_profile)},
         {"camera_ok", snap.device.camera_ok},
         {"bracelet_connected", snap.device.bracelet_connected},
         {"board_screen_available", snap.device.board_screen_available},
@@ -460,8 +663,15 @@ std::string AppCommandService::handleGetCurrentState(int req_id) {
         {"target_duration_ms", snap.session.target_duration_ms},
         {"distraction_count", snap.session.distraction_count},
         {"reminder_count", snap.session.reminder_count},
+        {"phone_distraction_count", snap.session.phone_distraction_count},
         {"calibration_completed", snap.session.calibration_completed},
         {"session_phase", sessionPhaseToString(deriveSessionPhase(snap.session))},
+        {"session_start_source", snap.session.precheck_owner == "app" ? "app" : "board"},
+        {"precheck_control", {
+            {"owner", snap.session.precheck_owner.empty() ? "board" : snap.session.precheck_owner},
+            {"app_can_skip_precheck", snap.session.precheck_owner == "app"},
+            {"board_can_continue", true}
+        }},
         {"reminder", reminderData(snap)},
         {"precheck", precheckFlowData(snap, gimbal_precheck_available)},
         {"output_capability", outputCapabilityData(snap)},
@@ -492,6 +702,8 @@ std::string AppCommandService::handleGetLastReport(int req_id) {
     }
     json data = {
         {"session_id", last.session_id},
+        {"start_time_ms", last.start_time_ms},
+        {"end_time_ms", last.end_time_ms},
         {"total_duration", last.total_duration},
         {"focus_duration", last.focus_duration},
         {"distraction_count", last.distraction_count},
@@ -521,20 +733,12 @@ std::string AppCommandService::handleSessionControl(const json& data, int req_id
         auto started = controller.startSession(target_min, "app");
         const auto& s = started.session;
         const auto started_snapshot = store_.snapshot();
-        const bool gimbal_precheck_available =
-            gimbalPrecheckAvailable(started_snapshot, gimbal_monitor_);
         LOGI("AppCommandService", "Session started: %s", s.session_id.c_str());
-        json resp = {
-            {"success", started.success},
-            {"already_active", started.already_active},
-            {"session_id", s.session_id},
-            {"remaining_ms", s.remaining_ms},
-            {"target_duration_ms", s.target_duration_ms},
-            {"focus_state", static_cast<int>(started_snapshot.focus_state)},
-            {"calibration_completed", s.calibration_completed},
-            {"session_phase", sessionPhaseToString(deriveSessionPhase(s))},
-            {"precheck", precheckFlowData(started_snapshot, gimbal_precheck_available)}
-        };
+        json resp = sessionStateData(
+            started_snapshot,
+            gimbalPrecheckAvailable(started_snapshot, gimbal_monitor_));
+        resp["success"] = started.success;
+        resp["already_active"] = started.already_active;
         return makeResponse(req_id, resp);
 
     } else if (action == "skip_precheck" || action == "skip_calibration") {
@@ -545,9 +749,10 @@ std::string AppCommandService::handleSessionControl(const json& data, int req_id
         SessionController controller(store_, sqlite_store_);
         bool ok = controller.skipPrecheck("app_skip_precheck");
         auto after = store_.snapshot();
-        json resp = sessionStateData(after);
+        const bool gimbal_precheck_available = gimbalPrecheckAvailable(after, gimbal_monitor_);
+        json resp = sessionStateData(after, gimbal_precheck_available);
         resp["success"] = ok;
-        store_.pushEvent(makePush("push_state", sessionStateData(after)));
+        store_.pushEvent(makePush("push_state", sessionStateData(after, gimbal_precheck_available)));
         return makeResponse(req_id, resp);
 
     } else if (action == "pause") {
@@ -558,9 +763,10 @@ std::string AppCommandService::handleSessionControl(const json& data, int req_id
         SessionController controller(store_, sqlite_store_);
         bool ok = controller.pauseSession("User paused");
         auto after = store_.snapshot();
-        json resp = sessionStateData(after);
+        const bool gimbal_precheck_available = gimbalPrecheckAvailable(after, gimbal_monitor_);
+        json resp = sessionStateData(after, gimbal_precheck_available);
         resp["success"] = ok;
-        store_.pushEvent(makePush("push_state", sessionStateData(after)));
+        store_.pushEvent(makePush("push_state", sessionStateData(after, gimbal_precheck_available)));
         return makeResponse(req_id, resp);
 
     } else if (action == "resume") {
@@ -571,9 +777,10 @@ std::string AppCommandService::handleSessionControl(const json& data, int req_id
         SessionController controller(store_, sqlite_store_);
         bool ok = controller.resumeSession("User resumed");
         auto after = store_.snapshot();
-        json resp = sessionStateData(after);
+        const bool gimbal_precheck_available = gimbalPrecheckAvailable(after, gimbal_monitor_);
+        json resp = sessionStateData(after, gimbal_precheck_available);
         resp["success"] = ok;
-        store_.pushEvent(makePush("push_state", sessionStateData(after)));
+        store_.pushEvent(makePush("push_state", sessionStateData(after, gimbal_precheck_available)));
         return makeResponse(req_id, resp);
 
     } else if (action == "end") {
@@ -586,28 +793,12 @@ std::string AppCommandService::handleSessionControl(const json& data, int req_id
         auto ended = controller.endSession("user_ended");
         SessionReport report = ended.report;
         if (ended.success && !report.session_id.empty()) {
-            json push_data = {
-                {"total_duration", report.total_duration},
-                {"focus_duration", report.focus_duration},
-                {"distraction_count", report.distraction_count},
-                {"reminder_count", report.reminder_count},
-                {"phone_distraction_count", report.phone_distraction_count},
-                {"session_id", report.session_id}
-            };
+            json push_data = sessionReportData(report, target_duration_ms, "user_ended");
             store_.pushEvent(makePush("push_session_end", push_data));
         }
 
-        json resp = {
-            {"success", ended.success},
-            {"session_id", report.session_id},
-            {"total_duration", report.total_duration},
-            {"focus_duration", report.focus_duration},
-            {"distraction_count", report.distraction_count},
-            {"reminder_count", report.reminder_count},
-            {"phone_distraction_count", report.phone_distraction_count},
-            {"remaining_ms", 0},
-            {"target_duration_ms", target_duration_ms}
-        };
+        json resp = sessionReportData(report, target_duration_ms, "user_ended");
+        resp["success"] = ended.success;
         return makeResponse(req_id, resp);
     }
 
@@ -622,12 +813,33 @@ std::string AppCommandService::handleUpdatePreferences(const json& data, int req
         if (!isValidSystemMode(mode)) {
             throw std::invalid_argument("invalid system_mode");
         }
-        prefs.system_mode = mode;
-        mode_mgr_.setMode(static_cast<SystemMode>(mode));
-        DeviceStatus ds = store_.snapshot().device;
-        ds.system_mode = static_cast<SystemMode>(mode);
-        store_.updateDeviceStatus(ds);
+        prefs.notification_mode = notificationModeFromLegacySystemMode(mode);
+        prefs.power_profile = powerProfileFromLegacySystemMode(mode);
     }
+    if (data.contains("notification_mode")) {
+        if (!data["notification_mode"].is_string()) {
+            throw std::invalid_argument("notification_mode must be string");
+        }
+        const auto parsed = parseNotificationModeOrDefault(
+            data["notification_mode"].get<std::string>(),
+            prefs.notification_mode);
+        prefs.notification_mode = parsed;
+    }
+    if (data.contains("power_profile")) {
+        if (!data["power_profile"].is_string()) {
+            throw std::invalid_argument("power_profile must be string");
+        }
+        prefs.power_profile = parsePowerProfileOrDefault(
+            data["power_profile"].get<std::string>(),
+            prefs.power_profile);
+    }
+    prefs.system_mode = static_cast<int>(systemModeFromNotificationMode(prefs.notification_mode));
+    mode_mgr_.setMode(systemModeFromNotificationMode(prefs.notification_mode));
+    DeviceStatus ds = store_.snapshot().device;
+    ds.system_mode = systemModeFromNotificationMode(prefs.notification_mode);
+    ds.notification_mode = prefs.notification_mode;
+    ds.power_profile = prefs.power_profile;
+    store_.updateDeviceStatus(ds);
     if (data.contains("away_timeout_min")) {
         prefs.away_timeout_min = data["away_timeout_min"].get<int>();
         SessionInfo s = store_.snapshot().session;
@@ -676,6 +888,8 @@ std::string AppCommandService::handleUpdatePreferences(const json& data, int req
     store_.updatePreferences(prefs);
 
     sqlite_store_.savePreference("system_mode", std::to_string(prefs.system_mode));
+    sqlite_store_.savePreference("notification_mode", notificationModeToString(prefs.notification_mode));
+    sqlite_store_.savePreference("power_profile", powerProfileToString(prefs.power_profile));
     sqlite_store_.savePreference("away_timeout_min", std::to_string(prefs.away_timeout_min));
     sqlite_store_.savePreference("default_focus_duration_min", std::to_string(prefs.default_focus_duration_min));
     sqlite_store_.savePreference("vibration_strength", std::to_string(prefs.vibration_strength));
@@ -690,6 +904,8 @@ std::string AppCommandService::handleUpdatePreferences(const json& data, int req
 
     json resp = {
         {"system_mode", prefs.system_mode},
+        {"notification_mode", notificationModeToString(prefs.notification_mode)},
+        {"power_profile", powerProfileToString(prefs.power_profile)},
         {"away_timeout_min", prefs.away_timeout_min},
         {"default_focus_duration_min", prefs.default_focus_duration_min},
         {"vibration_strength", prefs.vibration_strength},
@@ -749,6 +965,50 @@ std::string AppCommandService::handlePhoneSync(const json& data, int req_id) {
         {"action_taken", true},
         {"distraction_count", snap.session.distraction_count},
         {"reminder_count", snap.session.reminder_count}
+    };
+    return makeResponse(req_id, resp);
+}
+
+std::string AppCommandService::handleUploadLocalSession(const json& data, int req_id) {
+    const std::string session_id = data.value("session_id", "");
+    if (session_id.empty()) {
+        return makeError(req_id, "Missing session_id");
+    }
+
+    const bool already_exists = sqlite_store_.sessionExists(session_id);
+    if (!already_exists) {
+        const int64_t start_time_ms = data.value("start_time_ms", 0LL);
+        const int64_t end_time_ms = data.value("end_time_ms", 0LL);
+        const int64_t total_duration = data.value("total_duration", 0LL);
+        const int64_t focus_duration = data.value("focus_duration", total_duration);
+        const int distraction_count = data.value("distraction_count", 0);
+        const int reminder_count = data.value("reminder_count", 0);
+        const int phone_distraction_count = data.value("phone_distraction_count", 0);
+
+        if (!sqlite_store_.saveSession(session_id, start_time_ms, total_duration * 1000)) {
+            return makeError(req_id, "Failed to save local session");
+        }
+        if (!sqlite_store_.updateSessionEnd(session_id, end_time_ms, total_duration,
+                                            focus_duration, distraction_count,
+                                            reminder_count, phone_distraction_count,
+                                            "app_local_upload")) {
+            return makeError(req_id, "Failed to finalize local session");
+        }
+
+        auto snap = store_.snapshot();
+        TodayStats today = snap.today;
+        today.total_seconds += total_duration;
+        today.focus_seconds += focus_duration;
+        today.sessions++;
+        today.events += distraction_count;
+        today.phone_distraction_count += phone_distraction_count;
+        store_.updateTodayStats(today);
+    }
+
+    json resp = {
+        {"stored", true},
+        {"already_exists", already_exists},
+        {"session_id", session_id}
     };
     return makeResponse(req_id, resp);
 }
@@ -866,6 +1126,8 @@ std::string AppCommandService::handleGetPreferences(int req_id) {
     auto snap = store_.snapshot();
     json resp = {
         {"system_mode", snap.preferences.system_mode},
+        {"notification_mode", notificationModeToString(snap.preferences.notification_mode)},
+        {"power_profile", powerProfileToString(snap.preferences.power_profile)},
         {"away_timeout_min", snap.preferences.away_timeout_min},
         {"default_focus_duration_min", snap.preferences.default_focus_duration_min},
         {"vibration_strength", snap.preferences.vibration_strength},
@@ -907,29 +1169,7 @@ std::string AppCommandService::handleGimbalControl(const json& data, int req_id)
         }
     }
     if (action == "auto_init") {
-        auto center = gimbal_monitor_->executeBusinessCommand("CENTER X", 30000);
-        auto y = center.success ? gimbal_monitor_->executeBusinessCommand("DEG Y 0", 10000)
-                                : GimbalCommandResult{};
-        json resp = {
-            {"success", center.success && y.success},
-            {"center_x", {
-                {"success", center.success},
-                {"timeout", center.timeout},
-                {"command", center.command},
-                {"start_response", center.start_response},
-                {"final_response", center.final_response},
-                {"error", center.error}
-            }},
-            {"deg_y", {
-                {"success", y.success},
-                {"timeout", y.timeout},
-                {"command", y.command},
-                {"start_response", y.start_response},
-                {"final_response", y.final_response},
-                {"error", y.error}
-            }}
-        };
-        return makeResponse(req_id, resp);
+        return startGimbalTask(action, {{"CENTER X", 30000}, {"DEG Y 0", 10000}}, req_id);
     }
 
     std::string command;
@@ -996,16 +1236,12 @@ std::string AppCommandService::handleGimbalControl(const json& data, int req_id)
         return makeError(req_id, "Unknown gimbal action: " + action);
     }
 
+    if (isGimbalMotionAction(action)) {
+        return startGimbalTask(action, {{command, timeout_ms}}, req_id);
+    }
+
     auto result = gimbal_monitor_->executeBusinessCommand(command, timeout_ms);
-    json resp = {
-        {"success", result.success},
-        {"timeout", result.timeout},
-        {"command", result.command},
-        {"start_response", result.start_response},
-        {"final_response", result.final_response},
-        {"error", result.error}
-    };
-    return makeResponse(req_id, resp);
+    return makeResponse(req_id, gimbalResultData(result));
 }
 
 std::string AppCommandService::handleGetCameraPreviewImage(int req_id) {

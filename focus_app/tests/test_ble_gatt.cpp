@@ -9,6 +9,7 @@
 #include <cassert>
 #include <cmath>
 #include <string>
+#include <vector>
 #include <nlohmann/json.hpp>
 #ifdef _MSC_VER
 #include <crtdbg.h>
@@ -17,6 +18,46 @@
 
 using namespace edgefocus;
 using json = nlohmann::json;
+
+std::string decodeBase64(const std::string& input) {
+    static const std::string chars =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::vector<int> table(256, -1);
+    for (int i = 0; i < static_cast<int>(chars.size()); ++i) {
+        table[static_cast<unsigned char>(chars[i])] = i;
+    }
+    std::string out;
+    int val = 0;
+    int valb = -8;
+    for (unsigned char c : input) {
+        if (c == '=') break;
+        if (table[c] == -1) continue;
+        val = (val << 6) + table[c];
+        valb += 6;
+        if (valb >= 0) {
+            out.push_back(static_cast<char>((val >> valb) & 0xFF));
+            valb -= 8;
+        }
+    }
+    return out;
+}
+
+std::string assembleChunkPayloads(const std::vector<std::string>& chunks, bool push) {
+    std::vector<std::string> parts;
+    int total = -1;
+    for (const auto& chunk_json : chunks) {
+        auto chunk = json::parse(chunk_json);
+        json data = push ? chunk["data"] : chunk;
+        if (total < 0) {
+            total = data["total"].get<int>();
+            parts.resize(total);
+        }
+        parts[data["seq"].get<int>()] = decodeBase64(data["data"].get<std::string>());
+    }
+    std::string out;
+    for (const auto& part : parts) out += part;
+    return out;
+}
 
 json parseResponse(const std::string& resp) {
     return json::parse(resp);
@@ -35,6 +76,31 @@ int main() {
 #endif
     std::cout << "Starting BLE GATT Server tests...\n";
     json response;
+
+    // Test 0a: application chunk payloads can reassemble large responses and pushes.
+    {
+        std::string large_payload = R"({"status":"success","id":991,"data":{"blob":")" +
+            std::string(300, 'x') + R"("}})";
+        auto response_chunks = BleGattServer::makeChunkPayloadsForTest(
+            large_payload, 991, false, 48);
+        assert(response_chunks.size() > 1);
+        auto first = json::parse(response_chunks.front());
+        assert(first["status"] == "chunk");
+        assert(first["id"] == 991);
+        assert(first["encoding"] == "base64_utf8");
+        assert(assembleChunkPayloads(response_chunks, false) == large_payload);
+
+        std::string push_payload = R"({"cmd":"push_state","data":{"session_phase":"focusing","blob":")" +
+            std::string(280, 'p') + R"("}})";
+        auto push_chunks = BleGattServer::makeChunkPayloadsForTest(
+            push_payload, 0, true, 48);
+        assert(push_chunks.size() > 1);
+        auto push_first = json::parse(push_chunks.front());
+        assert(push_first["cmd"] == "push_chunk");
+        assert(push_first["data"]["encoding"] == "base64_utf8");
+        assert(assembleChunkPayloads(push_chunks, true) == push_payload);
+        std::cout << "  BLE chunk payload reassembly: OK\n";
+    }
 
     // Test 0: startup recovery closes persisted active sessions
     {
@@ -78,6 +144,8 @@ int main() {
         json resp = parseResponse(pref_server.handleCommand(R"({"cmd":"get_preferences","id":2})"));
         assertSuccess(resp, 2);
         assert(resp["data"]["system_mode"] == 1);
+        assert(resp["data"]["notification_mode"] == "silent");
+        assert(resp["data"]["power_profile"] == "go");
         assert(std::fabs(resp["data"]["sound_volume"].get<double>() - 0.33) < 0.001);
         assert(resp["data"]["screen_output_route"] == "phone");
         assert(resp["data"]["sound_output_route"] == "board");
@@ -205,6 +273,14 @@ int main() {
             R"({"cmd":"get_current_state","id":44})"));
         assertSuccess(current_resp, 44);
         assert(current_resp["data"]["precheck"].contains("gimbal"));
+
+        json gimbal_ack = parseResponse(online_server.handleCommand(
+            R"({"cmd":"gimbal_control","id":46,"data":{"action":"center_x"}})"));
+        assertSuccess(gimbal_ack, 46);
+        assert(gimbal_ack["data"]["accepted"] == true);
+        assert(gimbal_ack["data"]["state"] == "running");
+        assert(gimbal_ack["data"]["estimated_timeout_ms"] == 30000);
+        assert(gimbal_ack["data"]["task_id"].get<std::string>().find("gimbal_") == 0);
 
         json end_resp = parseResponse(online_server.handleCommand(
             R"({"cmd":"session_control","id":45,"data":{"action":"end"}})"));
@@ -485,15 +561,18 @@ int main() {
         assert(resp["data"]["gimbal_enabled"] == true);
         assert(resp["data"]["normal_channels"] == json::array({"SCREEN", "BAND", "SOUND"}));
         assert(resp["data"]["silent_channels"] == json::array({"SCREEN", "BAND"}));
+        assert(resp["data"]["notification_mode"] == "normal");
+        assert(resp["data"]["power_profile"] == "go");
         std::cout << "  get_preferences defaults: OK\n";
     }
 
     // Test 11: update_preferences
     {
         json resp = parseResponse(server.handleCommand(
-            R"({"cmd":"update_preferences","id":11,"data":{"system_mode":1,"default_focus_duration_min":35,"sound_volume":0.25,"normal_channels_mask":3,"silent_channels_mask":2}})"));
+            R"({"cmd":"update_preferences","id":11,"data":{"notification_mode":"silent","default_focus_duration_min":35,"sound_volume":0.25,"normal_channels_mask":3,"silent_channels_mask":2}})"));
         assertSuccess(resp, 11);
-        assert(resp["data"]["system_mode"] == 1);
+        assert(resp["data"]["notification_mode"] == "silent");
+        assert(resp["data"]["power_profile"] == "go");
         assert(resp["data"]["default_focus_duration_min"] == 35);
         assert(resp["data"]["sound_volume"] == 0.25f);
         assert(policy.getModeManager().getMode() == SystemMode::SILENT);
@@ -575,6 +654,10 @@ int main() {
             R"({"cmd":"get_preferences","id":12})"));
         assertSuccess(resp, 12);
         assert(resp["data"].contains("system_mode"));
+        assert(resp["data"].contains("notification_mode"));
+        assert(resp["data"].contains("power_profile"));
+        assert(resp["data"]["notification_mode"] == "silent");
+        assert(resp["data"]["power_profile"] == "go");
         assert(resp["data"].contains("vibration_strength"));
         assert(resp["data"].contains("sound_volume"));
         assert(resp["data"].contains("led_brightness"));
@@ -675,7 +758,24 @@ int main() {
             R"({"cmd":"phone_sync","id":15,"data":{"is_in_use":false,"distraction_level":0}})"));
         assertSuccess(resp, 15);
         assert(resp["data"]["action_taken"] == false);
+        PhoneUsageSignal sig;
+        assert(store.consumePhoneSignal(sig));
+        assert(sig.active == false);
+        assert(sig.distraction_level == 0);
         std::cout << "  phone_sync (not in use): OK\n";
+    }
+
+    // Test 15b: phone_sync allows learning/level 0 as a non-distraction signal.
+    {
+        json resp = parseResponse(server.handleCommand(
+            R"({"cmd":"phone_sync","id":151,"data":{"is_in_use":true,"app_category":"learning","usage_state":"learning","distraction_level":0,"app_name":"com.edgefocus.app"}})"));
+        assertSuccess(resp, 151);
+        PhoneUsageSignal sig;
+        assert(store.consumePhoneSignal(sig));
+        assert(sig.active == true);
+        assert(sig.distraction_level == 0);
+        assert(sig.usage_state == PhoneUsageState::LEARNING);
+        std::cout << "  phone_sync learning level 0: OK\n";
     }
 
     // Test 16: phone_sync must not expose local stats mutation shortcuts.
@@ -801,6 +901,21 @@ int main() {
         assert(resp["data"].contains("data_base64"));
         assert(resp["data"].contains("quality"));
         std::cout << "  get_camera_preview_image: OK\n";
+    }
+
+    // Test 17e: upload_local_session stores by session_id idempotently.
+    {
+        json first = parseResponse(server.handleCommand(
+            R"({"cmd":"upload_local_session","id":174,"data":{"session_id":"app_local_1","start_time_ms":1000,"end_time_ms":61000,"total_duration":60,"focus_duration":55,"distraction_count":2,"reminder_count":1,"phone_distraction_count":2,"source":"app_local"}})"));
+        assertSuccess(first, 174);
+        assert(first["data"]["stored"] == true);
+        assert(first["data"]["already_exists"] == false);
+        json second = parseResponse(server.handleCommand(
+            R"({"cmd":"upload_local_session","id":175,"data":{"session_id":"app_local_1","start_time_ms":1000,"end_time_ms":61000,"total_duration":60,"focus_duration":55,"distraction_count":2,"reminder_count":1,"phone_distraction_count":2,"source":"app_local"}})"));
+        assertSuccess(second, 175);
+        assert(second["data"]["stored"] == true);
+        assert(second["data"]["already_exists"] == true);
+        std::cout << "  upload_local_session idempotent: OK\n";
     }
 
     // Test 18: session_feedback

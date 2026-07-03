@@ -57,6 +57,8 @@ struct BehaviorContext {
 
 struct DeviceStatus {
     SystemMode  system_mode = SystemMode::NORMAL;
+    NotificationMode notification_mode = NotificationMode::NORMAL;
+    PowerProfile power_profile = PowerProfile::GO;
     bool        camera_ok = false;
     bool        bracelet_connected = false;
     bool        ble_enabled = false;
@@ -130,6 +132,8 @@ struct DemoOverride {
 
 struct Preferences {
     int         system_mode = 0;
+    NotificationMode notification_mode = NotificationMode::NORMAL;
+    PowerProfile power_profile = PowerProfile::GO;
     int         away_timeout_min = 15;
     int         default_focus_duration_min = 25;
     float       vibration_strength = 0.5f;

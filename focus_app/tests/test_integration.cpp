@@ -637,7 +637,12 @@ void test_timer_completion_report_snapshot() {
     auto pushed = json::parse(pushed_event);
     CHECK(pushed["cmd"] == "push_timer_complete", "Timer completion pushes push_timer_complete");
     CHECK(pushed["data"]["session_id"] == "timer_complete_session", "Timer push carries session_id");
+    CHECK(pushed["data"].contains("start_time_ms"), "Timer push carries start_time_ms");
+    CHECK(pushed["data"].contains("end_time_ms"), "Timer push carries end_time_ms");
+    CHECK(pushed["data"].contains("total_duration"), "Timer push carries total_duration");
+    CHECK(pushed["data"].contains("focus_duration"), "Timer push carries focus_duration");
     CHECK(pushed["data"]["target_duration_ms"] == 1000, "Timer push carries target_duration_ms");
+    CHECK(pushed["data"]["end_reason"] == "timer_completed", "Timer push carries timer_completed reason");
 
     behavior.runOnce(ctx);
     snap = store.snapshot();
@@ -706,6 +711,11 @@ void test_away_timeout_uses_authoritative_session_end() {
     auto pushed = json::parse(pushed_event);
     CHECK(pushed["cmd"] == "push_session_end", "Away timeout pushes push_session_end");
     CHECK(pushed["data"]["session_id"] == started.session.session_id, "Away timeout push carries session_id");
+    CHECK(pushed["data"].contains("start_time_ms"), "Away timeout push carries start_time_ms");
+    CHECK(pushed["data"].contains("end_time_ms"), "Away timeout push carries end_time_ms");
+    CHECK(pushed["data"].contains("total_duration"), "Away timeout push carries total_duration");
+    CHECK(pushed["data"].contains("focus_duration"), "Away timeout push carries focus_duration");
+    CHECK(pushed["data"]["end_reason"] == "away_timeout", "Away timeout push carries end reason");
 }
 
 // ============================================================================

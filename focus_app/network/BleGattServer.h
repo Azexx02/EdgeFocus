@@ -10,6 +10,7 @@
 #include <mutex>
 #include <vector>
 #include <cstdint>
+#include <cstddef>
 #include <atomic>
 
 namespace edgefocus {
@@ -31,6 +32,11 @@ public:
     std::string handleCommand(const std::string& json_cmd);
     void pushEvent(const std::string& event_type, const std::string& json_data);
     bool isPhoneConnected() const { return phone_connected_.load(); }
+    static std::vector<std::string> makeChunkPayloadsForTest(
+        const std::string& payload,
+        int request_id,
+        bool push,
+        std::size_t chunk_size);
 
     void setPhoneConnected(bool connected) { phone_connected_.store(connected); }
 

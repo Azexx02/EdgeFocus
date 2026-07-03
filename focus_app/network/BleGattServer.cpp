@@ -4,6 +4,8 @@
 #include "app/SessionController.h"
 
 #include <chrono>
+#include <algorithm>
+#include <nlohmann/json.hpp>
 #include <thread>
 #include <vector>
 
@@ -23,10 +25,36 @@ constexpr const char* kAdapterPath = "/org/bluez/hci0";
 constexpr const char* kServiceUuid = "0000ff00-0000-1000-8000-00805f9b34fb";
 constexpr const char* kTxUuid = "0000ff01-0000-1000-8000-00805f9b34fb";
 constexpr const char* kRxUuid = "0000ff02-0000-1000-8000-00805f9b34fb";
+constexpr std::size_t kChunkPayloadBytes = 96;
+constexpr std::size_t kDirectPayloadBytes = 180;
 
 int64_t monotonicMs() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+std::string base64Encode(const std::string& input) {
+    static constexpr char table[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    int val = 0;
+    int valb = -6;
+    for (unsigned char c : input) {
+        val = (val << 8) + c;
+        valb += 8;
+        while (valb >= 0) {
+            out.push_back(table[(val >> valb) & 0x3F]);
+            valb -= 6;
+        }
+    }
+    if (valb > -6) out.push_back(table[((val << 8) >> (valb + 8)) & 0x3F]);
+    while (out.size() % 4) out.push_back('=');
+    return out;
+}
+
+std::string chunkIdFor(bool push, int request_id) {
+    return std::string(push ? "push_" : "resp_") + std::to_string(request_id) +
+           "_" + std::to_string(monotonicMs());
 }
 
 #if defined(__linux__) && defined(EDGEFOCUS_WITH_BLUEZ)
@@ -162,6 +190,38 @@ void BleGattServer::shutdown(AppContext& /*ctx*/) {
 
 std::string BleGattServer::handleCommand(const std::string& json_cmd) {
     return app_commands_.handleCommand(json_cmd);
+}
+
+std::vector<std::string> BleGattServer::makeChunkPayloadsForTest(
+    const std::string& payload,
+    int request_id,
+    bool push,
+    std::size_t chunk_size) {
+    const std::size_t safe_chunk_size = std::max<std::size_t>(1, chunk_size);
+    const int total = static_cast<int>((payload.size() + safe_chunk_size - 1) / safe_chunk_size);
+    const std::string chunk_id = chunkIdFor(push, request_id);
+    std::vector<std::string> chunks;
+    chunks.reserve(total);
+
+    for (int seq = 0; seq < total; ++seq) {
+        const std::size_t offset = static_cast<std::size_t>(seq) * safe_chunk_size;
+        const auto part = payload.substr(offset, safe_chunk_size);
+        nlohmann::json chunk_data = {
+            {"chunk_id", chunk_id},
+            {"seq", seq},
+            {"total", total},
+            {"encoding", "base64_utf8"},
+            {"data", base64Encode(part)}
+        };
+        if (push) {
+            chunks.push_back(nlohmann::json{{"cmd", "push_chunk"}, {"data", chunk_data}}.dump());
+        } else {
+            chunk_data["status"] = "chunk";
+            chunk_data["id"] = request_id;
+            chunks.push_back(chunk_data.dump());
+        }
+    }
+    return chunks;
 }
 
 // ---------------------------------------------------------------------------
@@ -608,11 +668,26 @@ void BleGattServer::shutdownBluez() {
 }
 
 void BleGattServer::notifyBluez(const std::string& payload) {
+    std::vector<std::string> payloads;
+    if (payload.size() > kDirectPayloadBytes) {
+        bool is_push = false;
+        int request_id = 0;
+        auto parsed = nlohmann::json::parse(payload, nullptr, false);
+        if (!parsed.is_discarded()) {
+            is_push = parsed.contains("cmd");
+            request_id = parsed.value("id", 0);
+        }
+        payloads = makeChunkPayloadsForTest(payload, request_id, is_push, kChunkPayloadBytes);
+    } else {
+        payloads.push_back(payload);
+    }
+
+    for (const auto& outbound : payloads) {
     GDBusConnection* connection = nullptr;
     bool should_notify = false;
     {
         std::lock_guard<std::mutex> lock(bluez_mutex_);
-        rx_value_ = payload;
+        rx_value_ = outbound;
         connection = static_cast<GDBusConnection*>(bluez_connection_);
         should_notify = bluez_ready_ && rx_notifying_ && connection != nullptr;
         if (connection) g_object_ref(connection);
@@ -625,7 +700,7 @@ void BleGattServer::notifyBluez(const std::string& payload) {
 
     GVariantBuilder changed;
     g_variant_builder_init(&changed, G_VARIANT_TYPE("a{sv}"));
-    addBytesProp(&changed, "Value", payload);
+    addBytesProp(&changed, "Value", outbound);
 
     GVariantBuilder invalidated;
     g_variant_builder_init(&invalidated, G_VARIANT_TYPE("as"));
@@ -640,6 +715,10 @@ void BleGattServer::notifyBluez(const std::string& payload) {
         if (error) g_error_free(error);
     }
     g_object_unref(connection);
+    if (payloads.size() > 1) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(8));
+    }
+    }
 }
 #endif
 

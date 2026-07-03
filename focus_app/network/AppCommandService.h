@@ -6,7 +6,13 @@
 #include "policy/ModeManager.h"
 
 #include <nlohmann/json.hpp>
+#include <atomic>
+#include <cstdint>
+#include <mutex>
 #include <string>
+#include <thread>
+#include <utility>
+#include <vector>
 
 namespace edgefocus {
 
@@ -17,6 +23,7 @@ public:
     AppCommandService(SystemStateStore& store, SQLiteStore& sqlite_store,
                       ReminderPolicy& reminder_policy, ModeManager& mode_mgr,
                       GimbalMonitor* gimbal_monitor = nullptr);
+    ~AppCommandService();
 
     void loadPreferences();
     std::string handleCommand(const std::string& json_cmd);
@@ -42,6 +49,7 @@ private:
     std::string handleUpdatePreferences(const json& data, int req_id);
     std::string handleReminderAck(const json& data, int req_id);
     std::string handlePhoneSync(const json& data, int req_id);
+    std::string handleUploadLocalSession(const json& data, int req_id);
     std::string handleGetConsoleData(int req_id);
     std::string handleSessionFeedback(const json& data, int req_id);
     std::string handleGetSessionHistory(const json& data, int req_id);
@@ -49,6 +57,15 @@ private:
     std::string handleGetGimbalStatus(int req_id);
     std::string handleGimbalControl(const json& data, int req_id);
     std::string handleGetCameraPreviewImage(int req_id);
+    std::string startGimbalTask(const std::string& action,
+                                std::vector<std::pair<std::string, int>> commands,
+                                int req_id);
+    void joinCompletedGimbalTaskLocked();
+
+    std::mutex gimbal_task_mutex_;
+    std::thread gimbal_task_thread_;
+    std::atomic<bool> gimbal_task_running_{false};
+    std::atomic<int64_t> gimbal_task_seq_{0};
 };
 
 } // namespace edgefocus

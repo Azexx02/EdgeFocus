@@ -25,7 +25,7 @@ struct ParsedPhoneSync {
 };
 
 inline int normalizePhoneDistractionLevel(int level) {
-    if (level < 1) return 1;
+    if (level < 0) return 0;
     if (level > 3) return 3;
     return level;
 }
