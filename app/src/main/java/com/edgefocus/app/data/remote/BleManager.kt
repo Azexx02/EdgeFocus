@@ -6,10 +6,14 @@ import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothGattCharacteristic
+import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothManager
+import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
+import android.bluetooth.le.ScanSettings
 import android.content.Context
+import android.os.Build
 import android.util.Log
 import com.edgefocus.app.domain.model.DeviceStatus
 import com.edgefocus.app.domain.model.FocusState
@@ -45,7 +49,7 @@ class BleManager @Inject constructor(
         private const val TAG = "BleManager"
         private const val WRITE_TIMEOUT_MS = 5000L
         private const val REQUESTED_MTU = 517
-        private val DEVICE_NAME_FILTERS = listOf("EdgeFocus", "ESP32")
+        private const val BLUETOOTH_STATUS_SUCCESS = 0
 
         val SERVICE_UUID: UUID = UUID.fromString("0000ff00-0000-1000-8000-00805f9b34fb")
         val CHAR_WRITE_UUID: UUID = UUID.fromString("0000ff01-0000-1000-8000-00805f9b34fb")
@@ -84,6 +88,8 @@ class BleManager @Inject constructor(
     val discoveredDevices: StateFlow<List<DiscoveredDevice>> = _discoveredDevices.asStateFlow()
 
     private var targetMacAddress: String = ""
+    @Volatile
+    private var autoConnectStoredTargetDuringScan = true
     @Volatile
     private var simulatedConnected = false
     @Volatile
@@ -179,25 +185,22 @@ class BleManager @Inject constructor(
             val deviceName = result.scanRecord?.deviceName ?: result.device.name.orEmpty()
             val deviceAddress = result.device.address
 
-            if (targetMacAddress.isNotEmpty()) {
-                if (deviceAddress == targetMacAddress) {
-                    Log.d(TAG, "Found target MAC: $deviceAddress")
-                    bluetoothAdapter?.bluetoothLeScanner?.stopScan(this)
-                    _connectionState.value = ConnectionState.CONNECTING
-                    connectToDevice(result.device)
-                }
+            val scanDecision = BleScanFilter.decide(
+                deviceName = deviceName,
+                deviceAddress = deviceAddress,
+                targetMacAddress = targetMacAddress,
+                allowAutoConnectTarget = autoConnectStoredTargetDuringScan
+            )
+
+            if (scanDecision.shouldAutoConnectTarget) {
+                Log.d(TAG, "Found target MAC: $deviceAddress")
+                bluetoothAdapter?.bluetoothLeScanner?.stopScan(this)
+                _connectionState.value = ConnectionState.CONNECTING
+                connectToDevice(result.device)
                 return
             }
 
-            val hasExpectedName = DEVICE_NAME_FILTERS.any {
-                deviceName.contains(it, ignoreCase = true)
-            }
-            val advertisesEdgeFocusService = result.scanRecord
-                ?.serviceUuids
-                ?.any { it.uuid == SERVICE_UUID } == true
-
-            // Initial binding requires both the product name and the advertised GATT service.
-            if (!hasExpectedName || !advertisesEdgeFocusService) {
+            if (!scanDecision.shouldShowInDiscoveredList) {
                 return
             }
 
@@ -218,6 +221,11 @@ class BleManager @Inject constructor(
     private val gattCallback = object : BluetoothGattCallback() {
         @SuppressLint("MissingPermission")
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
+            if (!isCurrentGatt(gatt)) {
+                Log.d(TAG, "Ignoring callback from stale GATT device")
+                gatt.close()
+                return
+            }
             if (newState == BluetoothGatt.STATE_CONNECTED) {
                 if (status != BluetoothGatt.GATT_SUCCESS) {
                     Log.e(TAG, "Connection failed with GATT status: $status")
@@ -232,12 +240,19 @@ class BleManager @Inject constructor(
                 }
                 Log.d(TAG, "Connected to GATT server")
                 _connectionState.value = ConnectionState.CONNECTING
-                if (!gatt.requestMtu(REQUESTED_MTU)) {
-                    gatt.discoverServices()
-                }
+                requestMtuOrDiscoverServices(gatt)
             } else if (newState == BluetoothGatt.STATE_DISCONNECTED) {
                 Log.d(TAG, "Disconnected from GATT server (status: $status)")
-                _connectionState.value = ConnectionState.DISCONNECTED
+                val previousState = _connectionState.value
+                _connectionState.value = if (BleGattConnectionPolicy.shouldKeepErrorOnDisconnected(
+                        previousState = previousState,
+                        gattStatusSuccessful = status == BluetoothGatt.GATT_SUCCESS
+                    )
+                ) {
+                    ConnectionState.ERROR
+                } else {
+                    ConnectionState.DISCONNECTED
+                }
                 gatt.close()
                 synchronized(writeLock) {
                     bluetoothGatt = null
@@ -254,11 +269,13 @@ class BleManager @Inject constructor(
         }
 
         override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
+            if (!isCurrentGatt(gatt)) return
             Log.d(TAG, "MTU changed: mtu=$mtu, status=$status")
-            gatt.discoverServices()
+            discoverServices(gatt)
         }
 
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
+            if (!isCurrentGatt(gatt)) return
             if (status == BluetoothGatt.GATT_SUCCESS) {
                 val service = gatt.getService(SERVICE_UUID)
                 synchronized(writeLock) {
@@ -267,30 +284,28 @@ class BleManager @Inject constructor(
                 }
 
                 if (writeCharacteristic == null || notifyCharacteristic == null) {
-                    Log.e(TAG, "Required BLE characteristics not found")
-                    _connectionState.value = ConnectionState.ERROR
+                    failGattInitialization(gatt, "Required BLE characteristics not found")
                     return
                 }
 
                 notifyCharacteristic?.let { char ->
-                    gatt.setCharacteristicNotification(char, true)
-                    val descriptor = char.getDescriptor(DESCRIPTOR_UUID)
-                    if (descriptor == null) {
-                        Log.e(TAG, "Notify descriptor not found")
-                        _connectionState.value = ConnectionState.ERROR
+                    if (!gatt.setCharacteristicNotification(char, true)) {
+                        failGattInitialization(gatt, "Failed to enable local characteristic notification")
                         return
                     }
-                    descriptor.value = android.bluetooth.BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-                    if (!gatt.writeDescriptor(descriptor)) {
-                        Log.e(TAG, "Failed to write notify descriptor")
-                        _connectionState.value = ConnectionState.ERROR
+                    val descriptor = char.getDescriptor(DESCRIPTOR_UUID)
+                    if (descriptor == null) {
+                        failGattInitialization(gatt, "Notify descriptor not found")
+                        return
+                    }
+                    if (!writeNotifyDescriptor(gatt, descriptor)) {
+                        failGattInitialization(gatt, "Failed to write notify descriptor")
                         return
                     }
                 }
                 Log.d(TAG, "Services discovered, enabling notifications")
             } else {
-                Log.e(TAG, "Service discovery failed: $status")
-                _connectionState.value = ConnectionState.ERROR
+                failGattInitialization(gatt, "Service discovery failed: $status")
             }
         }
 
@@ -299,12 +314,12 @@ class BleManager @Inject constructor(
             descriptor: android.bluetooth.BluetoothGattDescriptor,
             status: Int
         ) {
+            if (!isCurrentGatt(gatt)) return
             if (descriptor.uuid == DESCRIPTOR_UUID && status == BluetoothGatt.GATT_SUCCESS) {
                 Log.d(TAG, "Notifications enabled")
                 _connectionState.value = ConnectionState.CONNECTED
             } else {
-                Log.e(TAG, "Descriptor write failed: $status")
-                _connectionState.value = ConnectionState.ERROR
+                failGattInitialization(gatt, "Descriptor write failed: $status")
             }
         }
 
@@ -312,6 +327,7 @@ class BleManager @Inject constructor(
             gatt: BluetoothGatt,
             characteristic: BluetoothGattCharacteristic
         ) {
+            if (!isCurrentGatt(gatt)) return
             if (characteristic.uuid == CHAR_NOTIFY_UUID) {
                 val data = characteristic.value
                 logBle("RECEIVE", dataToString(data))
@@ -324,6 +340,7 @@ class BleManager @Inject constructor(
             characteristic: BluetoothGattCharacteristic,
             status: Int
         ) {
+            if (!isCurrentGatt(gatt)) return
             val success = status == BluetoothGatt.GATT_SUCCESS
             if (!success) {
                 Log.e(TAG, "Characteristic write failed: $status")
@@ -336,19 +353,43 @@ class BleManager @Inject constructor(
     }
 
     @SuppressLint("MissingPermission")
-    fun startScan() {
+    fun startScan(autoConnectStoredTarget: Boolean = true) {
         if (bluetoothAdapter?.isEnabled != true) {
             Log.e(TAG, "Bluetooth is not enabled")
             _connectionState.value = ConnectionState.ERROR
             return
         }
-        _connectionState.value = ConnectionState.SCANNING
-        bluetoothAdapter.bluetoothLeScanner?.startScan(scanCallback)
+        val scanner = bluetoothAdapter.bluetoothLeScanner
+        if (scanner == null) {
+            Log.e(TAG, "Bluetooth LE scanner is not available")
+            _connectionState.value = ConnectionState.ERROR
+            return
+        }
+        try {
+            autoConnectStoredTargetDuringScan = autoConnectStoredTarget
+            _connectionState.value = ConnectionState.SCANNING
+            val settings = ScanSettings.Builder()
+                .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+                .build()
+            scanner.startScan(emptyList<ScanFilter>(), settings, scanCallback)
+        } catch (e: SecurityException) {
+            Log.e(TAG, "Bluetooth scan permission denied: ${e.message}", e)
+            _connectionState.value = ConnectionState.ERROR
+        } catch (e: IllegalStateException) {
+            Log.e(TAG, "Bluetooth scan could not be started: ${e.message}", e)
+            _connectionState.value = ConnectionState.ERROR
+        }
     }
 
     @SuppressLint("MissingPermission")
     fun stopScan() {
-        bluetoothAdapter?.bluetoothLeScanner?.stopScan(scanCallback)
+        try {
+            bluetoothAdapter?.bluetoothLeScanner?.stopScan(scanCallback)
+        } catch (e: SecurityException) {
+            Log.e(TAG, "Bluetooth scan stop permission denied: ${e.message}", e)
+        } catch (e: IllegalStateException) {
+            Log.e(TAG, "Bluetooth scan could not be stopped: ${e.message}", e)
+        }
         if (_connectionState.value == ConnectionState.SCANNING) {
             _connectionState.value = ConnectionState.DISCONNECTED
         }
@@ -356,7 +397,130 @@ class BleManager @Inject constructor(
 
     @SuppressLint("MissingPermission")
     private fun connectToDevice(device: BluetoothDevice) {
-        bluetoothGatt = device.connectGatt(context, false, gattCallback)
+        val previousGatt = synchronized(writeLock) {
+            val gatt = bluetoothGatt
+            bluetoothGatt = null
+            writeCharacteristic = null
+            notifyCharacteristic = null
+            pendingWriteCallback?.invoke(false)
+            pendingWriteCallback = null
+            pendingResponseCallbacks.values.forEach {
+                it(Result.failure(Exception("BLE reconnecting")))
+            }
+            pendingResponseCallbacks.clear()
+            gatt
+        }
+        previousGatt?.let { gatt ->
+            try {
+                gatt.disconnect()
+            } catch (e: SecurityException) {
+                Log.e(TAG, "Bluetooth disconnect permission denied before reconnect: ${e.message}", e)
+            } catch (e: IllegalStateException) {
+                Log.e(TAG, "Bluetooth disconnect failed before reconnect: ${e.message}", e)
+            }
+            gatt.close()
+        }
+
+        val gatt = try {
+            if (BleGattConnectionPolicy.shouldUseExplicitLeTransport(Build.VERSION.SDK_INT)) {
+                device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
+            } else {
+                device.connectGatt(context, false, gattCallback)
+            }
+        } catch (e: SecurityException) {
+            Log.e(TAG, "Bluetooth connect permission denied: ${e.message}", e)
+            null
+        } catch (e: IllegalArgumentException) {
+            Log.e(TAG, "Invalid Bluetooth device for connection: ${e.message}", e)
+            null
+        } catch (e: IllegalStateException) {
+            Log.e(TAG, "Bluetooth connection could not be started: ${e.message}", e)
+            null
+        }
+
+        if (gatt == null) {
+            _connectionState.value = ConnectionState.ERROR
+            return
+        }
+
+        synchronized(writeLock) {
+            bluetoothGatt = gatt
+        }
+    }
+
+    private fun isCurrentGatt(gatt: BluetoothGatt): Boolean {
+        return synchronized(writeLock) {
+            bluetoothGatt == gatt
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun requestMtuOrDiscoverServices(gatt: BluetoothGatt) {
+        try {
+            if (!gatt.requestMtu(REQUESTED_MTU)) {
+                discoverServices(gatt)
+            }
+        } catch (e: SecurityException) {
+            failGattInitialization(gatt, "Bluetooth permission denied while requesting MTU: ${e.message}")
+        } catch (e: IllegalStateException) {
+            failGattInitialization(gatt, "Failed to request MTU: ${e.message}")
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun discoverServices(gatt: BluetoothGatt) {
+        try {
+            if (!gatt.discoverServices()) {
+                failGattInitialization(gatt, "Failed to start BLE service discovery")
+            }
+        } catch (e: SecurityException) {
+            failGattInitialization(gatt, "Bluetooth permission denied while discovering services: ${e.message}")
+        } catch (e: IllegalStateException) {
+            failGattInitialization(gatt, "Failed to discover BLE services: ${e.message}")
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun writeNotifyDescriptor(
+        gatt: BluetoothGatt,
+        descriptor: BluetoothGattDescriptor
+    ): Boolean {
+        return if (BleGattConnectionPolicy.shouldUseValueBasedDescriptorWrite(Build.VERSION.SDK_INT)) {
+            gatt.writeDescriptor(
+                descriptor,
+                BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+            ) == BLUETOOTH_STATUS_SUCCESS
+        } else {
+            descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+            gatt.writeDescriptor(descriptor)
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun failGattInitialization(gatt: BluetoothGatt, message: String) {
+        Log.e(TAG, message)
+        _connectionState.value = ConnectionState.ERROR
+        try {
+            gatt.disconnect()
+        } catch (e: SecurityException) {
+            Log.e(TAG, "Bluetooth disconnect permission denied after failure: ${e.message}", e)
+        } catch (e: IllegalStateException) {
+            Log.e(TAG, "Bluetooth disconnect failed after initialization error: ${e.message}", e)
+        }
+        gatt.close()
+        synchronized(writeLock) {
+            if (bluetoothGatt == gatt) {
+                bluetoothGatt = null
+                writeCharacteristic = null
+                notifyCharacteristic = null
+            }
+            pendingWriteCallback?.invoke(false)
+            pendingWriteCallback = null
+            pendingResponseCallbacks.values.forEach {
+                it(Result.failure(Exception(message)))
+            }
+            pendingResponseCallbacks.clear()
+        }
     }
 
     @SuppressLint("MissingPermission")
@@ -538,12 +702,38 @@ class BleManager @Inject constructor(
 
     @SuppressLint("MissingPermission")
     fun connectToDiscoveredDevice(address: String) {
-        if (_connectionState.value == ConnectionState.CONNECTING ||
-            _connectionState.value == ConnectionState.CONNECTED) {
+        val adapter = bluetoothAdapter
+        if (adapter?.isEnabled != true) {
+            Log.e(TAG, "Bluetooth is not enabled")
+            _connectionState.value = ConnectionState.ERROR
             return
         }
-        val device = bluetoothAdapter?.getRemoteDevice(address) ?: return
-        bluetoothAdapter?.bluetoothLeScanner?.stopScan(scanCallback)
+        targetMacAddress = address
+        val currentGattAddress = synchronized(writeLock) {
+            bluetoothGatt?.device?.address
+        }
+        if (BleGattConnectionPolicy.shouldSkipConnectionRequest(
+                currentState = _connectionState.value,
+                currentGattAddress = currentGattAddress,
+                requestedAddress = address
+            )
+        ) {
+            return
+        }
+        val device = try {
+            adapter.getRemoteDevice(address)
+        } catch (e: IllegalArgumentException) {
+            Log.e(TAG, "Invalid Bluetooth address: $address", e)
+            _connectionState.value = ConnectionState.ERROR
+            return
+        }
+        try {
+            adapter.bluetoothLeScanner?.stopScan(scanCallback)
+        } catch (e: SecurityException) {
+            Log.e(TAG, "Bluetooth scan stop permission denied before connect: ${e.message}", e)
+        } catch (e: IllegalStateException) {
+            Log.e(TAG, "Bluetooth scan could not be stopped before connect: ${e.message}", e)
+        }
         _connectionState.value = ConnectionState.CONNECTING
         connectToDevice(device)
     }
@@ -615,11 +805,23 @@ class BleManager @Inject constructor(
     override suspend fun getPreferences(): Result<ByteArray> {
         if (simulatedConnected) {
             return Result.success(
-                """{"status":"success","data":{"system_mode":0,"away_timeout_min":15,"vibration_strength":0.5,"led_brightness":75,"reminder_sensitivity":0.5}}"""
+                """{"status":"success","data":{"system_mode":0,"away_timeout_min":15,"default_focus_duration_min":25,"vibration_strength":0.5,"sound_volume":0.7,"led_brightness":75,"reminder_sensitivity":0.5,"normal_channels":["screen","band","sound"],"silent_channels":["screen","band"],"screen_output_route":"board","sound_output_route":"board","gimbal_enabled":true}}"""
                     .toByteArray(Charsets.UTF_8)
             )
         }
         val json = """{"cmd":"get_preferences"}"""
+        return sendDataAndAwait(json.toByteArray(Charsets.UTF_8))
+    }
+
+    @SuppressLint("MissingPermission")
+    override suspend fun getCameraPreviewImage(): Result<ByteArray> {
+        val json = BoardJsonParser.buildCommand("get_camera_preview_image").toString()
+        return sendDataAndAwait(json.toByteArray(Charsets.UTF_8))
+    }
+
+    @SuppressLint("MissingPermission")
+    override suspend fun getGimbalStatus(): Result<ByteArray> {
+        val json = BoardJsonParser.buildCommand("get_gimbal_status").toString()
         return sendDataAndAwait(json.toByteArray(Charsets.UTF_8))
     }
 
@@ -665,28 +867,39 @@ class BleManager @Inject constructor(
             "stop" -> "end"
             else -> action
         }
-        val data = buildString {
-            append("{\"cmd\":\"session_control\",\"data\":{\"action\":\"$actionName\"")
-            targetDurationMin?.let { append(",\"target_duration_min\":$it") }
-            append("}}")
-        }
+        val data = BoardJsonParser.buildSessionControl(actionName, targetDurationMin).toString()
         return sendDataAndAwait(data.toByteArray(Charsets.UTF_8))
     }
 
     @SuppressLint("MissingPermission")
     override suspend fun updatePreferences(key: String, value: String): Result<ByteArray> {
         val typedValue: Any = when (key) {
-            "system_mode", "away_timeout_min", "led_brightness" -> value.toIntOrNull() ?: value
-            "vibration_strength", "reminder_sensitivity" -> value.toFloatOrNull() ?: value
+            "system_mode", "away_timeout_min", "led_brightness", "default_focus_duration_min" ->
+                value.toIntOrNull() ?: value
+            "vibration_strength", "reminder_sensitivity", "sound_volume" ->
+                value.toFloatOrNull() ?: value
+            "gimbal_enabled" -> value.toBooleanStrictOrNull() ?: value
             else -> value
         }
-        val data = org.json.JSONObject().apply {
-            put(key, typedValue)
-        }
-        val root = org.json.JSONObject().apply {
-            put("cmd", "update_preferences")
-            put("data", data)
-        }
+        return updatePreferences(mapOf(key to typedValue))
+    }
+
+    @SuppressLint("MissingPermission")
+    override suspend fun updatePreferences(preferences: Map<String, Any?>): Result<ByteArray> {
+        val root = BoardJsonParser.buildUpdatePreferences(preferences)
+        return sendDataAndAwait(root.toString().toByteArray(Charsets.UTF_8))
+    }
+
+    @SuppressLint("MissingPermission")
+    override suspend fun gimbalControl(
+        action: String,
+        xDeg: Number?,
+        yDeg: Number?,
+        speed: Int?,
+        stepDeg: Int?,
+        debug: Boolean?
+    ): Result<ByteArray> {
+        val root = BoardJsonParser.buildGimbalControl(action, xDeg, yDeg, speed, stepDeg, debug)
         return sendDataAndAwait(root.toString().toByteArray(Charsets.UTF_8))
     }
 
@@ -764,10 +977,12 @@ class BleManager @Inject constructor(
 
             when {
                 cmd == "push_state" && eventData != null -> {
+                    val snapshot = BoardJsonParser.parseSessionState(eventData)
+                    pushEventHandlers.forEach { it.onPushStateSnapshot(snapshot) }
                     val stateInt = eventData.optInt("focus_state", 0)
                     val state = when (stateInt) {
                         6 -> com.edgefocus.app.domain.model.TimerState.PAUSED
-                        in 0..5, 7 -> com.edgefocus.app.domain.model.TimerState.RUNNING
+                        in 0..5, 7, 8, 9 -> com.edgefocus.app.domain.model.TimerState.RUNNING
                         else -> com.edgefocus.app.domain.model.TimerState.IDLE
                     }
                     val focusState = FocusState(state = state)
@@ -785,6 +1000,10 @@ class BleManager @Inject constructor(
                         reminderCount = eventData.optInt("reminder_count", 0)
                     )
                     pushEventHandlers.forEach { it.onPushTimerComplete(timerComplete) }
+                }
+                cmd == "push_alert" && eventData != null -> {
+                    val alert = BoardJsonParser.parsePushAlert(eventData)
+                    pushEventHandlers.forEach { it.onPushAlert(alert) }
                 }
             }
         } catch (e: Exception) {

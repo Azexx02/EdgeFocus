@@ -88,7 +88,7 @@ fun DurationSelectorRing(
                 color = MaterialTheme.colorScheme.onSurface
             )
             Text(
-                text = "Drag to set time",
+                text = "拖动设置时长",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

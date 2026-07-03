@@ -8,13 +8,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -69,7 +67,7 @@ fun DashboardScreen(
         ) {
             Spacer(modifier = Modifier.size(48.dp))
             Text(
-                text = "Data Dashboard",
+                text = "数据看板",
                 style = MaterialTheme.typography.headlineMedium
             )
             Icon(
@@ -112,34 +110,24 @@ fun DashboardScreen(
                             modifier = Modifier.size(20.dp)
                         )
                         Text(
-                            "Today",
+                            "今日",
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                    // Bottom: time + sessions on same line
-                    Row(
+                    Column(
                         modifier = Modifier.align(Alignment.BottomStart),
-                        verticalAlignment = Alignment.Bottom
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        Row(verticalAlignment = Alignment.Bottom) {
-                            Text(
-                                formatHours(uiState.todayFocusSeconds),
-                                style = MaterialTheme.typography.headlineLarge,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                            Text(
-                                "h",
-                                style = MaterialTheme.typography.headlineMedium,
-                                color = MaterialTheme.colorScheme.primary
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            "${uiState.todaySessionCount} sessions",
+                            "${formatHours(uiState.todayFocusSeconds)}小时",
+                            style = MaterialTheme.typography.headlineLarge,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        Text(
+                            "${uiState.todaySessionCount} 次会话",
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(bottom = 4.dp)
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
@@ -171,49 +159,17 @@ fun DashboardScreen(
                             modifier = Modifier.size(20.dp)
                         )
                         Text(
-                            "This Week",
+                            "本周",
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                    // Bottom: time
-                    Row(
+                    Text(
                         modifier = Modifier.align(Alignment.BottomStart),
-                        verticalAlignment = Alignment.Bottom
-                    ) {
-                        Text(
-                            formatHours(uiState.weekFocusSeconds),
-                            style = MaterialTheme.typography.headlineLarge,
-                            color = MaterialTheme.colorScheme.onBackground
-                        )
-                        Text(
-                            "h",
-                            style = MaterialTheme.typography.headlineMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    // Decorative bars
-                    Row(
-                        modifier = Modifier
-                            .align(Alignment.BottomEnd)
-                            .height(48.dp),
-                        verticalAlignment = Alignment.Bottom,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        val barHeights = listOf(0.6f, 0.3f, 0.8f, 0.5f)
-                        barHeights.forEachIndexed { index, heightFraction ->
-                            Box(
-                                modifier = Modifier
-                                    .width(8.dp)
-                                    .fillMaxHeight(heightFraction)
-                                    .background(
-                                        if (index == 2) MaterialTheme.colorScheme.primary
-                                        else MaterialTheme.colorScheme.surfaceVariant,
-                                        CircleShape
-                                    )
-                            )
-                        }
-                    }
+                        text = "${formatHours(uiState.weekFocusSeconds)}小时",
+                        style = MaterialTheme.typography.headlineLarge,
+                        color = MaterialTheme.colorScheme.onBackground
+                    )
                 }
             }
         }
@@ -229,7 +185,7 @@ fun DashboardScreen(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
-                "Recent Sessions",
+                "最近会话",
                 style = MaterialTheme.typography.headlineMedium
             )
         }
@@ -372,7 +328,7 @@ private fun SessionItem(session: Session, onClick: (Session) -> Unit = {}) {
                         tint = MaterialTheme.colorScheme.onSecondaryContainer
                     )
                     Text(
-                        "Perfect Focus",
+                        "全程专注",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSecondaryContainer
                     )
@@ -395,7 +351,7 @@ private fun SessionItem(session: Session, onClick: (Session) -> Unit = {}) {
                         tint = MaterialTheme.colorScheme.onErrorContainer
                     )
                     Text(
-                        "${session.distractionCount} distractions",
+                        "${session.distractionCount} 次分心",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onErrorContainer
                     )
@@ -412,11 +368,11 @@ private fun formatHours(seconds: Int): String {
 
 private fun formatDurationShort(seconds: Int): String {
     val minutes = seconds / 60
-    return "${minutes}m"
+    return "${minutes} 分钟"
 }
 
 private fun formatDate(timestamp: Long): String {
-    val sdf = SimpleDateFormat("MMM dd, h:mm a", Locale.ENGLISH)
+    val sdf = SimpleDateFormat("M月d日 HH:mm", Locale.CHINA)
     return sdf.format(Date(timestamp))
 }
 
@@ -435,7 +391,7 @@ private fun formatDurationFull(seconds: Int): String {
     val hours = seconds / 3600
     val minutes = (seconds % 3600) / 60
     val secs = seconds % 60
-    return if (hours > 0) "${hours}h ${minutes}m ${secs}s"
-    else if (minutes > 0) "${minutes}m ${secs}s"
-    else "${secs}s"
+    return if (hours > 0) "${hours}小时 ${minutes}分钟 ${secs}秒"
+    else if (minutes > 0) "${minutes}分钟 ${secs}秒"
+    else "${secs}秒"
 }

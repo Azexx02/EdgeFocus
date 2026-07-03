@@ -5,6 +5,7 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.edgefocus.app.data.remote.BleManager
+import com.edgefocus.app.data.remote.BleScanStartPolicy
 import com.edgefocus.app.data.remote.ConnectionState
 import com.edgefocus.app.data.remote.PhoneUsage
 import com.edgefocus.app.data.remote.PushEventHandler
@@ -88,8 +89,14 @@ class BleViewModel @Inject constructor(
     }
 
     fun startScan() {
-        if (!isSimulatingBle()) {
-            bleManager.startScan()
+        val decision = BleScanStartPolicy.decide(isSimulatingBle())
+        if (decision.shouldDisableSimulation) {
+            prefs.edit().putBoolean("simulate_ble", false).apply()
+            bleManager.setSimulatedConnected(false)
+            _simulatedConnectionState.value = ConnectionState.DISCONNECTED
+        }
+        if (decision.shouldStartRealScan) {
+            bleManager.startScan(autoConnectStoredTarget = decision.shouldAutoConnectStoredTarget)
         }
     }
 

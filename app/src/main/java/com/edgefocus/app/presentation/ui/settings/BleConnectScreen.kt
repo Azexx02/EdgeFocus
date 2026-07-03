@@ -53,6 +53,8 @@ fun BleConnectScreen(
     val connectionState by viewModel.connectionState.collectAsState()
     val discoveredDevices by viewModel.discoveredDevices.collectAsState()
     val isConnected = viewModel.isConnected()
+    val progressMessage = bleConnectProgressMessage(connectionState)
+    val errorMessage = bleConnectErrorMessage(connectionState)
 
     var showConfirmDialog by remember { mutableStateOf(false) }
     var selectedDevice by remember { mutableStateOf<Pair<String, String>?>(null) }
@@ -103,14 +105,14 @@ fun BleConnectScreen(
             }
 
             // 扫描按钮
-            if (connectionState == ConnectionState.SCANNING) {
+            if (progressMessage != null) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                    Text("正在扫描 EdgeFocus 设备...")
+                    Text(progressMessage)
                 }
             } else {
                 OutlinedButton(
@@ -123,6 +125,14 @@ fun BleConnectScreen(
                     Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(18.dp))
                     Text("  添加 EdgeFocus 设备")
                 }
+            }
+
+            if (errorMessage != null && !isConnected) {
+                Text(
+                    text = errorMessage,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error
+                )
             }
 
             // 设备列表

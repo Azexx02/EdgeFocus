@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 2,
-    "identityHash": "c1724ac9d6d895b362af70f01889be6b",
+    "identityHash": "eb615c46f993fdec6f3de10d77e71d20",
     "entities": [
       {
         "tableName": "sessions",
@@ -84,7 +84,7 @@
       },
       {
         "tableName": "settings",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `pomodoroDuration` INTEGER NOT NULL, `shortBreakDuration` INTEGER NOT NULL, `longBreakDuration` INTEGER NOT NULL, `sessionsBeforeLongBreak` INTEGER NOT NULL, `useEdgeFocusBoard` INTEGER NOT NULL, `autoRotateNFC` INTEGER NOT NULL, `notificationOnExit` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `pomodoroDuration` INTEGER NOT NULL, `useEdgeFocusBoard` INTEGER NOT NULL, `autoRotateNFC` INTEGER NOT NULL, `notificationOnExit` INTEGER NOT NULL, PRIMARY KEY(`id`))",
         "fields": [
           {
             "fieldPath": "id",
@@ -95,24 +95,6 @@
           {
             "fieldPath": "pomodoroDuration",
             "columnName": "pomodoroDuration",
-            "affinity": "INTEGER",
-            "notNull": true
-          },
-          {
-            "fieldPath": "shortBreakDuration",
-            "columnName": "shortBreakDuration",
-            "affinity": "INTEGER",
-            "notNull": true
-          },
-          {
-            "fieldPath": "longBreakDuration",
-            "columnName": "longBreakDuration",
-            "affinity": "INTEGER",
-            "notNull": true
-          },
-          {
-            "fieldPath": "sessionsBeforeLongBreak",
-            "columnName": "sessionsBeforeLongBreak",
             "affinity": "INTEGER",
             "notNull": true
           },
@@ -214,7 +196,7 @@
     "views": [],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'c1724ac9d6d895b362af70f01889be6b')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'eb615c46f993fdec6f3de10d77e71d20')"
     ]
   }
 }

@@ -119,9 +119,9 @@ fun HomeScreen(
                     )
                 Text(
                     text = when {
-                        !isConnected && useBoard -> "Device Disconnected"
-                        useBoard -> "EdgeFocus Mode"
-                        else -> "Local Mode"
+                        !isConnected && useBoard -> "设备未连接"
+                        useBoard -> "EdgeFocus 模式"
+                        else -> "本地模式"
                     },
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -132,7 +132,7 @@ fun HomeScreen(
                 Icon(
                     if (isConnected) Icons.Default.BluetoothConnected
                     else Icons.Default.BluetoothDisabled,
-                    contentDescription = "Bluetooth",
+                    contentDescription = "蓝牙",
                     tint = if (isConnected) MaterialTheme.colorScheme.primary
                     else MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(20.dp)
@@ -144,7 +144,7 @@ fun HomeScreen(
 
         // Context Tag
         val sessionTypeText = when (uiState.sessionType) {
-            SessionType.WORK -> "Work Session"
+            SessionType.WORK -> "专注会话"
         }
         Row(
             modifier = Modifier
@@ -196,7 +196,7 @@ fun HomeScreen(
         Spacer(modifier = Modifier.height(48.dp))
 
         Text(
-            text = "Sessions Completed: ${uiState.completedSessions}",
+            text = "已完成会话：${uiState.completedSessions}",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -223,7 +223,7 @@ fun HomeScreen(
                     Icon(Icons.Default.PlayArrow, contentDescription = null)
                     Spacer(modifier = Modifier.width(8.dp))
                     Text(
-                        if (useBoard && isConnected) "Start EdgeFocus" else "Start Focus",
+                        if (useBoard && isConnected) "开始 EdgeFocus" else "开始专注",
                         style = MaterialTheme.typography.headlineMedium
                     )
                 }
@@ -255,8 +255,8 @@ fun HomeScreen(
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             if (uiState.timerState == TimerState.RUNNING)
-                                "Pause"
-                            else "Resume",
+                                "暂停"
+                            else "继续",
                             style = MaterialTheme.typography.headlineMedium
                         )
                     }
@@ -277,7 +277,7 @@ fun HomeScreen(
         ) {
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "Waiting for EdgeFocus to confirm the session",
+                text = "正在等待 EdgeFocus 确认会话",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -286,7 +286,7 @@ fun HomeScreen(
         ) {
             Spacer(modifier = Modifier.height(8.dp))
             Text(
-                text = "Connect device to use EdgeFocus mode",
+                text = "连接设备后可使用 EdgeFocus 模式",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

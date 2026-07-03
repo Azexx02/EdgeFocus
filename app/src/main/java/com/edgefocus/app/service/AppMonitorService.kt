@@ -217,7 +217,8 @@ class AppMonitorService : Service() {
             reportBleIfChanged(
                 packageName = packageName,
                 category = "learning",
-                level = 0
+                level = 0,
+                isInUse = false
             )
             return
         }
@@ -228,7 +229,8 @@ class AppMonitorService : Service() {
             reportBleIfChanged(
                 packageName = DESKTOP_OR_BACKGROUND,
                 category = "other",
-                level = 3
+                level = 3,
+                isInUse = false
             )
 
             if (now - lastBackgroundAlert >= BACKGROUND_INTERVAL) {
@@ -288,14 +290,13 @@ class AppMonitorService : Service() {
                 if (now - lastHighDistractionAlert >= HIGH_DISTRACTION_INTERVAL) {
                     lastHighDistractionAlert = now
                     val appName = getAppName(foregroundPackage)
-                    showDistractionNotification("⚠️ 强干扰应用", "请停止使用 $appName！")
+                    showDistractionNotification("强干扰应用", "请停止使用 $appName！")
                 }
             }
             3 -> {
                 // 未分类应用（包括桌面）：每10秒提醒
                 if (now - lastUnclassifiedAlert >= BACKGROUND_INTERVAL) {
                     lastUnclassifiedAlert = now
-                    val appName = getAppName(foregroundPackage)
                     showDistractionNotification("专注中", "请返回 EdgeFocus 继续专注")
                 }
             }
@@ -304,7 +305,7 @@ class AppMonitorService : Service() {
 
     private fun showBackgroundNotification() {
         showAlertNotification(
-            title = "📱 EdgeFocus 专注中",
+            title = "EdgeFocus 专注中",
             message = "您的专注会话正在进行，请返回应用继续专注",
             bigText = "您的专注会话正在进行中。为了保持专注效果，请返回 EdgeFocus 应用。放下手机，专注于当前任务。"
         )
@@ -357,9 +358,10 @@ class AppMonitorService : Service() {
     private suspend fun reportBleIfChanged(
         packageName: String,
         category: String,
-        level: Int
+        level: Int,
+        isInUse: Boolean = true
     ) {
-        val key = "$packageName|$category|$level"
+        val key = "$packageName|$category|$level|$isInUse"
 
         if (key == lastBleReportedKey) {
             return
@@ -376,7 +378,7 @@ class AppMonitorService : Service() {
 
         val result = bleManager.phoneSync(
             PhoneUsage(
-                isInUse = true,
+                isInUse = isInUse,
                 appCategory = category,
                 distractionLevel = level,
                 appName = packageName,
@@ -388,7 +390,7 @@ class AppMonitorService : Service() {
             lastBleReportedKey = key
             appEventLog.log("PHONE_SYNC", "$category, level=$level, pkg=$packageName")
             // 手机干扰计数（level > 0 表示干扰应用）
-            if (level > 0) {
+            if (isInUse && level > 0) {
                 timerStateHolder.incrementPhoneDistraction()
             }
             Log.d(TAG, "BLE phoneSync sent: $key")

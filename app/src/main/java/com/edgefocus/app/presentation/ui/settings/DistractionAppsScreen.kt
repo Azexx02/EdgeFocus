@@ -64,12 +64,12 @@ fun DistractionAppsScreen(
             ) {
                 Icon(
                     Icons.Default.ArrowBack,
-                    contentDescription = "Back",
+                    contentDescription = "返回",
                     tint = MaterialTheme.colorScheme.primary
                 )
             }
             Text(
-                "App Settings",
+                "应用干扰设置",
                 style = MaterialTheme.typography.headlineMedium,
                 color = MaterialTheme.colorScheme.primary
             )
@@ -91,28 +91,28 @@ fun DistractionAppsScreen(
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text(
-                            "Distraction Level Description",
+                            "干扰等级说明",
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onPrimaryContainer,
                             modifier = Modifier.padding(bottom = 8.dp)
                         )
                         Text(
-                            "· Strong: Short videos, games (High frequency)",
+                            "· 强干扰：短视频、游戏（高频提醒）",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onPrimaryContainer
                         )
                         Text(
-                            "· Weak: Social media (Periodic reminders)",
+                            "· 弱干扰：社交媒体（周期提醒）",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onPrimaryContainer
                         )
                         Text(
-                            "· Learning: No reminders",
+                            "· 学习类：不提醒",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onPrimaryContainer
                         )
                         Text(
-                            "· Unselected: Default background processing",
+                            "· 未选择：按后台/未分类处理",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onPrimaryContainer
                         )
@@ -127,13 +127,13 @@ fun DistractionAppsScreen(
                 val learnCount = uiState.distractionLevels.values.count { it == DistractionLevel.LEARNING.value }
 
                 Text(
-                    "Strong: $highCount | Weak: $lowCount | Learn: $learnCount",
+                    "强干扰：$highCount | 弱干扰：$lowCount | 学习类：$learnCount",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(vertical = 8.dp)
                 )
                 Text(
-                    "Installed Apps",
+                    "已安装应用",
                     style = MaterialTheme.typography.headlineMedium,
                     modifier = Modifier.padding(bottom = 8.dp)
                 )

@@ -7,7 +7,15 @@ import androidx.lifecycle.viewModelScope
 import com.edgefocus.app.data.SessionMode
 import com.edgefocus.app.data.TimerStateHolder
 import com.edgefocus.app.data.local.entity.Session
+import com.edgefocus.app.data.remote.BoardJsonParser
+import com.edgefocus.app.data.remote.BoardPreferences
 import com.edgefocus.app.data.remote.BleManager
+import com.edgefocus.app.data.remote.BoardPrecheck
+import com.edgefocus.app.data.remote.BoardSessionPhase
+import com.edgefocus.app.data.remote.CameraPreviewImage
+import com.edgefocus.app.data.remote.GimbalStatus
+import com.edgefocus.app.data.remote.OutputCapability
+import com.edgefocus.app.data.remote.PushAlert
 import com.edgefocus.app.domain.model.TimerState
 import com.edgefocus.app.domain.repository.ISessionRepository
 import com.edgefocus.app.domain.repository.ISettingsRepository
@@ -43,10 +51,30 @@ data class ControlPanelUiState(
     val phoneDistractionCount: Int = 0,
     val vibrationStrength: Float = 0.5f,
     val ledBrightness: Int = 75,
-    val homeMode: Boolean = false,
     val isBoardConnected: Boolean = false,
     val isSyncingWithBoard: Boolean = false,
-    val arePreferencesLoaded: Boolean = false
+    val arePreferencesLoaded: Boolean = false,
+    val sessionId: String? = null,
+    val boardSessionActive: Boolean = false,
+    val boardSessionPaused: Boolean = false,
+    val calibrationCompleted: Boolean = false,
+    val sessionPhase: BoardSessionPhase = BoardSessionPhase.IDLE,
+    val focusState: Int = 0,
+    val elapsedMs: Long = 0L,
+    val precheck: BoardPrecheck? = null,
+    val outputCapability: OutputCapability? = null,
+    val cameraPreview: CameraPreviewImage? = null,
+    val gimbalStatus: GimbalStatus? = null,
+    val lastAlert: PushAlert? = null,
+    val boardErrorMessage: String? = null,
+    val reminderSnapshot: String? = null,
+    val precheckGuidance: String? = null,
+    val focusReason: String? = null,
+    val behaviorContext: String? = null,
+    val soundVolume: Float = 0.7f,
+    val defaultFocusDurationMin: Int = 25,
+    val normalChannels: Set<String> = setOf("screen", "band", "sound"),
+    val silentChannels: Set<String> = setOf("screen", "band")
 )
 
 @HiltViewModel
@@ -92,14 +120,32 @@ class ControlPanelViewModel @Inject constructor(
                         selectedDuration = sharedState.targetDurationMinutes,
                         isBoardConnected = sharedState.isBoardConnected,
                         isSyncingWithBoard = sharedState.isSyncingWithBoard,
+                        sessionId = sharedState.sessionId,
+                        boardSessionActive = sharedState.boardSessionActive,
+                        boardSessionPaused = sharedState.boardSessionPaused,
+                        calibrationCompleted = sharedState.calibrationCompleted,
                         distractionCount = sharedState.distractionCount,
                         reminderCount = sharedState.reminderCount,
-                        phoneDistractionCount = sharedState.phoneDistractionCount
+                        phoneDistractionCount = sharedState.phoneDistractionCount,
+                        sessionPhase = sharedState.sessionPhase,
+                        focusState = sharedState.focusState,
+                        elapsedMs = sharedState.elapsedMs,
+                        precheck = sharedState.precheck,
+                        outputCapability = sharedState.outputCapability,
+                        cameraPreview = sharedState.cameraPreview,
+                        gimbalStatus = sharedState.gimbalStatus,
+                        lastAlert = sharedState.lastAlert,
+                        boardErrorMessage = sharedState.boardErrorMessage,
+                        reminderSnapshot = sharedState.reminderSnapshot,
+                        precheckGuidance = sharedState.precheckGuidance,
+                        focusReason = sharedState.focusReason,
+                        behaviorContext = sharedState.behaviorContext
                     )
                 }
 
                 if ((prevTimerState == TimerState.IDLE || prevTimerState == TimerState.FINISHED) &&
                     (sharedState.timerState == TimerState.RUNNING ||
+                        sharedState.timerState == TimerState.PRECHECK ||
                         sharedState.timerState == TimerState.PAUSED)) {
                     currentSessionId = sharedState.sessionId ?: currentSessionId ?: "session_${System.currentTimeMillis()}"
                     sessionStartTime = sharedState.sessionStartTime.takeIf { it > 0L }
@@ -142,7 +188,7 @@ class ControlPanelViewModel @Inject constructor(
             1 -> SystemMode.SILENT
             else -> SystemMode.NORMAL
         }
-        _uiState.update { it.copy(systemMode = newMode, homeMode = false) }
+        _uiState.update { it.copy(systemMode = newMode) }
         sendPreferences("system_mode", mode.toString())
     }
 
@@ -170,18 +216,45 @@ class ControlPanelViewModel @Inject constructor(
         if (persist) sendPreferences("away_timeout_min", clamped.toString())
     }
 
-    fun setHomeMode(enabled: Boolean) {
-        _uiState.update {
-            it.copy(homeMode = enabled, systemMode = if (enabled) SystemMode.NORMAL else it.systemMode)
-        }
-        val mode = if (enabled) 2 else 0
-        sendPreferences("system_mode", mode.toString())
+    fun setSoundVolume(value: Float, persist: Boolean = true) {
+        val clamped = value.coerceIn(0f, 1f)
+        _uiState.update { it.copy(soundVolume = clamped) }
+        if (persist) sendPreferences("sound_volume", clamped.toString())
+    }
+
+    fun setDefaultFocusDuration(minutes: Int, persist: Boolean = true) {
+        val clamped = minutes.coerceIn(5, 120)
+        _uiState.update { it.copy(defaultFocusDurationMin = clamped) }
+        if (persist) sendPreferences("default_focus_duration_min", clamped.toString())
+    }
+
+    fun setNormalChannel(channel: String, enabled: Boolean) {
+        val channels = _uiState.value.normalChannels.toMutableSet()
+        if (enabled) channels.add(channel) else channels.remove(channel)
+        _uiState.update { it.copy(normalChannels = channels) }
+        sendPreferences(mapOf("normal_channels" to channels.toList()))
+    }
+
+    fun setSilentChannel(channel: String, enabled: Boolean) {
+        if (channel == "sound") return
+        val channels = _uiState.value.silentChannels.toMutableSet()
+        if (enabled) channels.add(channel) else channels.remove(channel)
+        _uiState.update { it.copy(silentChannels = channels) }
+        sendPreferences(mapOf("silent_channels" to channels.toList()))
     }
 
     private fun sendPreferences(key: String, value: String) {
         if (!_uiState.value.isBoardConnected || !_uiState.value.arePreferencesLoaded) return
         viewModelScope.launch {
             val result = bleManager.updatePreferences(key, value)
+            if (result.isFailure) loadBoardPreferences()
+        }
+    }
+
+    private fun sendPreferences(preferences: Map<String, Any?>) {
+        if (!_uiState.value.isBoardConnected || !_uiState.value.arePreferencesLoaded) return
+        viewModelScope.launch {
+            val result = bleManager.updatePreferences(preferences)
             if (result.isFailure) loadBoardPreferences()
         }
     }
@@ -202,6 +275,14 @@ class ControlPanelViewModel @Inject constructor(
         sendPreferences("led_brightness", _uiState.value.ledBrightness.toString())
     }
 
+    fun commitSoundVolume() {
+        sendPreferences("sound_volume", _uiState.value.soundVolume.toString())
+    }
+
+    fun commitDefaultFocusDuration() {
+        sendPreferences("default_focus_duration_min", _uiState.value.defaultFocusDurationMin.toString())
+    }
+
     fun refreshBoardPreferences() {
         if (!_uiState.value.isBoardConnected) return
         viewModelScope.launch { loadBoardPreferences() }
@@ -214,13 +295,31 @@ class ControlPanelViewModel @Inject constructor(
             org.json.JSONObject(String(response, Charsets.UTF_8)).getJSONObject("data")
         }.getOrNull() ?: return
         if (!bleManager.isConnected()) return
-        val systemMode = data.optInt("system_mode", 0)
         _uiState.update {
+            val prefs = BoardJsonParser.parsePreferences(
+                data,
+                BoardPreferences(
+                    systemMode = if (it.systemMode == SystemMode.SILENT) 1 else 0,
+                    awayTimeoutMin = it.awayTimeout,
+                    defaultFocusDurationMin = it.defaultFocusDurationMin,
+                    vibrationStrength = it.vibrationStrength,
+                    ledBrightness = it.ledBrightness,
+                    reminderSensitivity = it.reminderSensitivity,
+                    soundVolume = it.soundVolume,
+                    normalChannels = it.normalChannels,
+                    silentChannels = it.silentChannels
+                )
+            )
             it.copy(
-                systemMode = if (systemMode == 1) SystemMode.SILENT else SystemMode.NORMAL,
-                homeMode = systemMode == 2,
-                awayTimeout = data.optInt("away_timeout_min", it.awayTimeout).coerceIn(5, 60),
-                reminderSensitivity = data.optDouble("reminder_sensitivity", it.reminderSensitivity.toDouble()).toFloat().coerceIn(0f, 1f),
+                systemMode = if (prefs.systemMode == 1) SystemMode.SILENT else SystemMode.NORMAL,
+                awayTimeout = prefs.awayTimeoutMin.coerceIn(5, 60),
+                defaultFocusDurationMin = prefs.defaultFocusDurationMin.coerceIn(5, 120),
+                vibrationStrength = prefs.vibrationStrength.coerceIn(0f, 1f),
+                ledBrightness = prefs.ledBrightness.coerceIn(0, 100),
+                reminderSensitivity = prefs.reminderSensitivity.coerceIn(0f, 1f),
+                soundVolume = prefs.soundVolume.coerceIn(0f, 1f),
+                normalChannels = prefs.normalChannels,
+                silentChannels = prefs.silentChannels,
                 arePreferencesLoaded = true
             )
         }
@@ -246,6 +345,42 @@ class ControlPanelViewModel @Inject constructor(
     fun stopSession() {
         stopAppMonitor()
         timerStateHolder.stopSession()
+    }
+
+    fun skipPrecheck() {
+        timerStateHolder.skipPrecheck()
+    }
+
+    fun skipCalibration() {
+        timerStateHolder.skipCalibration()
+    }
+
+    fun refreshCameraPreview() {
+        timerStateHolder.refreshCameraPreview()
+    }
+
+    fun refreshGimbalStatus() {
+        timerStateHolder.refreshGimbalStatus()
+    }
+
+    fun moveGimbal(deltaX: Int, deltaY: Int) {
+        val action = when {
+            deltaX < 0 -> "nudge_left"
+            deltaX > 0 -> "nudge_right"
+            deltaY < 0 -> "nudge_up"
+            deltaY > 0 -> "nudge_down"
+            else -> return
+        }
+        val step = maxOf(kotlin.math.abs(deltaX), kotlin.math.abs(deltaY)).coerceIn(1, 8)
+        timerStateHolder.moveGimbal(action = action, stepDeg = step)
+    }
+
+    fun stopGimbal() {
+        timerStateHolder.moveGimbal(action = "stop", speed = 10)
+    }
+
+    fun centerGimbal() {
+        timerStateHolder.moveGimbal(action = "center_x", speed = 10)
     }
 
     private fun saveFinishedSession() {
@@ -316,6 +451,10 @@ class ControlPanelViewModel @Inject constructor(
         }
     }
 
+    fun dismissAlert() {
+        timerStateHolder.clearAlert()
+    }
+
     override fun onCleared() {
         timerStateHolder.leaveControlPanelMode()
         super.onCleared()
@@ -329,4 +468,5 @@ class ControlPanelViewModel @Inject constructor(
             _uiState.update { it.copy(nfcStatus = status) }
         }
     }
+
 }

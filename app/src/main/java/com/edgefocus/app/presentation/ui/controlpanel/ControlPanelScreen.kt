@@ -1,5 +1,7 @@
 package com.edgefocus.app.presentation.ui.controlpanel
 
+import android.media.AudioManager
+import android.media.ToneGenerator
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -28,6 +30,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
@@ -38,11 +41,10 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedIconButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -51,8 +53,11 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.verticalScroll
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.edgefocus.app.data.remote.BoardSessionPhase
 import com.edgefocus.app.data.remote.ConnectionState
 import com.edgefocus.app.domain.model.TimerState
 import com.edgefocus.app.presentation.ui.home.DurationSelectorRing
@@ -71,6 +76,15 @@ fun ControlPanelScreen(
     val pagerState = rememberPagerState(pageCount = { 3 })
     val context = LocalContext.current
     val effectiveConnectionState = bleViewModel.getEffectiveConnectionState()
+    val alert = uiState.lastAlert
+
+    LaunchedEffect(alert) {
+        if (alert?.phoneActions?.any { it.equals("SOUND", ignoreCase = true) || it.equals("sound", ignoreCase = true) } == true) {
+            val volume = ((alert.soundVolume ?: uiState.soundVolume).coerceIn(0f, 1f) * 100).toInt()
+            ToneGenerator(AudioManager.STREAM_NOTIFICATION, volume)
+                .startTone(ToneGenerator.TONE_PROP_BEEP, 180)
+        }
+    }
 
     Column(
         modifier = Modifier
@@ -160,6 +174,48 @@ fun ControlPanelScreen(
             }
         }
     }
+
+    if (alert?.phoneActions?.any { it.equals("SCREEN", ignoreCase = true) || it.equals("screen", ignoreCase = true) } == true) {
+        Dialog(
+            onDismissRequest = viewModel::dismissAlert,
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Surface(
+                modifier = Modifier.fillMaxSize(),
+                color = MaterialTheme.colorScheme.errorContainer
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(32.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
+                    Text(
+                        "专注提醒",
+                        style = MaterialTheme.typography.headlineLarge,
+                        color = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        alert.message.ifBlank { "请回到专注状态" },
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        "提醒等级 L${alert.level}",
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                    Spacer(modifier = Modifier.height(32.dp))
+                    OutlinedButton(onClick = viewModel::dismissAlert) {
+                        Text("我知道了")
+                    }
+                }
+            }
+        }
+    }
 }
 
 // ==================== Page 1: Timer ====================
@@ -171,6 +227,11 @@ private fun TimerPage(
 ) {
     val isRunning = uiState.timerState == TimerState.RUNNING
     val isIdle = uiState.timerState == TimerState.IDLE
+
+    if (uiState.timerState == TimerState.PRECHECK) {
+        PrecheckPage(viewModel = viewModel, uiState = uiState)
+        return
+    }
 
     Row(
         modifier = Modifier
@@ -280,24 +341,133 @@ private fun TimerPage(
     }
 }
 
+@Composable
+private fun PrecheckPage(
+    viewModel: ControlPanelViewModel,
+    uiState: com.edgefocus.app.presentation.viewmodel.ControlPanelUiState
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 24.dp, vertical = 12.dp),
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Card(
+            modifier = Modifier.weight(1f).fillMaxHeight(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Text("摄像头预检", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "请确认画面、距离和坐姿。预览是拍照式刷新，不是实时视频。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                uiState.precheckGuidance?.let {
+                    Text(
+                        "主机提示：$it",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+                val preview = uiState.cameraPreview
+                if (preview?.available == true) {
+                    StatRow("预览尺寸", "${preview.width} x ${preview.height}")
+                    StatRow("来源", preview.source ?: "主机摄像头")
+                    StatRow("序号", "${preview.sequence}")
+                } else {
+                    Text(
+                        "暂无预览，点击刷新获取最近一帧。",
+                        style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+                uiState.boardErrorMessage?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = viewModel::refreshCameraPreview) {
+                        Text("刷新画面")
+                    }
+                    OutlinedButton(onClick = viewModel::skipPrecheck) {
+                        Text("继续")
+                    }
+                    TextButton(onClick = viewModel::skipCalibration) {
+                        Text("跳过")
+                    }
+                }
+            }
+        }
+
+        if (uiState.precheck?.gimbal != null) {
+            Card(
+                modifier = Modifier.weight(1f).fillMaxHeight(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterVertically)
+                ) {
+                    Text("云台微调", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "小步调整镜头方向，默认每次 3 度。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    val gimbalStatus = uiState.gimbalStatus
+                    if (gimbalStatus != null) {
+                        StatRow("在线", if (gimbalStatus.online) "是" else "否")
+                        StatRow("安全", if (gimbalStatus.safe) "是" else "否")
+                        StatRow("归位", "X:${yesNo(gimbalStatus.xhome)} Y:${yesNo(gimbalStatus.yhome)}")
+                        StatRow(
+                            "角度",
+                            "X:${gimbalStatus.angleX?.toInt() ?: "-"} Y:${gimbalStatus.angleY?.toInt() ?: "-"}"
+                        )
+                        gimbalStatus.lastError?.let { StatRow("错误", it) }
+                    }
+                    OutlinedButton(onClick = { viewModel.moveGimbal(0, -3) }) { Text("上") }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = { viewModel.moveGimbal(-3, 0) }) { Text("左") }
+                        OutlinedButton(onClick = viewModel::centerGimbal) { Text("归中") }
+                        OutlinedButton(onClick = { viewModel.moveGimbal(3, 0) }) { Text("右") }
+                    }
+                    OutlinedButton(onClick = { viewModel.moveGimbal(0, 3) }) { Text("下") }
+                    TextButton(onClick = viewModel::stopGimbal) { Text("停止") }
+                }
+            }
+        }
+    }
+}
+
 // ==================== Page 2: Stats ====================
 
 @Composable
 private fun StatsPage(
     uiState: com.edgefocus.app.presentation.viewmodel.ControlPanelUiState
 ) {
+    val lastAlert = uiState.lastAlert
+
     Row(
         modifier = Modifier
             .fillMaxSize()
             .padding(16.dp),
         horizontalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // Left: Session stats cards
         Column(
-            modifier = Modifier.weight(1f).fillMaxHeight(),
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxHeight()
+                .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // Current status card
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(
@@ -312,37 +482,20 @@ private fun StatsPage(
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = when (uiState.timerState) {
-                            TimerState.IDLE -> "等待开始"
-                            TimerState.RUNNING -> "专注进行中"
-                            TimerState.PAUSED -> "已暂停"
-                            TimerState.FINISHED -> "已完成"
-                        },
+                        text = phaseLabel(uiState.sessionPhase, uiState.timerState),
                         style = MaterialTheme.typography.headlineSmall,
                         color = MaterialTheme.colorScheme.onPrimaryContainer
                     )
-                }
-            }
-
-            // Time stats card
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant
-                )
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text("时间统计", style = MaterialTheme.typography.titleMedium)
                     Spacer(modifier = Modifier.height(8.dp))
-                    StatRow("计划专注", "${uiState.selectedDuration} 分钟")
-                    StatRow("剩余时间", TimeUtils.formatTime(uiState.timeRemaining))
-                    StatRow("已进行", TimeUtils.formatTime(
-                        (uiState.totalTime - uiState.timeRemaining).coerceAtLeast(0L)
-                    ))
+                    StatRow("会话 ID", uiState.sessionId?.takeLast(12) ?: "尚未开始")
+                    StatRow("主机 active", yesNo(uiState.boardSessionActive))
+                    StatRow("主机 paused", yesNo(uiState.boardSessionPaused))
+                    StatRow("预检完成", yesNo(uiState.calibrationCompleted))
+                    StatRow("行为状态", focusStateLabel(uiState.focusState))
+                    uiState.focusReason?.let { StatRow("状态原因", compactJsonText(it)) }
                 }
             }
 
-            // Sessions card
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(
@@ -352,30 +505,10 @@ private fun StatsPage(
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text("会话统计", style = MaterialTheme.typography.titleMedium)
                     Spacer(modifier = Modifier.height(8.dp))
+                    StatRow("走神次数", "${uiState.distractionCount}")
                     StatRow("提醒次数", "${uiState.reminderCount}")
-                }
-            }
-        }
-
-        // Right: Distraction stats
-        Column(
-            modifier = Modifier.weight(1f).fillMaxHeight(),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.errorContainer
-                )
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text("走神次数", style = MaterialTheme.typography.titleMedium)
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        "${uiState.distractionCount}",
-                        style = MaterialTheme.typography.headlineLarge,
-                        color = MaterialTheme.colorScheme.error
-                    )
+                    StatRow("手机干扰", "${uiState.phoneDistractionCount}")
+                    lastAlert?.phoneDistractionLevel?.let { StatRow("手机干扰等级", "L$it") }
                 }
             }
 
@@ -386,13 +519,79 @@ private fun StatsPage(
                 )
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    Text("手机干扰次数", style = MaterialTheme.typography.titleMedium)
+                    Text("主机提醒快照", style = MaterialTheme.typography.titleMedium)
                     Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        "${uiState.phoneDistractionCount}",
-                        style = MaterialTheme.typography.headlineLarge,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
+                    if (uiState.reminderSnapshot == null) {
+                        Text(
+                            "暂无 reminder 快照",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else {
+                        Text(
+                            compactJsonText(uiState.reminderSnapshot),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+        }
+
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .fillMaxHeight()
+                .verticalScroll(rememberScrollState()),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                )
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("行为上下文", style = MaterialTheme.typography.titleMedium)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    uiState.precheckGuidance?.let { StatRow("预检提示", compactJsonText(it)) }
+                    uiState.behaviorContext?.let { StatRow("上下文", compactJsonText(it)) }
+                    if (uiState.precheckGuidance == null &&
+                        uiState.behaviorContext == null
+                    ) {
+                        Text(
+                            "等待主机行为快照",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant
+                )
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("最近提醒", style = MaterialTheme.typography.titleMedium)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    if (lastAlert == null) {
+                        Text(
+                            "暂无提醒",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else {
+                        StatRow("等级", "L${lastAlert.level}")
+                        StatRow("消息", lastAlert.message.ifBlank { "主机未提供消息" })
+                        StatRow("手机动作", lastAlert.phoneActions.joinToString("、") { channelLabel(it) })
+                        lastAlert.riskScore?.let { StatRow("风险分", "%.2f".format(it)) }
+                        lastAlert.reason?.let { StatRow("原因", compactJsonText(it)) }
+                        lastAlert.focusState?.let { StatRow("提醒状态", focusStateLabel(it)) }
+                        lastAlert.soundVolume?.let { StatRow("声音音量", "${(it * 100).toInt()}%") }
+                    }
                 }
             }
         }
@@ -432,7 +631,7 @@ private fun SettingsPage(
             }
         }
 
-        // Row 1: System mode + Home mode
+        // Row 1: System mode
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -475,39 +674,6 @@ private fun SettingsPage(
                                     Color.White else MaterialTheme.colorScheme.onSurface)
                         }
                     }
-                }
-            }
-
-            // Home mode
-            Card(
-                modifier = Modifier.weight(1f),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant
-                )
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(16.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Column {
-                        Text("Home 模式", style = MaterialTheme.typography.titleMedium)
-                        Text(
-                            if (uiState.homeMode) "开启" else "关闭",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    Switch(
-                        checked = uiState.homeMode,
-                        onCheckedChange = { viewModel.setHomeMode(it) },
-                        enabled = uiState.isBoardConnected && uiState.arePreferencesLoaded,
-                        colors = SwitchDefaults.colors(
-                            checkedTrackColor = MaterialTheme.colorScheme.primary
-                        )
-                    )
                 }
             }
         }
@@ -560,7 +726,7 @@ private fun SettingsPage(
             }
         }
 
-        // Row 3: Vibration strength + LED brightness
+        // Row 3: Vibration strength
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -582,27 +748,167 @@ private fun SettingsPage(
                     }
                 }
             }
+        }
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            Card(
+                modifier = Modifier.weight(1f),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("主机默认专注时长", style = MaterialTheme.typography.titleMedium)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("${uiState.defaultFocusDurationMin} 分钟", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        "仅作为主机默认值；本次会话时长由计时页选择。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Slider(
+                        value = uiState.defaultFocusDurationMin.toFloat(),
+                        onValueChange = { viewModel.setDefaultFocusDuration(it.toInt(), persist = false) },
+                        onValueChangeFinished = viewModel::commitDefaultFocusDuration,
+                        valueRange = 5f..120f,
+                        enabled = uiState.isBoardConnected && uiState.arePreferencesLoaded
+                    )
+                }
+            }
 
             Card(
                 modifier = Modifier.weight(1f),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
             ) {
                 Column(modifier = Modifier.padding(16.dp)) {
-                    Text("LED 亮度", style = MaterialTheme.typography.titleMedium)
+                    Text("提示音量", style = MaterialTheme.typography.titleMedium)
                     Spacer(modifier = Modifier.height(8.dp))
-                    StatRow("亮度", "${uiState.ledBrightness}%")
-                    Slider(
-                        value = uiState.ledBrightness.toFloat(),
-                        onValueChange = { viewModel.setLedBrightness(it.toInt(), persist = false) },
-                        onValueChangeFinished = viewModel::commitLedBrightness,
-                        valueRange = 0f..100f,
-                        enabled = uiState.isBoardConnected && uiState.arePreferencesLoaded
-                    )
+                    HardwareSlider(
+                        "音量",
+                        uiState.soundVolume,
+                        uiState.isBoardConnected && uiState.arePreferencesLoaded,
+                        onValueChangeFinished = viewModel::commitSoundVolume
+                    ) {
+                        viewModel.setSoundVolume(it, persist = false)
+                    }
+                }
+            }
+        }
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+        ) {
+            Column(modifier = Modifier.padding(16.dp)) {
+                Text("提醒渠道", style = MaterialTheme.typography.titleMedium)
+                Spacer(modifier = Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("普通模式", style = MaterialTheme.typography.bodyMedium)
+                        ChannelToggle("屏幕", "screen", uiState.normalChannels, uiState.isBoardConnected && uiState.arePreferencesLoaded) {
+                            viewModel.setNormalChannel("screen", it)
+                        }
+                        ChannelToggle("手环", "band", uiState.normalChannels, uiState.isBoardConnected && uiState.arePreferencesLoaded) {
+                            viewModel.setNormalChannel("band", it)
+                        }
+                        ChannelToggle("声音", "sound", uiState.normalChannels, uiState.isBoardConnected && uiState.arePreferencesLoaded) {
+                            viewModel.setNormalChannel("sound", it)
+                        }
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("静音模式", style = MaterialTheme.typography.bodyMedium)
+                        ChannelToggle("屏幕", "screen", uiState.silentChannels, uiState.isBoardConnected && uiState.arePreferencesLoaded) {
+                            viewModel.setSilentChannel("screen", it)
+                        }
+                        ChannelToggle("手环", "band", uiState.silentChannels, uiState.isBoardConnected && uiState.arePreferencesLoaded) {
+                            viewModel.setSilentChannel("band", it)
+                        }
+                        Text(
+                            "静音模式不使用声音提醒",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
             }
         }
     }
 }
+
+@Composable
+private fun ChannelToggle(
+    label: String,
+    channel: String,
+    selectedChannels: Set<String>,
+    enabled: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(label, style = MaterialTheme.typography.bodySmall)
+        Checkbox(
+            checked = selectedChannels.contains(channel),
+            onCheckedChange = onCheckedChange,
+            enabled = enabled
+        )
+    }
+}
+
+private fun phaseLabel(phase: BoardSessionPhase, timerState: TimerState): String {
+    return when (phase) {
+        BoardSessionPhase.IDLE -> when (timerState) {
+            TimerState.IDLE -> "等待开始"
+            TimerState.PRECHECK -> "预检中"
+            TimerState.RUNNING -> "专注进行中"
+            TimerState.PAUSED -> "已暂停"
+            TimerState.FINISHED -> "已完成"
+        }
+        BoardSessionPhase.PRECHECK -> "预检中"
+        BoardSessionPhase.FOCUSING -> "专注进行中"
+        BoardSessionPhase.PAUSED -> "已暂停"
+    }
+}
+
+private fun focusStateLabel(value: Int): String {
+    return when (value) {
+        0 -> "专注"
+        1 -> "视线偏离"
+        2 -> "疲劳/姿态异常"
+        3 -> "手机使用"
+        4 -> "离座"
+        5 -> "视觉低置信"
+        6 -> "暂停"
+        7 -> "预检/校准"
+        8 -> "学习类手机使用"
+        9 -> "娱乐类手机使用"
+        else -> "未知"
+    }
+}
+
+private fun channelLabel(channel: String): String {
+    return when (channel.lowercase()) {
+        "screen" -> "屏幕"
+        "band" -> "手环"
+        "sound" -> "声音"
+        "light" -> "灯光"
+        else -> channel
+    }
+}
+
+private fun compactJsonText(value: String): String {
+    return value
+        .replace("{", "")
+        .replace("}", "")
+        .replace("\"", "")
+        .replace(",", "，")
+        .take(80)
+}
+
+private fun yesNo(value: Boolean): String = if (value) "是" else "否"
 
 @Composable
 private fun HardwareSlider(

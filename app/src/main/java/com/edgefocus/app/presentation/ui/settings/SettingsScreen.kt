@@ -93,26 +93,26 @@ fun SettingsScreen(
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.primary
             )
-            Text("Settings", style = MaterialTheme.typography.headlineMedium)
+            Text("设置", style = MaterialTheme.typography.headlineMedium)
         }
 
-        // Pomodoro Settings Card
-        SettingsCard(title = "Pomodoro Settings", icon = Icons.Default.Timelapse) {
+        // Local timer defaults
+        SettingsCard(title = "默认时长", icon = Icons.Default.Timelapse) {
             SettingsSlider(
-                label = "单次专注时长（分钟）",
+                label = "默认专注时长（分钟）",
                 value = settings.pomodoroDuration.toFloat(),
                 valueRange = 1f..60f,
                 onValueChange = { viewModel.updatePomodoroDuration(it.toInt()) },
-                unit = "m"
+                unit = "分钟"
             )
         }
 
         Spacer(modifier = Modifier.height(16.dp))
 
         // Device Integration Card
-        SettingsCard(title = "Device Integration", icon = Icons.Default.DevicesOther) {
+        SettingsCard(title = "设备联动", icon = Icons.Default.DevicesOther) {
             SettingsToggle(
-                label = "Use EdgeFocus Device",
+                label = "使用 EdgeFocus 设备",
                 checked = settings.useEdgeFocusBoard,
                 onCheckedChange = { viewModel.updateUseEdgeFocusBoard(it) }
             )
@@ -131,8 +131,8 @@ fun SettingsScreen(
 
         // Distraction Apps - visible
         NavigationCard(
-            title = "Distraction Apps Settings",
-            subtitle = "Manage blocked apps during focus",
+            title = "分心应用设置",
+            subtitle = "管理专注期间的应用干扰等级",
             icon = Icons.Default.Block,
             onClick = onNavigateToDistractionApps
         )
@@ -142,8 +142,8 @@ fun SettingsScreen(
             Spacer(modifier = Modifier.height(16.dp))
 
             NavigationCard(
-                title = "Developer Tools",
-                subtitle = "BLE simulation, logs, test commands",
+                title = "开发者工具",
+                subtitle = "BLE 模拟、日志和测试命令",
                 icon = Icons.Default.DevicesOther,
                 onClick = onNavigateToTest
             )
@@ -164,12 +164,12 @@ fun SettingsScreen(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
-                "Version 2.4.1 (Build 842)",
+                "版本 2.4.1（构建 842）",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Text(
-                "Made with focus in mind",
+                "为专注而设计",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.surfaceVariant
             )

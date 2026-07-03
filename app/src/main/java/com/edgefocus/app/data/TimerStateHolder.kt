@@ -3,8 +3,16 @@ package com.edgefocus.app.data
 import android.util.Log
 import com.edgefocus.app.data.local.dao.SettingsDao
 import com.edgefocus.app.data.remote.AppEventLog
+import com.edgefocus.app.data.remote.BoardJsonParser
+import com.edgefocus.app.data.remote.BoardPrecheck
+import com.edgefocus.app.data.remote.BoardSessionPhase
+import com.edgefocus.app.data.remote.BoardSessionState
 import com.edgefocus.app.data.remote.BleManager
+import com.edgefocus.app.data.remote.CameraPreviewImage
 import com.edgefocus.app.data.remote.ConnectionState
+import com.edgefocus.app.data.remote.GimbalStatus
+import com.edgefocus.app.data.remote.OutputCapability
+import com.edgefocus.app.data.remote.PushAlert
 import com.edgefocus.app.data.remote.PushEventHandler
 import com.edgefocus.app.domain.model.FocusState
 import com.edgefocus.app.domain.model.SessionType
@@ -44,6 +52,22 @@ data class SharedTimerState(
     val phoneDistractionCount: Int = 0,
     val sessionId: String? = null,
     val sessionStartTime: Long = 0L,
+    val boardSessionActive: Boolean = false,
+    val boardSessionPaused: Boolean = false,
+    val calibrationCompleted: Boolean = false,
+    val sessionPhase: BoardSessionPhase = BoardSessionPhase.IDLE,
+    val focusState: Int = 0,
+    val elapsedMs: Long = 0L,
+    val precheck: BoardPrecheck? = null,
+    val outputCapability: OutputCapability? = null,
+    val cameraPreview: CameraPreviewImage? = null,
+    val gimbalStatus: GimbalStatus? = null,
+    val lastAlert: PushAlert? = null,
+    val boardErrorMessage: String? = null,
+    val reminderSnapshot: String? = null,
+    val precheckGuidance: String? = null,
+    val focusReason: String? = null,
+    val behaviorContext: String? = null,
     // 板端推送的会话结束数据
     val boardTotalDuration: Int? = null,
     val boardFocusDuration: Int? = null,
@@ -155,6 +179,15 @@ class TimerStateHolder @Inject constructor(
                     else -> Unit
                 }
             }
+            override fun onPushStateSnapshot(state: BoardSessionState) {
+                if (_state.value.sessionMode != SessionMode.EDGEFOCUS) return
+                if (state.sessionPhase != BoardSessionPhase.IDLE ||
+                    state.remainingMs > 0L ||
+                    state.precheck != null
+                ) {
+                    applyBoardSessionState(state)
+                }
+            }
             override fun onPushSessionEnd(summary: String) {
                 appEventLog.log("PUSH_SESSION_END", summary)
                 try {
@@ -187,7 +220,28 @@ class TimerStateHolder @Inject constructor(
                     )
                 }
             }
+            override fun onPushAlert(alert: PushAlert) {
+                appEventLog.log("PUSH_ALERT", "level=${alert.level}, actions=${alert.phoneActions}")
+                _state.update {
+                    it.copy(
+                        lastAlert = alert,
+                        focusState = alert.focusState ?: it.focusState,
+                        outputCapability = alert.outputCapability ?: it.outputCapability,
+                        reminderCount = alert.reminderCount ?: it.reminderCount
+                    )
+                }
+            }
         })
+    }
+
+    fun clearAlert() {
+        val shouldAck = _state.value.lastAlert != null && bleManager.isConnected()
+        _state.update { it.copy(lastAlert = null) }
+        if (shouldAck) {
+            scope.launch {
+                bleManager.reminderAck("last_alert")
+            }
+        }
     }
 
     // ==================== 会话控制 ====================
@@ -217,6 +271,22 @@ class TimerStateHolder @Inject constructor(
             it.copy(
                 sessionMode = SessionMode.EDGEFOCUS,
                 isSyncingWithBoard = true,
+                timerState = TimerState.IDLE,
+                boardSessionActive = false,
+                boardSessionPaused = false,
+                calibrationCompleted = false,
+                sessionPhase = BoardSessionPhase.IDLE,
+                focusState = 0,
+                elapsedMs = 0L,
+                precheck = null,
+                precheckGuidance = null,
+                cameraPreview = null,
+                gimbalStatus = null,
+                lastAlert = null,
+                boardErrorMessage = null,
+                reminderSnapshot = null,
+                focusReason = null,
+                behaviorContext = null,
                 distractionCount = 0,
                 reminderCount = 0,
                 phoneDistractionCount = 0,
@@ -238,6 +308,11 @@ class TimerStateHolder @Inject constructor(
                 result.onSuccess { data ->
                     // 板端响应成功
                     val json = String(data, Charsets.UTF_8)
+                    val boardState = BoardJsonParser.parseSessionState(json)
+                    if (boardState.sessionPhase == BoardSessionPhase.PRECHECK) {
+                        applyBoardSessionState(boardState, targetDurationMinutes)
+                        return@onSuccess
+                    }
                     val jsonObj = JSONObject(json)
                     val responseData = jsonObj.optJSONObject("data")
                     val success = responseData?.optBoolean("success", true) ?: true
@@ -503,6 +578,80 @@ class TimerStateHolder @Inject constructor(
         }
     }
 
+    fun skipPrecheck() {
+        sendSessionControlAndApply("skip_precheck")
+    }
+
+    fun skipCalibration() {
+        sendSessionControlAndApply("skip_calibration")
+    }
+
+    fun refreshCameraPreview() {
+        if (!bleManager.isConnected()) return
+        scope.launch {
+            bleManager.getCameraPreviewImage().onSuccess { data ->
+                val preview = BoardJsonParser.parseCameraPreview(String(data, Charsets.UTF_8))
+                _state.update { it.copy(cameraPreview = preview, boardErrorMessage = null) }
+            }.onFailure { error ->
+                _state.update { it.copy(boardErrorMessage = "无法刷新摄像头预览：${error.message ?: "未知错误"}") }
+            }
+        }
+    }
+
+    fun refreshGimbalStatus() {
+        if (!bleManager.isConnected()) return
+        scope.launch {
+            bleManager.getGimbalStatus().onSuccess { data ->
+                val status = BoardJsonParser.parseGimbalStatus(String(data, Charsets.UTF_8))
+                _state.update { it.copy(gimbalStatus = status, boardErrorMessage = null) }
+            }.onFailure { error ->
+                _state.update { it.copy(boardErrorMessage = "无法读取云台状态：${error.message ?: "未知错误"}") }
+            }
+        }
+    }
+
+    private fun refreshGimbalStatusIfVisible() {
+        if (_state.value.precheck?.gimbal == null) return
+        refreshGimbalStatus()
+    }
+
+    fun moveGimbal(
+        action: String,
+        xDeg: Number? = null,
+        yDeg: Number? = null,
+        speed: Int? = null,
+        stepDeg: Int? = null
+    ) {
+        if (!bleManager.isConnected() || _state.value.precheck?.gimbal == null) return
+        val safeSpeed = speed?.coerceIn(1, 90)
+        val safeStep = stepDeg?.coerceIn(1, 8)
+        scope.launch {
+            bleManager.gimbalControl(action, xDeg, yDeg, safeSpeed, safeStep).onSuccess {
+                refreshGimbalStatus()
+            }.onFailure { error ->
+                _state.update {
+                    it.copy(
+                        precheck = it.precheck?.copy(gimbal = null),
+                        boardErrorMessage = "云台暂不可用，已保留摄像头预检"
+                    )
+                }
+                Log.e(TAG, "Gimbal command failed: ${error.message}")
+            }
+        }
+    }
+
+    private fun sendSessionControlAndApply(action: String) {
+        if (!bleManager.isConnected()) return
+        scope.launch {
+            bleManager.sessionControl(action).onSuccess { data ->
+                val boardState = BoardJsonParser.parseSessionState(String(data, Charsets.UTF_8))
+                applyBoardSessionState(boardState)
+            }.onFailure { error ->
+                _state.update { it.copy(boardErrorMessage = "主机操作失败：${error.message ?: "未知错误"}") }
+            }
+        }
+    }
+
     fun completeSession() {
         boardSyncJob?.cancel()
         localCountdownJob?.cancel()
@@ -559,6 +708,78 @@ class TimerStateHolder @Inject constructor(
         }
     }
 
+    private fun applyBoardSessionState(
+        boardState: BoardSessionState,
+        fallbackDurationMinutes: Int = _state.value.targetDurationMinutes
+    ) {
+        val fallbackTotalMs = TimeUtils.minutesToMillis(fallbackDurationMinutes)
+        val targetMs = boardState.targetDurationMs.takeIf { it > 0L } ?: _state.value.totalTime.takeIf { it > 0L } ?: fallbackTotalMs
+        val remainingMs = boardState.remainingMs.takeIf { it > 0L } ?: targetMs
+        val phase = when {
+            boardState.sessionPhase != BoardSessionPhase.IDLE -> boardState.sessionPhase
+            boardState.paused || boardState.focusState == 6 -> BoardSessionPhase.PAUSED
+            boardState.active || boardState.remainingMs > 0L -> BoardSessionPhase.FOCUSING
+            else -> BoardSessionPhase.IDLE
+        }
+        val timerState = when (phase) {
+            BoardSessionPhase.PRECHECK -> TimerState.PRECHECK
+            BoardSessionPhase.FOCUSING -> TimerState.RUNNING
+            BoardSessionPhase.PAUSED -> TimerState.PAUSED
+            BoardSessionPhase.IDLE -> TimerState.IDLE
+        }
+
+        _state.update {
+            it.copy(
+                timerState = timerState,
+                sessionType = SessionType.WORK,
+                timeRemaining = remainingMs,
+                totalTime = targetMs,
+                targetDurationMinutes = if (targetMs > 0) (targetMs / 60000).toInt().coerceAtLeast(1) else fallbackDurationMinutes,
+                sessionMode = SessionMode.EDGEFOCUS,
+                isSyncingWithBoard = timerState == TimerState.RUNNING || timerState == TimerState.PRECHECK,
+                sessionId = boardState.sessionId ?: it.sessionId,
+                boardSessionActive = boardState.active || phase == BoardSessionPhase.FOCUSING || phase == BoardSessionPhase.PRECHECK,
+                boardSessionPaused = boardState.paused || phase == BoardSessionPhase.PAUSED,
+                calibrationCompleted = boardState.calibrationCompleted,
+                distractionCount = boardState.distractionCount,
+                reminderCount = boardState.reminderCount,
+                phoneDistractionCount = boardState.phoneDistractionCount.takeIf { count -> count > 0 } ?: it.phoneDistractionCount,
+                sessionPhase = phase,
+                focusState = boardState.focusState,
+                elapsedMs = boardState.elapsedMs.takeIf { elapsed -> elapsed > 0L }
+                    ?: (targetMs - remainingMs).coerceAtLeast(0L),
+                precheck = boardState.precheck,
+                outputCapability = boardState.outputCapability ?: it.outputCapability,
+                cameraPreview = boardState.cameraPreview ?: it.cameraPreview,
+                reminderSnapshot = boardState.reminder ?: it.reminderSnapshot,
+                precheckGuidance = boardState.precheckGuidance ?: it.precheckGuidance,
+                focusReason = boardState.focusReason ?: it.focusReason,
+                behaviorContext = boardState.behaviorContext ?: it.behaviorContext,
+                boardErrorMessage = null
+            )
+        }
+
+        when (timerState) {
+            TimerState.PRECHECK -> {
+                localCountdownJob?.cancel()
+                startBoardSync()
+                refreshGimbalStatusIfVisible()
+            }
+            TimerState.RUNNING -> {
+                startBoardSync()
+                startLocalCountdown()
+            }
+            TimerState.PAUSED -> {
+                localCountdownJob?.cancel()
+                startBoardSync()
+            }
+            TimerState.IDLE, TimerState.FINISHED -> {
+                localCountdownJob?.cancel()
+                stopBoardSync()
+            }
+        }
+    }
+
 
     private suspend fun checkBoardSession() {
         try {
@@ -567,6 +788,11 @@ class TimerStateHolder @Inject constructor(
                 val json = String(data, Charsets.UTF_8)
                 val jsonObj = JSONObject(json)
                 val stateData = jsonObj.getJSONObject("data")
+                val boardState = BoardJsonParser.parseSessionState(stateData)
+                if (boardState.sessionPhase != BoardSessionPhase.IDLE) {
+                    applyBoardSessionState(boardState)
+                    return@onSuccess
+                }
 
                 val isActive = stateData.optBoolean("active", false)
                 val focusState = stateData.optInt("focus_state", 0)
@@ -598,6 +824,18 @@ class TimerStateHolder @Inject constructor(
                             isSyncingWithBoard = true,
                             sessionId = syncedSessionId,
                             sessionStartTime = syncedSessionStartTime,
+                            boardSessionActive = true,
+                            boardSessionPaused = focusState == 6,
+                            calibrationCompleted = boardState.calibrationCompleted,
+                            sessionPhase = if (focusState == 6) BoardSessionPhase.PAUSED else BoardSessionPhase.FOCUSING,
+                            focusState = focusState,
+                            elapsedMs = effectiveElapsedMs,
+                            outputCapability = boardState.outputCapability ?: it.outputCapability,
+                            cameraPreview = boardState.cameraPreview ?: it.cameraPreview,
+                            reminderSnapshot = boardState.reminder ?: it.reminderSnapshot,
+                            precheckGuidance = boardState.precheckGuidance ?: it.precheckGuidance,
+                            focusReason = boardState.focusReason ?: it.focusReason,
+                            behaviorContext = boardState.behaviorContext ?: it.behaviorContext,
                             distractionCount = distractionCount,
                             reminderCount = reminderCount
                         )
@@ -617,6 +855,9 @@ class TimerStateHolder @Inject constructor(
 
 
     private fun startLocalCountdown() {
+        if (_state.value.sessionMode == SessionMode.EDGEFOCUS) {
+            return
+        }
         localCountdownJob?.cancel()
         localCountdownJob = scope.launch {
             while (_state.value.timeRemaining > 0 &&
@@ -644,7 +885,9 @@ class TimerStateHolder @Inject constructor(
     private fun startBoardSync() {
         boardSyncJob?.cancel()
         boardSyncJob = scope.launch {
-            while (_state.value.timerState == TimerState.RUNNING &&
+            while ((_state.value.timerState == TimerState.RUNNING ||
+                   _state.value.timerState == TimerState.PRECHECK ||
+                   _state.value.timerState == TimerState.PAUSED) &&
                    _state.value.sessionMode == SessionMode.EDGEFOCUS &&
                    bleManager.isConnected()) {
                 try {
@@ -669,6 +912,15 @@ class TimerStateHolder @Inject constructor(
         try {
             val json = JSONObject(jsonString)
             val data = json.getJSONObject("data")
+            val boardState = BoardJsonParser.parseSessionState(data)
+            if (boardState.sessionPhase == BoardSessionPhase.PRECHECK ||
+                boardState.sessionPhase == BoardSessionPhase.PAUSED ||
+                (_state.value.timerState == TimerState.PRECHECK &&
+                    boardState.sessionPhase == BoardSessionPhase.FOCUSING)
+            ) {
+                applyBoardSessionState(boardState)
+                return
+            }
 
             val boardRemainingMs = data.optLong("remaining_ms", 0)
             val boardTargetDurationMs = data.optLong("target_duration_ms", 0)
@@ -684,7 +936,21 @@ class TimerStateHolder @Inject constructor(
             _state.update {
                 it.copy(
                     distractionCount = boardDistractionCount,
-                    reminderCount = boardReminderCount
+                    reminderCount = boardReminderCount,
+                    sessionPhase = boardState.sessionPhase.takeIf { phase -> phase != BoardSessionPhase.IDLE }
+                        ?: it.sessionPhase,
+                    boardSessionActive = boardState.active || it.boardSessionActive,
+                    boardSessionPaused = boardState.paused,
+                    calibrationCompleted = boardState.calibrationCompleted,
+                    focusState = boardState.focusState,
+                    elapsedMs = boardState.elapsedMs.takeIf { elapsed -> elapsed > 0L }
+                        ?: (boardTargetDurationMs - boardRemainingMs).coerceAtLeast(0L),
+                    outputCapability = boardState.outputCapability ?: it.outputCapability,
+                    cameraPreview = boardState.cameraPreview ?: it.cameraPreview,
+                    reminderSnapshot = boardState.reminder ?: it.reminderSnapshot,
+                    precheckGuidance = boardState.precheckGuidance ?: it.precheckGuidance,
+                    focusReason = boardState.focusReason ?: it.focusReason,
+                    behaviorContext = boardState.behaviorContext ?: it.behaviorContext
                 )
             }
 
@@ -726,7 +992,7 @@ class TimerStateHolder @Inject constructor(
     fun getTotalTimeMillis(): Long = _state.value.totalTime
     fun getTargetDurationMinutes(): Int = _state.value.targetDurationMinutes
     fun getCompletedSessions(): Int = _state.value.completedSessions
-    fun isBoardConnected(): Boolean = _state.value.isBoardConnected
+    fun isBoardConnected(): Boolean = _state.value.isBoardConnected || bleManager.isConnected()
     fun getSessionMode(): SessionMode = _state.value.sessionMode
     fun isSyncingWithBoard(): Boolean = _state.value.isSyncingWithBoard
     fun getPhoneDistractionCount(): Int = _state.value.phoneDistractionCount

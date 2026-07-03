@@ -46,6 +46,7 @@ class DashboardViewModel @Inject constructor(
             bleManager.connectionState.collect { state ->
                 if (state == ConnectionState.CONNECTED && bleManager.isConnected()) {
                     syncPendingFeedback()
+                    syncLastReport()
                     syncBoardHistory()
                 }
             }
@@ -122,6 +123,38 @@ class DashboardViewModel @Inject constructor(
         }
     }
 
+    private suspend fun syncLastReport() {
+        if (!bleManager.isConnected()) return
+
+        val response = bleManager.getLastReport().getOrNull() ?: return
+        val data = runCatching {
+            JSONObject(String(response, Charsets.UTF_8)).optJSONObject("data")
+        }.getOrNull() ?: return
+
+        val sessionId = data.optString("session_id").takeIf { it.isNotBlank() }
+            ?: "board_last_${data.optLong("end_time_ms", System.currentTimeMillis())}"
+        val endTime = data.optLong("end_time_ms").takeIf { it > 0L } ?: System.currentTimeMillis()
+        val totalDuration = data.optInt("total_duration").coerceAtLeast(0)
+
+        sessionRepository.insertSession(
+            Session(
+                id = sessionId,
+                startTime = data.optLong("start_time_ms").takeIf { it > 0L }
+                    ?: (endTime - totalDuration * 1000L).coerceAtLeast(0L),
+                endTime = endTime,
+                duration = totalDuration,
+                focusDuration = data.optInt("focus_duration").coerceAtLeast(0),
+                distractionCount = data.optInt("distraction_count").coerceAtLeast(0),
+                reminderCount = data.optInt("reminder_count").coerceAtLeast(0),
+                phoneDistractionCount = data.optInt("phone_distraction_count").coerceAtLeast(0),
+                feedback = data.optString("feedback", "just_right"),
+                boardSessionId = sessionId,
+                source = "EDGEFOCUS",
+                synced = true
+            )
+        )
+    }
+
     private suspend fun syncBoardHistory() {
         if (!bleManager.isConnected()) return
 
@@ -168,7 +201,7 @@ class DashboardViewModel @Inject constructor(
 
     private companion object {
         val VALID_FEEDBACK_VALUES = setOf("too_much", "too_little", "just_right")
-        const val HISTORY_PAGE_SIZE = 1
+        const val HISTORY_PAGE_SIZE = 10
         const val MAX_HISTORY_PAGES = 1000
     }
 }
