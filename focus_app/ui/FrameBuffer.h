@@ -98,6 +98,10 @@ public:
     // Open framebuffer device. Falls back to offscreen buffer if unavailable.
     bool init(const char* device = "/dev/fb0");
 
+    // Initialize only the in-memory render target. Used when App/phone owns the
+    // display surface and board screen hardware must not be touched.
+    bool initOffscreen(int width = 240, int height = 320);
+
     // Close and release resources.
     void close();
 

@@ -43,6 +43,8 @@ public:
 
     int currentPageForTest() const { return current_page_; }
     void setCurrentPageForTest(int id) { switchPage(id); }
+    bool screenHardwareBypassedForTest() const { return screen_hardware_bypassed_; }
+    bool framebufferIsRealForTest() const { return fb_.isReal(); }
 
 private:
     enum PageId {
@@ -95,6 +97,7 @@ private:
     static constexpr int FRAME_INTERVAL_MS = 100;  // 10 FPS
 
     bool last_session_active_ = false;
+    bool screen_hardware_bypassed_ = false;
 };
 
 } // namespace edgefocus

@@ -562,6 +562,18 @@ bool FrameBuffer::init(const char* device) {
     return true;
 }
 
+bool FrameBuffer::initOffscreen(int width, int height) {
+    close();
+    width_ = width;
+    height_ = height;
+    stride_ = width_ * 4;
+    bpp_ = 32;
+    real_fb_ = false;
+    buffer_.assign(width_ * height_, 0);
+    LOGI("FrameBuffer", "Using forced offscreen buffer: %dx%d", width_, height_);
+    return true;
+}
+
 void FrameBuffer::close() {
 #ifdef __linux__
     if (fb_mem_ && fb_mem_ != MAP_FAILED) {

@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 
 #ifdef __linux__
 #include <fcntl.h>
@@ -18,6 +19,33 @@
 
 namespace edgefocus {
 
+namespace {
+
+bool envFlagEnabled(const char* name) {
+    const char* value = std::getenv(name);
+    if (!value) return false;
+    return std::strcmp(value, "1") == 0 ||
+           std::strcmp(value, "true") == 0 ||
+           std::strcmp(value, "TRUE") == 0 ||
+           std::strcmp(value, "on") == 0 ||
+           std::strcmp(value, "ON") == 0 ||
+           std::strcmp(value, "yes") == 0 ||
+           std::strcmp(value, "YES") == 0;
+}
+
+bool envStringEquals(const char* name, const char* expected) {
+    const char* value = std::getenv(name);
+    return value && std::strcmp(value, expected) == 0;
+}
+
+bool shouldBypassBoardScreen(const Preferences& prefs) {
+    return prefs.screen_output_route == "phone" ||
+           envFlagEnabled("EDGEFOCUS_DISABLE_LCD") ||
+           envStringEquals("EDGEFOCUS_LCD_BACKEND", "offscreen");
+}
+
+} // namespace
+
 UIManager::UIManager(SystemStateStore& store)
     : Module("UIManager")
     , store_(store) {}
@@ -27,14 +55,23 @@ UIManager::~UIManager() = default;
 bool UIManager::init(AppContext& /*ctx*/) {
     LOGI("UIManager", "Initializing UI system...");
 
-    if (!fb_.init()) {
+    const auto prefs = store_.snapshot().preferences;
+    screen_hardware_bypassed_ = shouldBypassBoardScreen(prefs);
+    const bool framebuffer_ok = screen_hardware_bypassed_
+        ? fb_.initOffscreen()
+        : fb_.init();
+    if (!framebuffer_ok) {
         LOGE("UIManager", "Failed to initialize framebuffer");
         return false;
     }
     LOGI("UIManager", "FrameBuffer: %dx%d (real=%s)",
          fb_.width(), fb_.height(), fb_.isReal() ? "yes" : "no");
+    if (screen_hardware_bypassed_) {
+        LOGI("UIManager", "Board screen hardware bypassed; App/phone owns display output");
+    }
 
 #ifdef __linux__
+    if (!screen_hardware_bypassed_) {
     // 0. Reset FT6336 touch controller via PB4
     auto ctp_rst = device::GpioHelper::openLine("PB4", true, 1);
     if (ctp_rst.isValid()) {
@@ -91,6 +128,9 @@ bool UIManager::init(AppContext& /*ctx*/) {
     
     if (touch_fd_ < 0) {
         LOGW("UIManager", "No touch input device found");
+    }
+    } else {
+        LOGI("UIManager", "Touch hardware skipped because board screen is bypassed");
     }
 #endif
 

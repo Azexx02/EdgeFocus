@@ -985,6 +985,28 @@ void test_uimanager_auto_switch_to_status_on_session_start() {
     ui.shutdown(ctx);
 }
 
+void test_uimanager_phone_screen_route_bypasses_board_screen_hardware() {
+    std::cout << "\n[Test 13.1] UIManager bypasses board screen when phone owns display\n";
+
+    SystemStateStore store;
+    SQLiteStore sqlite(":memory:");
+    AppContext ctx;
+    sqlite.init(ctx);
+
+    Preferences prefs = store.snapshot().preferences;
+    prefs.screen_output_route = "phone";
+    store.updatePreferences(prefs);
+
+    UIManager ui(store);
+    CHECK(ui.init(ctx), "UIManager init succeeds with phone screen route");
+    CHECK(ui.screenHardwareBypassedForTest(),
+          "Phone screen route bypasses board screen and touch hardware");
+    CHECK(!ui.framebufferIsRealForTest(),
+          "Phone screen route uses offscreen framebuffer only");
+
+    ui.shutdown(ctx);
+}
+
 // ============================================================================
 // Test 13: SessionController owns authoritative lifecycle primitives
 // ============================================================================
@@ -1661,6 +1683,7 @@ int main() {
     test_status_page_syncs_with_session_snapshot();
     test_status_page_alert_copy_mapping();
     test_uimanager_auto_switch_to_status_on_session_start();
+    test_uimanager_phone_screen_route_bypasses_board_screen_hardware();
     test_session_controller_lifecycle_and_recovery();
     test_session_controller_end_focus_accumulation();
     test_session_controller_end_refreshes_stale_elapsed();
