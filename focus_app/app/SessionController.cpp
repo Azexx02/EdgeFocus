@@ -44,6 +44,7 @@ SessionController::StartResult SessionController::startSession(int target_durati
     s.paused = false;
     s.calibrating = true;
     s.calibration_completed = false;
+    s.precheck_owner = (source == "app") ? "app" : "board";
     s.session_id = "session_" + std::to_string(start_wall_ms);
     s.start_ms = monotonicMs();
     const int effective_target_min = target_duration_min > 0 ? target_duration_min : kDefaultTargetDurationMin;

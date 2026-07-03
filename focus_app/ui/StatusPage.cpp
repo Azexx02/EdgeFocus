@@ -7,6 +7,8 @@
 #include <string>
 #include <cmath>
 #include <chrono>
+#include <cctype>
+#include <nlohmann/json.hpp>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -34,7 +36,121 @@ std::pair<std::string, std::string> alertHeadlineCopy(CommandLevel level) {
     }
     return {"BACK TO", "FOCUS"};
 }
+
+std::string titleCaseHint(std::string value) {
+    for (char& ch : value) {
+        if (ch == '_') ch = ' ';
+    }
+    bool word_start = true;
+    for (char& ch : value) {
+        if (ch == ' ') {
+            word_start = true;
+        } else if (word_start) {
+            ch = static_cast<char>(std::toupper(static_cast<unsigned char>(ch)));
+            word_start = false;
+        }
+    }
+    return value;
+}
+
+std::string distanceHintLabel(const std::string& hint) {
+    if (hint.empty()) return "Waiting frame";
+    if (hint == "camera_waiting") return "Waiting camera";
+    if (hint == "lighting_too_dark") return "More light";
+    if (hint == "lighting_too_bright") return "Less backlight";
+    if (hint == "image_blurry") return "Hold still";
+    if (hint == "move_farther_or_center") return "Move back/center";
+    if (hint == "move_closer") return "Move closer";
+    if (hint == "adjust_distance") return "Adjust distance";
+    if (hint == "distance_ok") return "Distance OK";
+    return titleCaseHint(hint);
+}
+
+std::string poseHintLabel(const std::string& hint) {
+    if (hint.empty()) return "Keep visible";
+    if (hint == "keep_visible") return "Keep visible";
+    if (hint == "increase_light") return "Increase light";
+    if (hint == "reduce_backlight") return "Reduce backlight";
+    if (hint == "hold_still") return "Hold still";
+    if (hint == "keep_head_in_frame") return "Head in frame";
+    if (hint == "sit_in_front_of_camera") return "Sit in front";
+    if (hint == "face_camera") return "Face camera";
+    if (hint == "center_face") return "Center face";
+    if (hint == "turn_head_left") return "Turn left";
+    if (hint == "turn_head_right") return "Turn right";
+    if (hint == "lower_camera_or_head") return "Lower head";
+    if (hint == "raise_camera_or_head") return "Raise head";
+    if (hint == "pose_ok") return "Pose OK";
+    return titleCaseHint(hint);
+}
+
+std::string durationLabel(int minutes) {
+    char buf[16];
+    if (minutes >= 60) {
+        const int h = minutes / 60;
+        const int m = minutes % 60;
+        if (m > 0) snprintf(buf, sizeof(buf), "%dh%02dm", h, m);
+        else snprintf(buf, sizeof(buf), "%dh", h);
+    } else {
+        snprintf(buf, sizeof(buf), "%dmin", minutes);
+    }
+    return buf;
+}
+
+bool boardOwnsPrecheck(const SessionInfo& session) {
+    return session.precheck_owner.empty() ||
+           session.precheck_owner == "board" ||
+           session.precheck_owner == "local";
+}
+
+std::string pushStateJson(const SystemSnapshot& snap) {
+    nlohmann::json data = {
+        {"active", snap.session.active},
+        {"paused", snap.session.paused},
+        {"session_id", snap.session.session_id},
+        {"focus_state", static_cast<int>(snap.focus_state)},
+        {"elapsed_ms", snap.session.elapsed_ms},
+        {"remaining_ms", snap.session.remaining_ms},
+        {"target_duration_ms", snap.session.target_duration_ms},
+        {"distraction_count", snap.session.distraction_count},
+        {"reminder_count", snap.session.reminder_count},
+        {"calibration_completed", snap.session.calibration_completed},
+        {"session_phase", sessionPhaseToString(deriveSessionPhase(snap.session))}
+    };
+    return nlohmann::json{{"cmd", "push_state"}, {"data", data}}.dump();
+}
 } // namespace
+
+StatusPage::PrecheckViewModel StatusPage::precheckViewModelForTest(
+    const SystemSnapshot& snap, int target_duration_min) {
+    PrecheckViewModel model;
+    model.camera_status = snap.device.camera_ok ? "CAM OK" : "CAM WAIT";
+    model.preview_status = snap.camera_preview_image.available ? "PREVIEW READY" : "WAITING FRAME";
+    if (snap.frame_quality.score > 0.0f) {
+        char quality_buf[16];
+        snprintf(quality_buf, sizeof(quality_buf), "%d%%",
+                 static_cast<int>(std::round(snap.frame_quality.score * 100.0f)));
+        model.quality_status = quality_buf;
+    } else {
+        model.quality_status = "N/A";
+    }
+    model.distance_status = "Dist: " + distanceHintLabel(snap.frame_quality.distance_hint);
+    model.pose_status = "Pose: " + poseHintLabel(snap.frame_quality.pose_hint);
+    model.timer_status = "Timer: " + durationLabel(target_duration_min);
+    model.ready = snap.device.camera_ok && snap.frame_quality.precheck_ready;
+    model.action_enabled = boardOwnsPrecheck(snap.session);
+    model.primary_tip = model.action_enabled
+        ? (model.ready ? "Ready to focus" : "Adjust position")
+        : "Continue on App";
+    model.action_label = model.action_enabled ? "START FOCUS" : "USE APP";
+    model.show_gimbal = snap.preferences.gimbal_enabled &&
+                        snap.device.gimbal_online &&
+                        snap.device.gimbal_safe;
+    if (model.show_gimbal) {
+        model.gimbal_status = "GIMBAL READY";
+    }
+    return model;
+}
 
 void StatusPage::render(FrameBuffer& fb, const SystemSnapshot& snap) {
     syncFromSnapshot(snap);
@@ -137,87 +253,56 @@ void StatusPage::render(FrameBuffer& fb, const SystemSnapshot& snap) {
         fb.drawTextCentered(Rect(20, 270, W - 40, 30), goal_str, Color::primary(), goal_font);
 
     } else if (internal_state_ == InternalState::CALIBRATING) {
-        // --- Pre-session Check Page ---
+        const auto model = precheckViewModelForTest(snap, target_duration_min_);
+
         FontInfo title_font;
         title_font.scale = 2;
-        fb.drawTextCentered(Rect(0, 45, W, 25), "Pre-Check", Color::textPrimary(), title_font);
+        fb.drawTextCentered(Rect(0, 45, W, 24), "SETUP CHECK", Color::textPrimary(), title_font);
 
-        FontInfo item_font;
-        item_font.scale = 1;
-        FontInfo val_font;
-        val_font.scale = 1;
+        FontInfo small_font;
+        small_font.scale = 1;
+        FontInfo body_font;
+        body_font.scale = 1;
+        FontInfo action_font;
+        action_font.scale = 2;
 
-        const int LIST_Y = 80;
-        const int ROW_H = 30;
+        const Color camera_color = snap.device.camera_ok ? Color::primary() : Color::secondary();
+        const Color quality_color = snap.frame_quality.precheck_ready ? Color::primary()
+                                  : (snap.frame_quality.score > 0.0f ? Color::secondary()
+                                                                     : Color::textSecondary());
+        fb.fillRoundRect(Rect(14, 76, 96, 26), 6, Color::bgCard());
+        fb.drawTextCentered(Rect(14, 81, 96, 16), model.camera_status, camera_color, small_font);
+        fb.fillRoundRect(Rect(124, 76, 82, 26), 6, Color::bgCard());
+        fb.drawTextCentered(Rect(124, 81, 82, 16), model.quality_status, quality_color, small_font);
 
-        // 1. Camera status
-        fb.drawText(20, LIST_Y, "Camera:", Color::textSecondary(), item_font);
-        if (snap.device.camera_ok) {
-            fb.drawText(100, LIST_Y, "OK", Color::primary(), val_font);
-        } else {
-            fb.drawText(100, LIST_Y, "Not Found", Color::error(), val_font);
+        const Rect preview_rect(18, 112, W - 36, 74);
+        fb.fillRoundRect(preview_rect, 8, Color::bgCard());
+        fb.drawRoundRect(preview_rect, 8, snap.camera_preview_image.available ? Color::primaryDim()
+                                                                             : Color::divider(), 2);
+        fb.drawLine(preview_rect.x + 12, preview_rect.y + 12,
+                    preview_rect.x + preview_rect.w - 12, preview_rect.y + preview_rect.h - 12,
+                    Color::divider(), 1);
+        fb.drawLine(preview_rect.x + preview_rect.w - 12, preview_rect.y + 12,
+                    preview_rect.x + 12, preview_rect.y + preview_rect.h - 12,
+                    Color::divider(), 1);
+        fb.drawTextCentered(Rect(preview_rect.x, preview_rect.y + 18,
+                                 preview_rect.w, 18),
+                            model.preview_status, Color::textPrimary(), small_font);
+
+        fb.drawText(18, 198, model.distance_status, Color::textPrimary(), body_font);
+        fb.drawText(18, 218, model.pose_status, Color::textPrimary(), body_font);
+        fb.drawText(18, 238, model.timer_status, Color::textSecondary(), body_font);
+        if (model.show_gimbal) {
+            fb.drawText(18, 258, model.gimbal_status, Color::primary(), body_font);
         }
 
-        // 2. Frame quality
-        fb.drawText(20, LIST_Y + ROW_H, "Quality:", Color::textSecondary(), item_font);
-        if (snap.frame_quality.score >= 0.6f) {
-            char buf[16];
-            snprintf(buf, sizeof(buf), "%d%%", static_cast<int>(snap.frame_quality.score * 100));
-            fb.drawText(100, LIST_Y + ROW_H, buf, Color::primary(), val_font);
-        } else if (snap.frame_quality.score > 0.0f) {
-            char buf[16];
-            snprintf(buf, sizeof(buf), "%d%%", static_cast<int>(snap.frame_quality.score * 100));
-            fb.drawText(100, LIST_Y + ROW_H, buf, Color::secondary(), val_font);
-        } else {
-            fb.drawText(100, LIST_Y + ROW_H, "N/A", Color::textSecondary(), val_font);
-        }
-
-        // 3. BLE band
-        fb.drawText(20, LIST_Y + ROW_H * 2, "Band:", Color::textSecondary(), item_font);
-        if (snap.device.bracelet_connected) {
-            fb.drawText(100, LIST_Y + ROW_H * 2, "Connected", Color::primary(), val_font);
-        } else if (snap.device.ble_enabled) {
-            fb.drawText(100, LIST_Y + ROW_H * 2, "Searching", Color::secondary(), val_font);
-        } else {
-            fb.drawText(100, LIST_Y + ROW_H * 2, "Off", Color::textSecondary(), val_font);
-        }
-
-        // 4. Mode
-        fb.drawText(20, LIST_Y + ROW_H * 3, "Mode:", Color::textSecondary(), item_font);
-        const char* mode_str = "Normal";
-        if (snap.device.system_mode == SystemMode::SILENT) mode_str = "Silent";
-        else if (snap.device.system_mode == SystemMode::HOME) mode_str = "Home";
-        fb.drawText(100, LIST_Y + ROW_H * 3, mode_str, Color::textPrimary(), val_font);
-
-        // 5. Target duration
-        fb.drawText(20, LIST_Y + ROW_H * 4, "Timer:", Color::textSecondary(), item_font);
-        char timer_buf[16];
-        if (target_duration_min_ >= 60) {
-            int h = target_duration_min_ / 60;
-            int m = target_duration_min_ % 60;
-            if (m > 0) snprintf(timer_buf, sizeof(timer_buf), "%dh%02dm", h, m);
-            else snprintf(timer_buf, sizeof(timer_buf), "%dh", h);
-        } else {
-            snprintf(timer_buf, sizeof(timer_buf), "%dmin", target_duration_min_);
-        }
-        fb.drawText(100, LIST_Y + ROW_H * 4, timer_buf, Color::textPrimary(), val_font);
-
-        // Tip
-        FontInfo tip_font;
-        tip_font.scale = 1;
-        if (!snap.device.camera_ok) {
-            fb.drawTextCentered(Rect(0, LIST_Y + ROW_H * 5 + 10, W, 15), "Tip: Connect camera for", Color::textSecondary(), tip_font);
-            fb.drawTextCentered(Rect(0, LIST_Y + ROW_H * 5 + 25, W, 15), "posture detection", Color::textSecondary(), tip_font);
-        } else if (snap.frame_quality.score < 0.4f) {
-            fb.drawTextCentered(Rect(0, LIST_Y + ROW_H * 5 + 10, W, 15), "Tip: Adjust lighting or", Color::textSecondary(), tip_font);
-            fb.drawTextCentered(Rect(0, LIST_Y + ROW_H * 5 + 25, W, 15), "camera angle", Color::textSecondary(), tip_font);
-        }
-
-        // GO Button
-        fb.fillRoundRect(Rect(20, H - 80, W - 40, 55), 10, Color::primary());
-        FontInfo go_font;
-        go_font.scale = 2;
-        fb.drawTextCentered(Rect(20, H - 80, W - 40, 55), "SKIP & START", Color::bgDark(), go_font);
+        fb.drawTextCentered(Rect(0, H - 96, W, 18), model.primary_tip,
+                            model.ready ? Color::primary() : Color::secondary(), small_font);
+        const Color action_bg = model.action_enabled ? Color::primary() : Color::bgCard();
+        const Color action_fg = model.action_enabled ? Color::bgDark() : Color::textSecondary();
+        fb.fillRoundRect(Rect(20, H - 72, W - 40, 50), 10, action_bg);
+        fb.drawTextCentered(Rect(20, H - 72, W - 40, 50), model.action_label,
+                            action_fg, action_font);
 
     } else if (internal_state_ == InternalState::FOCUSED) {
         // --- Active Session Screen ---
@@ -388,22 +473,15 @@ bool StatusPage::onTouch(int x, int y) {
         }
     } else if (internal_state_ == InternalState::CALIBRATING) {
         if (y > H - 90) {
-            // GO button tapped - start focused monitoring
-            internal_state_ = InternalState::FOCUSED;
-
-            SessionInfo s = store_->snapshot().session;
-            const int64_t now_ms = monotonicMs();
-            s.calibrating = false;
-            s.calibration_completed = true;
-            s.start_ms = now_ms;
-            s.elapsed_ms = 0;
-            s.remaining_ms = s.target_duration_ms;
-            if (!store_->updateSessionIfCurrent(s)) {
-                return false;
+            if (!sqlite_store_) return false;
+            if (!boardOwnsPrecheck(store_->snapshot().session)) return false;
+            SessionController controller(*store_, *sqlite_store_);
+            const bool ok = controller.skipPrecheck("local_skip_precheck");
+            if (ok) {
+                internal_state_ = InternalState::FOCUSED;
+                store_->pushEvent(pushStateJson(store_->snapshot()));
             }
-            store_->updateFocusState(FocusState::FOCUSED, now_ms, "Calibration skipped");
-            store_->notifySessionChange();
-            return true;
+            return ok;
         }
     } else if (internal_state_ == InternalState::FOCUSED) {
         if (y > 250 && y < 300 && x > 20 && x < W - 20) {
@@ -413,6 +491,7 @@ bool StatusPage::onTouch(int x, int y) {
             SessionController controller(*store_, *sqlite_store_);
             controller.pauseSession("local_paused");
             internal_state_ = InternalState::PAUSED;
+            store_->pushEvent(pushStateJson(store_->snapshot()));
             return true;
         }
     } else if (internal_state_ == InternalState::PAUSED) {
@@ -422,6 +501,7 @@ bool StatusPage::onTouch(int x, int y) {
             SessionController controller(*store_, *sqlite_store_);
             controller.resumeSession("local_resumed");
             internal_state_ = InternalState::FOCUSED;
+            store_->pushEvent(pushStateJson(store_->snapshot()));
             return true;
         }
 
@@ -429,7 +509,20 @@ bool StatusPage::onTouch(int x, int y) {
             // End button tapped
             if (!sqlite_store_) return false;
             SessionController controller(*store_, *sqlite_store_);
-            controller.endSession("local_ended");
+            auto ended = controller.endSession("local_ended");
+            if (ended.success && !ended.report.session_id.empty()) {
+                nlohmann::json push_data = {
+                    {"session_id", ended.report.session_id},
+                    {"total_duration", ended.report.total_duration},
+                    {"focus_duration", ended.report.focus_duration},
+                    {"distraction_count", ended.report.distraction_count},
+                    {"reminder_count", ended.report.reminder_count},
+                    {"phone_distraction_count", ended.report.phone_distraction_count},
+                    {"target_duration_ms", ended.target_duration_ms}
+                };
+                store_->pushEvent(nlohmann::json{{"cmd", "push_session_end"},
+                                                 {"data", push_data}}.dump());
+            }
             if (switch_page_) switch_page_(3); // PAGE_REVIEW
             return true;
         }

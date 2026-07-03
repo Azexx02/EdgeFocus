@@ -819,14 +819,21 @@ void test_status_page_local_lifecycle_persists_session() {
         switched_to_review = (page_id == 3);
     });
 
+    std::string last_push;
+    store.setPushCallback([&](const std::string& event_json) {
+        last_push = event_json;
+    });
+
     CHECK(page.onTouch(120, 190), "Local START touch is consumed");
     auto snap = store.snapshot();
     CHECK(snap.session.active == true, "Local START activates session");
     CHECK(!snap.session.session_id.empty(), "Local START creates session_id");
     CHECK(snap.session.calibration_completed == false, "Local START keeps calibration incomplete");
     CHECK(snap.session.calibrating == true, "Local START starts calibration");
+    CHECK(last_push.empty(), "Local START does not push precheck state to App");
     std::string sid = snap.session.session_id;
 
+    last_push.clear();
     CHECK(page.onTouch(120, 270), "Local GO touch is consumed");
     snap = store.snapshot();
     CHECK(snap.session.calibration_completed == true, "Local GO completes calibration");
@@ -834,6 +841,12 @@ void test_status_page_local_lifecycle_persists_session() {
     CHECK(snap.session.elapsed_ms == 0, "Local GO starts focus timer at zero");
     CHECK(snap.session.remaining_ms == snap.session.target_duration_ms, "Local GO starts with full remaining time");
     CHECK(snap.focus_state == FocusState::FOCUSED, "Manual GO sets focus state");
+    CHECK(!last_push.empty(), "Local GO pushes state to subscribed App");
+    auto go_push = json::parse(last_push);
+    CHECK(go_push["cmd"] == "push_state", "Local GO push uses existing push_state event");
+    CHECK(go_push["data"]["session_phase"] == "focusing", "Local GO push carries focusing phase");
+    CHECK(go_push["data"]["calibration_completed"] == true,
+          "Local GO push carries completed precheck state");
 
     SessionInfo s = snap.session;
     s.start_ms = store.snapshot().snapshot_ms - 60000;
@@ -843,6 +856,7 @@ void test_status_page_local_lifecycle_persists_session() {
     s.phone_distraction_count = 1;
     store.updateSession(s);
 
+    last_push.clear();
     CHECK(page.onTouch(120, 270), "Local PAUSE touch is consumed");
     snap = store.snapshot();
     CHECK(snap.session.active == true, "Local PAUSE keeps session active");
@@ -850,21 +864,37 @@ void test_status_page_local_lifecycle_persists_session() {
     CHECK(snap.session.session_id == sid, "Local PAUSE preserves session_id");
     CHECK(page.currentInternalStateForTest() == StatusPage::PAUSED_STATE, "Local PAUSE shows paused page");
     CHECK(!switched_to_review, "Local PAUSE does not switch to review");
+    CHECK(!last_push.empty(), "Local PAUSE pushes state to subscribed App");
+    auto pause_push = json::parse(last_push);
+    CHECK(pause_push["cmd"] == "push_state", "Local PAUSE push uses existing push_state event");
+    CHECK(pause_push["data"]["paused"] == true, "Local PAUSE push carries paused=true");
+    CHECK(pause_push["data"]["session_phase"] == "paused", "Local PAUSE push carries paused phase");
 
+    last_push.clear();
     CHECK(page.onTouch(120, 210), "Local RESUME touch is consumed");
     snap = store.snapshot();
     CHECK(snap.session.active == true, "Local RESUME keeps session active");
     CHECK(snap.session.paused == false, "Local RESUME unpauses session");
     CHECK(snap.session.session_id == sid, "Local RESUME keeps session_id");
     CHECK(page.currentInternalStateForTest() == StatusPage::FOCUSED_STATE, "Local RESUME returns to focused state");
+    CHECK(!last_push.empty(), "Local RESUME pushes state to subscribed App");
+    auto resume_push = json::parse(last_push);
+    CHECK(resume_push["cmd"] == "push_state", "Local RESUME push uses existing push_state event");
+    CHECK(resume_push["data"]["paused"] == false, "Local RESUME push carries paused=false");
+    CHECK(resume_push["data"]["session_phase"] == "focusing", "Local RESUME push carries focusing phase");
 
     CHECK(page.onTouch(120, 270), "Local re-PAUSE touch is consumed");
     snap = store.snapshot();
     CHECK(snap.session.paused == true, "Local re-PAUSE re-enters paused state");
 
+    last_push.clear();
     CHECK(page.onTouch(120, 270), "Local END touch is consumed");
     snap = store.snapshot();
     CHECK(switched_to_review, "Local END switches to review");
+    CHECK(!last_push.empty(), "Local END pushes session end to subscribed App");
+    auto end_push = json::parse(last_push);
+    CHECK(end_push["cmd"] == "push_session_end", "Local END push uses existing push_session_end event");
+    CHECK(end_push["data"]["session_id"] == sid, "Local END push carries authoritative session_id");
     CHECK(snap.last_report.session_id == sid, "Local END stores last report session_id");
     CHECK(snap.last_report.total_duration == 60, "Local END stores total duration");
     CHECK(snap.last_report.distraction_count == 2, "Local END stores distraction count");
@@ -938,6 +968,96 @@ void test_status_page_syncs_with_session_snapshot() {
           "StatusPage syncs inactive session to READY");
     CHECK(page.targetDurationMinForTest() == 45,
           "StatusPage resets to preference default after session becomes inactive");
+}
+
+void test_status_page_precheck_view_model_uses_camera_guidance() {
+    std::cout << "\n[Test 12.55] StatusPage precheck view model uses camera guidance\n";
+
+    SystemSnapshot snap;
+    snap.session.active = true;
+    snap.session.calibration_completed = false;
+    snap.device.camera_ok = true;
+    snap.camera_preview_image.available = true;
+    snap.camera_preview_image.sequence = 7;
+    snap.frame_quality.score = 0.72f;
+    snap.frame_quality.distance_hint = "move_closer";
+    snap.frame_quality.pose_hint = "center_face";
+    snap.frame_quality.precheck_ready = false;
+    snap.preferences.gimbal_enabled = true;
+    snap.device.gimbal_connected = true;
+    snap.device.gimbal_online = false;
+    snap.device.gimbal_safe = false;
+
+    auto model = StatusPage::precheckViewModelForTest(snap, 25);
+    CHECK(model.camera_status == "CAM OK", "Precheck view shows camera OK");
+    CHECK(model.preview_status == "PREVIEW READY", "Precheck view shows preview availability");
+    CHECK(model.quality_status == "72%", "Precheck view shows frame quality percent");
+    CHECK(model.distance_status == "Dist: Move closer", "Precheck view shows distance guidance");
+    CHECK(model.pose_status == "Pose: Center face", "Precheck view shows pose guidance");
+    CHECK(model.primary_tip == "Adjust position", "Precheck view asks for adjustment before ready");
+    CHECK(model.action_label == "START FOCUS", "Precheck view uses continue action label");
+    CHECK(model.action_enabled == true, "Board-owned precheck keeps board continue action enabled");
+    CHECK(model.show_gimbal == false, "Precheck view hides unsafe gimbal from normal flow");
+
+    snap.session.precheck_owner = "app";
+    model = StatusPage::precheckViewModelForTest(snap, 25);
+    CHECK(model.action_enabled == false, "App-owned precheck disables board continue action");
+    CHECK(model.action_label == "USE APP", "App-owned precheck tells user to continue on App");
+
+    snap.session.precheck_owner = "board";
+    snap.frame_quality.precheck_ready = true;
+    snap.device.gimbal_online = true;
+    snap.device.gimbal_safe = true;
+    model = StatusPage::precheckViewModelForTest(snap, 25);
+    CHECK(model.primary_tip == "Ready to focus", "Precheck view shows ready state");
+    CHECK(model.show_gimbal == true, "Precheck view shows gimbal only when ready");
+    CHECK(model.gimbal_status == "GIMBAL READY", "Precheck view marks ready gimbal");
+}
+
+void test_session_precheck_owner_stays_internal_to_start_surface() {
+    std::cout << "\n[Test 12.56] Session precheck owner follows start surface internally\n";
+
+    SystemStateStore store;
+    SQLiteStore sqlite(":memory:");
+    AppContext ctx;
+    sqlite.init(ctx);
+
+    SessionController controller(store, sqlite);
+    auto app_start = controller.startSession(25, "app");
+    CHECK(app_start.success, "App session start succeeds");
+    CHECK(app_start.session.precheck_owner == "app", "App start owns App precheck");
+    CHECK(store.snapshot().session.precheck_owner == "app", "App precheck owner is stored internally");
+
+    CHECK(controller.endSession("test_end").success, "App-owned precheck session can end");
+
+    auto local_start = controller.startSession(25, "local");
+    CHECK(local_start.success, "Local board session start succeeds");
+    CHECK(local_start.session.precheck_owner == "board", "Board start owns board precheck");
+    CHECK(store.snapshot().session.precheck_owner == "board", "Board precheck owner is stored internally");
+}
+
+void test_status_page_does_not_skip_app_owned_precheck() {
+    std::cout << "\n[Test 12.57] StatusPage does not skip App-owned precheck\n";
+
+    SystemStateStore store;
+    SQLiteStore sqlite(":memory:");
+    AppContext ctx;
+    sqlite.init(ctx);
+
+    StatusPage page;
+    page.setStore(&store);
+    page.setSQLiteStore(&sqlite);
+
+    SessionController controller(store, sqlite);
+    auto started = controller.startSession(25, "app");
+    CHECK(started.success, "App session start succeeds for owner test");
+    page.syncWithSnapshotForTest(store.snapshot());
+
+    CHECK(page.onTouch(120, 290) == false, "Board touch cannot continue App-owned precheck");
+    CHECK(store.snapshot().session.calibration_completed == false,
+          "App-owned precheck remains incomplete after board touch");
+    CHECK(store.snapshot().focus_state == FocusState::CALIBRATING,
+          "App-owned precheck remains in CALIBRATING after board touch");
 }
 
 void test_status_page_alert_copy_mapping() {
@@ -1681,6 +1801,9 @@ int main() {
     test_calibration_placeholder_without_frames();
     test_status_page_local_lifecycle_persists_session();
     test_status_page_syncs_with_session_snapshot();
+    test_status_page_precheck_view_model_uses_camera_guidance();
+    test_session_precheck_owner_stays_internal_to_start_surface();
+    test_status_page_does_not_skip_app_owned_precheck();
     test_status_page_alert_copy_mapping();
     test_uimanager_auto_switch_to_status_on_session_start();
     test_uimanager_phone_screen_route_bypasses_board_screen_hardware();

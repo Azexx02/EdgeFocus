@@ -55,7 +55,7 @@ void GimbalMonitor::publishSnapshot() {
 void GimbalMonitor::runAutoInitializationLocked() {
     if (auto_init_attempted_) return;
     const auto& gs = controller_.status();
-    if (!gs.online || !gs.safe) return;
+    if (!GimbalController::readyForAutoInitialization(gs, controller_.state())) return;
 
     auto_init_attempted_ = true;
     auto_init_running_ = true;

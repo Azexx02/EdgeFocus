@@ -17,6 +17,7 @@ struct SessionInfo {
     bool        paused = false;
     bool        calibrating = false;
     bool        calibration_completed = false;
+    std::string precheck_owner = "board";
     std::string session_id;
     int64_t     start_ms = 0;
     int64_t     elapsed_ms = 0;

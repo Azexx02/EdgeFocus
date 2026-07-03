@@ -135,6 +135,11 @@ std::string GimbalController::nextCommand() const {
     return commandForState(state_);
 }
 
+bool GimbalController::readyForAutoInitialization(const GimbalSnapshot& snapshot,
+                                                  PollState state) {
+    return snapshot.online && snapshot.safe && state == PollState::STAT;
+}
+
 bool GimbalController::parseBoolValue(const std::string& value, bool& out) {
     const std::string upper = toUpper(trimCopy(value));
     if (upper == "1" || upper == "TRUE" || upper == "ON" || upper == "YES") {
@@ -292,6 +297,89 @@ bool GimbalController::parseStat(const std::string& line, GimbalSnapshot& out, s
     parsed.last_seen_ms = nowMs();
     parsed.last_error.clear();
     out = parsed;
+    return true;
+}
+
+bool GimbalController::parseFault(const std::string& line, GimbalSnapshot& out,
+                                  std::string* error) {
+    out = GimbalSnapshot{};
+    const std::string trimmed = trimCopy(line);
+    if (trimmed.empty()) {
+        if (error) *error = "empty line";
+        return false;
+    }
+
+    const std::string upper = toUpper(trimmed);
+    if (upper.rfind("FAULT", 0) != 0) {
+        if (error) *error = "not a FAULT response";
+        return false;
+    }
+
+    std::string payload = trimCopy(trimmed.substr(5));
+    if (!payload.empty() &&
+        (payload.front() == ':' || payload.front() == ',' || payload.front() == '=')) {
+        payload = trimCopy(payload.substr(1));
+    }
+
+    out.connected = true;
+    out.online = true;
+    out.last_seen_ms = nowMs();
+
+    bool parsed_any = false;
+    std::vector<std::string> fault_parts;
+    std::vector<std::string> fault_details;
+    for (const auto& token : splitTokens(payload)) {
+        const size_t eq = token.find('=');
+        if (eq == std::string::npos) continue;
+
+        const std::string key = toUpper(trimCopy(token.substr(0, eq)));
+        const std::string raw_value = trimCopy(token.substr(eq + 1));
+        if (key.size() > 2 && key.substr(key.size() - 2) == "_E") {
+            int value = 0;
+            if (parseIntValue(raw_value, value)) {
+                parsed_any = true;
+                if (value != 0) {
+                    fault_parts.push_back(key + "=" + std::to_string(value));
+                }
+            }
+        } else if (key == "LIMIT") {
+            const std::string limit = toUpper(raw_value);
+            if (!limit.empty() && limit != "NONE" && limit != "0") {
+                fault_details.push_back("LIMIT=" + raw_value);
+            }
+        } else if (key == "LRAW") {
+            int value = 0;
+            if (parseIntValue(raw_value, value) && value != 0) {
+                fault_details.push_back("LRAW=" + std::to_string(value));
+            }
+        }
+    }
+
+    if (!parsed_any) {
+        if (error) *error = "no FAULT field parsed";
+        out.online = false;
+        out.safe = false;
+        return false;
+    }
+
+    if (!fault_parts.empty()) {
+        std::string message = "gimbal_fault";
+        for (const auto& part : fault_parts) {
+            message += "," + part;
+        }
+        for (const auto& detail : fault_details) {
+            message += "," + detail;
+        }
+        out.online = false;
+        out.safe = false;
+        out.last_error = message;
+        if (error) *error = message;
+        return false;
+    }
+
+    out.safe = true;
+    out.last_error.clear();
+    if (error) error->clear();
     return true;
 }
 
@@ -688,10 +776,13 @@ bool GimbalController::pollOnce() {
         ok = processStatResponse(response, error);
         if (ok) state_ = PollState::FAULT;
     } else if (state_ == PollState::FAULT) {
-        const std::string upper = toUpper(response.line);
-        ok = upper.rfind("FAULT", 0) == 0;
-        if (!ok) error = "unexpected FAULT response";
-        if (ok) state_ = PollState::ANGLE;
+        GimbalSnapshot fault_snapshot = status_;
+        ok = parseFault(response.line, fault_snapshot, &error);
+        if (ok) {
+            status_.connected = true;
+            status_.online = true;
+            state_ = PollState::ANGLE;
+        }
     } else if (state_ == PollState::ANGLE) {
         ok = processStatResponse(response, error);
         if (ok) state_ = PollState::STAT;

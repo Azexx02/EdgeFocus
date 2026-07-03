@@ -61,7 +61,9 @@ public:
 
     // Pure parse helpers for unit tests and future protocol extension.
     static bool parseStat(const std::string& line, GimbalSnapshot& out, std::string* error = nullptr);
+    static bool parseFault(const std::string& line, GimbalSnapshot& out, std::string* error = nullptr);
     static bool parseAngle(const std::string& line, float& angle_x, float& angle_y, std::string* error = nullptr);
+    static bool readyForAutoInitialization(const GimbalSnapshot& snapshot, PollState state);
 
     static int readTimeoutMsFromEnv();
 

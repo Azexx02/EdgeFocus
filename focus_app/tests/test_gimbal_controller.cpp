@@ -66,6 +66,27 @@ void test_parse_error_response() {
     assert(error.find("ERR") != std::string::npos);
 }
 
+void test_parse_fault_response_marks_axis_fault_unsafe() {
+    using namespace edgefocus;
+    GimbalSnapshot snap;
+    std::string error;
+
+    assert(!GimbalController::parseFault(
+        "FAULT,XHOME_E=0,YHOME_E=0,XPOS_E=14,YPOS_E=0,IX=0,IY=0,LIMIT=X_BLOCKED,LRAW=2781",
+        snap, &error));
+    assert(!snap.safe);
+    assert(!snap.online);
+    assert(error.find("XPOS_E=14") != std::string::npos);
+    assert(error.find("X_BLOCKED") != std::string::npos);
+
+    assert(GimbalController::parseFault(
+        "FAULT,XHOME_E=0,YHOME_E=0,XPOS_E=0,YPOS_E=0,IX=0,IY=0",
+        snap, &error));
+    assert(error.empty());
+    assert(snap.connected);
+    assert(snap.online);
+}
+
 void test_no_motion_commands() {
     using namespace edgefocus;
     assert(GimbalController::commandForState(GimbalController::PollState::OFFLINE) == "VER");
@@ -84,13 +105,33 @@ void test_no_motion_commands() {
     assert(cmd.find("POS") == std::string::npos);
 }
 
+void test_auto_initialization_waits_for_full_fault_angle_cycle() {
+    using namespace edgefocus;
+    GimbalSnapshot snap;
+    snap.online = true;
+    snap.safe = true;
+
+    assert(!GimbalController::readyForAutoInitialization(
+        snap, GimbalController::PollState::FAULT));
+    assert(!GimbalController::readyForAutoInitialization(
+        snap, GimbalController::PollState::ANGLE));
+    assert(GimbalController::readyForAutoInitialization(
+        snap, GimbalController::PollState::STAT));
+
+    snap.safe = false;
+    assert(!GimbalController::readyForAutoInitialization(
+        snap, GimbalController::PollState::STAT));
+}
+
 int main() {
     edgefocus::Logger::setLevel(edgefocus::LogLevel::ERROR);
     test_parse_stat_kv_payload();
     test_parse_stat_comma_payload();
     test_parse_angle_payload();
     test_parse_error_response();
+    test_parse_fault_response_marks_axis_fault_unsafe();
     test_no_motion_commands();
+    test_auto_initialization_waits_for_full_fault_angle_cycle();
     std::cout << "All GimbalController tests passed!\n";
     return 0;
 }
