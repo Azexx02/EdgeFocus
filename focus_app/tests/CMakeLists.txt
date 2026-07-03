@@ -141,6 +141,19 @@ target_link_libraries(test_notification_router PRIVATE Threads::Threads)
 add_test(NAME test_notification_router COMMAND test_notification_router)
 
 # ===========================================================================
+# 8. Demo HTTP Parser Test (video-only helper parsing)
+#    Tests: ASCII demo page request parsing, Content-Length buffering, bad headers.
+#    Deps: none (header-only parser helper).
+# ===========================================================================
+if(EDGEFOCUS_WITH_DEMO_HTTP)
+    add_executable(test_demo_http
+        test_demo_http.cpp)
+    target_include_directories(test_demo_http PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+    target_link_libraries(test_demo_http PRIVATE Threads::Threads nlohmann_json::nlohmann_json)
+    add_test(NAME test_demo_http COMMAND test_demo_http)
+endif()
+
+# ===========================================================================
 # 8. BLE GATT Server Test (BleGattServer API commands)
 #    Tests: all 10 API commands, JSON parsing, session lifecycle
 #    Deps: SQLiteStore, ReportGenerator, ReminderPolicy, DeviceManager

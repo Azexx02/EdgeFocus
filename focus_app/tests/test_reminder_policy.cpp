@@ -5,6 +5,7 @@
 #include <cassert>
 #include <iostream>
 #include <string>
+#include <vector>
 
 using namespace edgefocus;
 
@@ -102,6 +103,7 @@ void test_silent_does_not_change_level_for_same_context() {
     assert(normal_cmd.has_value());
     assert(silent_cmd.has_value());
     assert(normal_cmd->level == silent_cmd->level);
+    assert(normal_cmd->message == silent_cmd->message);
 }
 
 void test_run_once_uses_configured_preference_channels() {
@@ -130,7 +132,7 @@ void test_run_once_uses_configured_preference_channels() {
     assert(dev_mgr.lastBandAlertLevel() == static_cast<uint8_t>(CommandLevel::LEVEL_1));
 }
 
-void test_phone_learning_no_intervention() {
+void test_phone_learning_participates_in_policy() {
     SystemStateStore store;
     makeFocusedSession(store);
     SQLiteStore sqlite_store;
@@ -138,7 +140,8 @@ void test_phone_learning_no_intervention() {
     ReminderPolicy policy(store, sqlite_store, dev_mgr);
 
     auto cmd = policy.processState(FocusState::PHONE_IN_LEARNING, 1000);
-    assert(!cmd.has_value());
+    assert(cmd.has_value());
+    assert(cmd->level == CommandLevel::LEVEL_1);
 }
 
 void test_looking_away_is_level1() {
@@ -212,10 +215,126 @@ void test_phone_output_routes_do_not_execute_board_screen_or_sound() {
     assert(dev_mgr.screenFlashCount() == 0);
     assert(dev_mgr.soundPlayCount() == 0);
     auto snap = store.snapshot();
-    assert(snap.device.last_attempted_channels_mask == 0);
-    assert(snap.device.last_delivered_channels_mask == 0);
+    assert(snap.device.last_attempted_channels_mask ==
+           (kNotificationChannelScreenMask | kNotificationChannelSoundMask));
+    assert(snap.device.last_delivered_channels_mask ==
+           (kNotificationChannelScreenMask | kNotificationChannelSoundMask));
     assert(push.find("\"phone_actions\":[\"SCREEN\",\"SOUND\"]") != std::string::npos);
     assert(push.find("\"sound_volume\":0.42") != std::string::npos);
+}
+
+void test_low_confidence_does_not_create_reminder_side_effects() {
+    SystemStateStore store;
+    makeFocusedSession(store);
+    SQLiteStore sqlite_store(":memory:");
+    DeviceManager dev_mgr(store);
+    ReminderPolicy policy(store, sqlite_store, dev_mgr);
+    AppContext ctx;
+    assert(sqlite_store.init(ctx));
+    policy.init(ctx);
+
+    setContext(store, 3, 95);
+    auto no_cmd = policy.processState(FocusState::LOW_CONFIDENCE, 1000);
+    assert(!no_cmd.has_value());
+
+    auto after_low_conf = store.snapshot();
+    assert(after_low_conf.session.reminder_count == 0);
+    assert(after_low_conf.reminder.level == CommandLevel::NONE);
+    assert(after_low_conf.reminder.message.empty());
+
+    auto real_cmd = policy.processState(FocusState::PHONE_IN_USE, 2000);
+    assert(real_cmd.has_value());
+    assert(real_cmd->level == CommandLevel::LEVEL_3);
+
+    for (int i = 0; i < 4; ++i) {
+        sqlite_store.runOnce(ctx);
+    }
+
+    const auto events = sqlite_store.queryEvents(store.snapshot().session.session_id);
+    int reminder_events = 0;
+    for (const auto& event : events) {
+        if (event.type == StorageEventType::ReminderIssued) {
+            reminder_events++;
+        }
+    }
+    assert(reminder_events == 1);
+}
+
+void test_away_does_not_create_reminder_side_effects() {
+    SystemStateStore store;
+    makeFocusedSession(store);
+    SQLiteStore sqlite_store(":memory:");
+    DeviceManager dev_mgr(store);
+    ReminderPolicy policy(store, sqlite_store, dev_mgr);
+    AppContext ctx;
+    assert(sqlite_store.init(ctx));
+    policy.init(ctx);
+
+    auto no_cmd = policy.processState(FocusState::AWAY, 1000);
+    assert(!no_cmd.has_value());
+
+    auto after_away = store.snapshot();
+    assert(after_away.session.reminder_count == 0);
+    assert(after_away.reminder.level == CommandLevel::NONE);
+    assert(after_away.reminder.message.empty());
+
+    auto real_cmd = policy.processState(FocusState::LOOKING_AWAY, 2000);
+    assert(real_cmd.has_value());
+    assert(real_cmd->level == CommandLevel::LEVEL_1);
+
+    for (int i = 0; i < 4; ++i) {
+        sqlite_store.runOnce(ctx);
+    }
+
+    const auto events = sqlite_store.queryEvents(store.snapshot().session.session_id);
+    int reminder_events = 0;
+    for (const auto& event : events) {
+        if (event.type == StorageEventType::ReminderIssued) {
+            reminder_events++;
+        }
+    }
+    assert(reminder_events == 1);
+}
+
+void test_non_reminder_state_clears_stale_active_reminder() {
+    SystemStateStore store;
+    makeFocusedSession(store);
+    SQLiteStore sqlite_store(":memory:");
+    DeviceManager dev_mgr(store);
+    ReminderPolicy policy(store, sqlite_store, dev_mgr);
+    AppContext ctx;
+    assert(sqlite_store.init(ctx));
+    policy.init(ctx);
+
+    setContext(store, 3, 95);
+    auto phone = policy.processState(FocusState::PHONE_IN_USE, 1000);
+    assert(phone.has_value());
+    assert(store.snapshot().reminder.level == CommandLevel::LEVEL_3);
+
+    auto no_cmd = policy.processState(FocusState::LOW_CONFIDENCE, 7000);
+    assert(!no_cmd.has_value());
+    assert(store.snapshot().session.reminder_count == 1);
+    assert(store.snapshot().reminder.level == CommandLevel::NONE);
+    assert(store.snapshot().reminder.message.empty());
+}
+
+void test_home_mode_does_not_shorten_cooldown() {
+    SystemStateStore store;
+    makeFocusedSession(store);
+    SQLiteStore sqlite_store;
+    DeviceManager dev_mgr(store);
+    ReminderPolicy policy(store, sqlite_store, dev_mgr);
+    policy.getModeManager().setMode(SystemMode::HOME);
+
+    auto first = policy.processState(FocusState::LOOKING_AWAY, 1000);
+    assert(first.has_value());
+    assert(first->level == CommandLevel::LEVEL_1);
+
+    auto during_cooldown = policy.processState(FocusState::LOOKING_AWAY, 4000);
+    assert(!during_cooldown.has_value());
+
+    auto after_cooldown = policy.processState(FocusState::LOOKING_AWAY, 7000);
+    assert(after_cooldown.has_value());
 }
 
 int main() {
@@ -224,11 +343,15 @@ int main() {
     test_use_state_can_escalate_to_level3();
     test_silent_does_not_change_level_for_same_context();
     test_run_once_uses_configured_preference_channels();
-    test_phone_learning_no_intervention();
+    test_phone_learning_participates_in_policy();
     test_looking_away_is_level1();
     test_user_ack_increases_cooldown();
     test_risk_and_distraction_context_in_command();
     test_phone_output_routes_do_not_execute_board_screen_or_sound();
+    test_low_confidence_does_not_create_reminder_side_effects();
+    test_away_does_not_create_reminder_side_effects();
+    test_non_reminder_state_clears_stale_active_reminder();
+    test_home_mode_does_not_shorten_cooldown();
 
     std::cout << "All reminder policy tests passed!\n";
     return 0;

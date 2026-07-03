@@ -9,6 +9,87 @@
 
 namespace edgefocus {
 
+namespace {
+
+sqlite3* dbHandle(void* db) {
+    return reinterpret_cast<sqlite3*>(db);
+}
+
+struct StatementGuard {
+    sqlite3_stmt* stmt = nullptr;
+
+    ~StatementGuard() {
+        if (stmt) {
+            sqlite3_finalize(stmt);
+        }
+    }
+};
+
+bool prepareStatement(sqlite3* db, const char* sql, StatementGuard& statement, const char* context) {
+    if (sqlite3_prepare_v2(db, sql, -1, &statement.stmt, nullptr) != SQLITE_OK) {
+        LOGE("SQLiteStore", "%s prepare error: %s", context, sqlite3_errmsg(db));
+        return false;
+    }
+    return true;
+}
+
+bool bindText(sqlite3* db, sqlite3_stmt* stmt, int index, const std::string& value, const char* context) {
+    if (sqlite3_bind_text(stmt, index, value.c_str(), -1, SQLITE_TRANSIENT) != SQLITE_OK) {
+        LOGE("SQLiteStore", "%s bind error: %s", context, sqlite3_errmsg(db));
+        return false;
+    }
+    return true;
+}
+
+bool bindInt64(sqlite3* db, sqlite3_stmt* stmt, int index, int64_t value, const char* context) {
+    if (sqlite3_bind_int64(stmt, index, value) != SQLITE_OK) {
+        LOGE("SQLiteStore", "%s bind error: %s", context, sqlite3_errmsg(db));
+        return false;
+    }
+    return true;
+}
+
+bool bindInt(sqlite3* db, sqlite3_stmt* stmt, int index, int value, const char* context) {
+    if (sqlite3_bind_int(stmt, index, value) != SQLITE_OK) {
+        LOGE("SQLiteStore", "%s bind error: %s", context, sqlite3_errmsg(db));
+        return false;
+    }
+    return true;
+}
+
+bool stepExpectDone(sqlite3* db, sqlite3_stmt* stmt, const char* context) {
+    if (sqlite3_step(stmt) != SQLITE_DONE) {
+        LOGE("SQLiteStore", "%s step error: %s", context, sqlite3_errmsg(db));
+        return false;
+    }
+    return true;
+}
+
+const char* eventTypeToString(StorageEventType type) {
+    switch (type) {
+        case StorageEventType::SessionStart: return "SessionStart";
+        case StorageEventType::SessionEnd: return "SessionEnd";
+        case StorageEventType::StateChange: return "StateChange";
+        case StorageEventType::ReminderIssued: return "ReminderIssued";
+    }
+    return "";
+}
+
+bool parseEventType(const char* type, StorageEventType& outType) {
+    if (!type) {
+        return false;
+    }
+    std::string typeStr = type;
+    if (typeStr == "SessionStart") outType = StorageEventType::SessionStart;
+    else if (typeStr == "SessionEnd") outType = StorageEventType::SessionEnd;
+    else if (typeStr == "StateChange") outType = StorageEventType::StateChange;
+    else if (typeStr == "ReminderIssued") outType = StorageEventType::ReminderIssued;
+    else return false;
+    return true;
+}
+
+} // namespace
+
 SQLiteStore::SQLiteStore(const std::string& dbPath) : Module("SQLiteStore"), db_(nullptr), dbPath_(dbPath), eventQueue_(100, true) {
 }
 
@@ -16,13 +97,14 @@ SQLiteStore::~SQLiteStore() {
 }
 
 bool SQLiteStore::init(AppContext& /*ctx*/) {
+    std::lock_guard<std::recursive_mutex> lock(db_mutex_);
     if (sqlite3_open(dbPath_.c_str(), reinterpret_cast<sqlite3**>(&db_)) != SQLITE_OK) {
-        LOGE("SQLiteStore", "Can't open database: %s", sqlite3_errmsg(reinterpret_cast<sqlite3*>(db_)));
+        LOGE("SQLiteStore", "Can't open database: %s", sqlite3_errmsg(dbHandle(db_)));
         return false;
     }
     
     char* errMsg = nullptr;
-    if (sqlite3_exec(reinterpret_cast<sqlite3*>(db_), DB_SCHEMA, nullptr, nullptr, &errMsg) != SQLITE_OK) {
+    if (sqlite3_exec(dbHandle(db_), DB_SCHEMA, nullptr, nullptr, &errMsg) != SQLITE_OK) {
         LOGE("SQLiteStore", "SQL error: %s", errMsg);
         sqlite3_free(errMsg);
         return false;
@@ -39,6 +121,7 @@ bool SQLiteStore::sessionColumnExists(const std::string& column_name) const {
 }
 
 bool SQLiteStore::tableColumnExists(const std::string& table_name, const std::string& column_name) const {
+    std::lock_guard<std::recursive_mutex> lock(db_mutex_);
     if (!db_) return false;
 
     bool exists = false;
@@ -55,7 +138,7 @@ bool SQLiteStore::tableColumnExists(const std::string& table_name, const std::st
     std::pair<const std::string*, bool*> query{&column_name, &exists};
     char* errMsg = nullptr;
     const std::string pragma = "PRAGMA table_info(" + table_name + ");";
-    if (sqlite3_exec(reinterpret_cast<sqlite3*>(db_), pragma.c_str(),
+    if (sqlite3_exec(dbHandle(db_), pragma.c_str(),
                      callback, &query, &errMsg) != SQLITE_OK) {
         LOGE("SQLiteStore", "schema inspection error: %s", errMsg);
         sqlite3_free(errMsg);
@@ -65,6 +148,7 @@ bool SQLiteStore::tableColumnExists(const std::string& table_name, const std::st
 }
 
 bool SQLiteStore::migrateSchema() {
+    std::lock_guard<std::recursive_mutex> lock(db_mutex_);
     struct ColumnDef {
         const char* name;
         const char* definition;
@@ -95,7 +179,7 @@ bool SQLiteStore::migrateSchema() {
         sql += ";";
 
         char* errMsg = nullptr;
-        if (sqlite3_exec(reinterpret_cast<sqlite3*>(db_), sql.c_str(), nullptr, nullptr, &errMsg) != SQLITE_OK) {
+        if (sqlite3_exec(dbHandle(db_), sql.c_str(), nullptr, nullptr, &errMsg) != SQLITE_OK) {
             LOGE("SQLiteStore", "schema migration error for session.%s: %s", column.name, errMsg);
             sqlite3_free(errMsg);
             return false;
@@ -106,7 +190,7 @@ bool SQLiteStore::migrateSchema() {
     if (!tableColumnExists("feedback", "updated_at")) {
         constexpr const char* kFeedbackMigrationSql = "ALTER TABLE feedback ADD COLUMN updated_at INTEGER;";
         char* errMsg = nullptr;
-        if (sqlite3_exec(reinterpret_cast<sqlite3*>(db_), kFeedbackMigrationSql, nullptr, nullptr, &errMsg) != SQLITE_OK) {
+        if (sqlite3_exec(dbHandle(db_), kFeedbackMigrationSql, nullptr, nullptr, &errMsg) != SQLITE_OK) {
             LOGE("SQLiteStore", "schema migration error for feedback.updated_at: %s", errMsg);
             sqlite3_free(errMsg);
             return false;
@@ -118,8 +202,10 @@ bool SQLiteStore::migrateSchema() {
 }
 
 void SQLiteStore::shutdown(AppContext& /*ctx*/) {
+    std::lock_guard<std::recursive_mutex> lock(db_mutex_);
     if (db_) {
-        sqlite3_close(reinterpret_cast<sqlite3*>(db_));
+        drainPendingEvents();
+        sqlite3_close(dbHandle(db_));
         db_ = nullptr;
     }
     LOGI("SQLiteStore", "Shutdown completed.");
@@ -129,35 +215,72 @@ bool SQLiteStore::logEvent(const StorageEvent& event) {
     return eventQueue_.push(event);
 }
 
+bool SQLiteStore::persistEvent(const StorageEvent& event) {
+    std::lock_guard<std::recursive_mutex> lock(db_mutex_);
+    if (!db_) return false;
+
+    sqlite3* db = dbHandle(db_);
+    StatementGuard statement;
+    constexpr const char* kSql = "INSERT INTO event (session_id, event_type, timestamp, data) VALUES (?, ?, ?, ?);";
+    if (!prepareStatement(db, kSql, statement, "persistEvent")) {
+        return false;
+    }
+    if (!bindText(db, statement.stmt, 1, event.session_id, "persistEvent session_id") ||
+        !bindText(db, statement.stmt, 2, eventTypeToString(event.type), "persistEvent event_type") ||
+        !bindInt64(db, statement.stmt, 3, event.timestamp, "persistEvent timestamp") ||
+        !bindText(db, statement.stmt, 4, event.data, "persistEvent data")) {
+        return false;
+    }
+    return stepExpectDone(db, statement.stmt, "persistEvent");
+}
+
+void SQLiteStore::drainPendingEvents() {
+    std::lock_guard<std::recursive_mutex> lock(db_mutex_);
+    while (true) {
+        auto event = eventQueue_.tryPop();
+        if (!event.has_value()) {
+            return;
+        }
+        persistEvent(*event);
+    }
+}
+
 std::vector<StorageEvent> SQLiteStore::queryEvents(const std::string& session_id) {
+    std::lock_guard<std::recursive_mutex> lock(db_mutex_);
     std::vector<StorageEvent> results;
     if (!db_) return results;
 
-    std::string sql = "SELECT event_type, session_id, timestamp, data FROM event WHERE session_id = '" + session_id + "' ORDER BY timestamp;";
+    sqlite3* db = dbHandle(db_);
+    StatementGuard statement;
+    constexpr const char* kSql =
+        "SELECT event_type, session_id, timestamp, data FROM event WHERE session_id = ? ORDER BY timestamp;";
+    if (!prepareStatement(db, kSql, statement, "queryEvents") ||
+        !bindText(db, statement.stmt, 1, session_id, "queryEvents session_id")) {
+        return results;
+    }
 
-    auto callback = [](void* data, int argc, char** argv, char** /*azColName*/) -> int {
-        auto* vec = static_cast<std::vector<StorageEvent>*>(data);
-        if (argc < 4) return 0;
+    while (true) {
+        const int rc = sqlite3_step(statement.stmt);
+        if (rc == SQLITE_DONE) {
+            break;
+        }
+        if (rc != SQLITE_ROW) {
+            LOGE("SQLiteStore", "queryEvents step error: %s", sqlite3_errmsg(db));
+            results.clear();
+            break;
+        }
 
         StorageEvent ev;
-        std::string typeStr = argv[0] ? argv[0] : "";
-        if (typeStr == "SessionStart") ev.type = StorageEventType::SessionStart;
-        else if (typeStr == "SessionEnd") ev.type = StorageEventType::SessionEnd;
-        else if (typeStr == "StateChange") ev.type = StorageEventType::StateChange;
-        else if (typeStr == "ReminderIssued") ev.type = StorageEventType::ReminderIssued;
-        else return 0;
+        if (!parseEventType(reinterpret_cast<const char*>(sqlite3_column_text(statement.stmt, 0)), ev.type)) {
+            continue;
+        }
 
-        ev.session_id = argv[1] ? argv[1] : "";
-        ev.timestamp = argv[2] ? std::stoll(argv[2]) : 0;
-        ev.data = argv[3] ? argv[3] : "";
-        vec->push_back(ev);
-        return 0;
-    };
-
-    char* errMsg = nullptr;
-    if (sqlite3_exec(reinterpret_cast<sqlite3*>(db_), sql.c_str(), callback, &results, &errMsg) != SQLITE_OK) {
-        LOGE("SQLiteStore", "Query error: %s", errMsg);
-        sqlite3_free(errMsg);
+        const unsigned char* storedSessionId = sqlite3_column_text(statement.stmt, 1);
+        const unsigned char* storedData = sqlite3_column_text(statement.stmt, 3);
+        ev.session_id = storedSessionId ? reinterpret_cast<const char*>(storedSessionId) : "";
+        ev.timestamp = sqlite3_column_int64(statement.stmt, 2);
+        ev.data = storedData ? reinterpret_cast<const char*>(storedData) : "";
+        results.push_back(std::move(ev));
     }
     return results;
 }
@@ -165,22 +288,7 @@ std::vector<StorageEvent> SQLiteStore::queryEvents(const std::string& session_id
 void SQLiteStore::runOnce(AppContext& /*ctx*/) {
     auto ev_opt = eventQueue_.tryPop();
     if (ev_opt.has_value()) {
-        const auto& ev = *ev_opt;
-        std::string typeStr;
-        switch(ev.type) {
-            case StorageEventType::SessionStart: typeStr = "SessionStart"; break;
-            case StorageEventType::SessionEnd: typeStr = "SessionEnd"; break;
-            case StorageEventType::StateChange: typeStr = "StateChange"; break;
-            case StorageEventType::ReminderIssued: typeStr = "ReminderIssued"; break;
-        }
-        std::string sql = "INSERT INTO event (session_id, event_type, timestamp, data) VALUES ('" + 
-                          ev.session_id + "', '" + typeStr + "', " + 
-                          std::to_string(ev.timestamp) + ", '" + ev.data + "');";
-        char* errMsg = nullptr;
-        if (sqlite3_exec(reinterpret_cast<sqlite3*>(db_), sql.c_str(), nullptr, nullptr, &errMsg) != SQLITE_OK) {
-            LOGE("SQLiteStore", "Insert error: %s", errMsg);
-            sqlite3_free(errMsg);
-        }
+        persistEvent(*ev_opt);
     } else {
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
@@ -191,39 +299,50 @@ void SQLiteStore::runOnce(AppContext& /*ctx*/) {
 // ---------------------------------------------------------------------------
 
 bool SQLiteStore::saveSession(const std::string& session_id, int64_t start_time, int64_t target_duration) {
+    std::lock_guard<std::recursive_mutex> lock(db_mutex_);
     if (!db_) return false;
-    std::string sql = "INSERT OR REPLACE INTO session (id, start_time, target_duration, status, feedback) VALUES ('" +
-                      session_id + "', " + std::to_string(start_time) + ", " +
-                      std::to_string(target_duration) + ", 'active', 'just_right');";
-    char* errMsg = nullptr;
-    if (sqlite3_exec(reinterpret_cast<sqlite3*>(db_), sql.c_str(), nullptr, nullptr, &errMsg) != SQLITE_OK) {
-        LOGE("SQLiteStore", "saveSession error: %s", errMsg);
-        sqlite3_free(errMsg);
+    sqlite3* db = dbHandle(db_);
+    StatementGuard statement;
+    constexpr const char* kSql =
+        "INSERT OR REPLACE INTO session (id, start_time, target_duration, status, feedback) "
+        "VALUES (?, ?, ?, 'active', 'just_right');";
+    if (!prepareStatement(db, kSql, statement, "saveSession")) {
         return false;
     }
-    return true;
+    if (!bindText(db, statement.stmt, 1, session_id, "saveSession id") ||
+        !bindInt64(db, statement.stmt, 2, start_time, "saveSession start_time") ||
+        !bindInt64(db, statement.stmt, 3, target_duration, "saveSession target_duration")) {
+        return false;
+    }
+    return stepExpectDone(db, statement.stmt, "saveSession");
 }
 
 bool SQLiteStore::updateSessionEnd(const std::string& session_id, int64_t end_time,
                                     int64_t actual_duration, int64_t focus_duration,
                                     int distraction_count, int reminder_count,
                                     int phone_distraction_count, const std::string& end_reason) {
+    std::lock_guard<std::recursive_mutex> lock(db_mutex_);
     if (!db_) return false;
-    std::string sql = "UPDATE session SET end_time=" + std::to_string(end_time) +
-                      ", actual_duration=" + std::to_string(actual_duration) +
-                      ", focus_duration=" + std::to_string(focus_duration) +
-                      ", distraction_count=" + std::to_string(distraction_count) +
-                      ", reminder_count=" + std::to_string(reminder_count) +
-                      ", phone_distraction_count=" + std::to_string(phone_distraction_count) +
-                      ", end_reason='" + end_reason +
-                      "', status='completed' WHERE id='" + session_id + "';";
-    char* errMsg = nullptr;
-    if (sqlite3_exec(reinterpret_cast<sqlite3*>(db_), sql.c_str(), nullptr, nullptr, &errMsg) != SQLITE_OK) {
-        LOGE("SQLiteStore", "updateSessionEnd error: %s", errMsg);
-        sqlite3_free(errMsg);
+    sqlite3* db = dbHandle(db_);
+    StatementGuard statement;
+    constexpr const char* kSql =
+        "UPDATE session SET end_time=?, actual_duration=?, focus_duration=?, "
+        "distraction_count=?, reminder_count=?, phone_distraction_count=?, "
+        "end_reason=?, status='completed' WHERE id=?;";
+    if (!prepareStatement(db, kSql, statement, "updateSessionEnd")) {
         return false;
     }
-    return true;
+    if (!bindInt64(db, statement.stmt, 1, end_time, "updateSessionEnd end_time") ||
+        !bindInt64(db, statement.stmt, 2, actual_duration, "updateSessionEnd actual_duration") ||
+        !bindInt64(db, statement.stmt, 3, focus_duration, "updateSessionEnd focus_duration") ||
+        !bindInt(db, statement.stmt, 4, distraction_count, "updateSessionEnd distraction_count") ||
+        !bindInt(db, statement.stmt, 5, reminder_count, "updateSessionEnd reminder_count") ||
+        !bindInt(db, statement.stmt, 6, phone_distraction_count, "updateSessionEnd phone_distraction_count") ||
+        !bindText(db, statement.stmt, 7, end_reason, "updateSessionEnd end_reason") ||
+        !bindText(db, statement.stmt, 8, session_id, "updateSessionEnd id")) {
+        return false;
+    }
+    return stepExpectDone(db, statement.stmt, "updateSessionEnd");
 }
 
 bool SQLiteStore::updateSessionFeedback(const std::string& session_id, const std::string& feedback) {
@@ -232,44 +351,50 @@ bool SQLiteStore::updateSessionFeedback(const std::string& session_id, const std
 
 bool SQLiteStore::updateSessionCounts(const std::string& session_id, int distraction_count,
                                        int reminder_count, int phone_distraction_count) {
+    std::lock_guard<std::recursive_mutex> lock(db_mutex_);
     if (!db_) return false;
-    std::string sql = "UPDATE session SET distraction_count=" + std::to_string(distraction_count) +
-                      ", reminder_count=" + std::to_string(reminder_count) +
-                      ", phone_distraction_count=" + std::to_string(phone_distraction_count) +
-                      " WHERE id='" + session_id + "';";
-    char* errMsg = nullptr;
-    if (sqlite3_exec(reinterpret_cast<sqlite3*>(db_), sql.c_str(), nullptr, nullptr, &errMsg) != SQLITE_OK) {
-        LOGE("SQLiteStore", "updateSessionCounts error: %s", errMsg);
-        sqlite3_free(errMsg);
+    sqlite3* db = dbHandle(db_);
+    StatementGuard statement;
+    constexpr const char* kSql =
+        "UPDATE session SET distraction_count=?, reminder_count=?, phone_distraction_count=? WHERE id=?;";
+    if (!prepareStatement(db, kSql, statement, "updateSessionCounts")) {
         return false;
     }
-    return true;
+    if (!bindInt(db, statement.stmt, 1, distraction_count, "updateSessionCounts distraction_count") ||
+        !bindInt(db, statement.stmt, 2, reminder_count, "updateSessionCounts reminder_count") ||
+        !bindInt(db, statement.stmt, 3, phone_distraction_count, "updateSessionCounts phone_distraction_count") ||
+        !bindText(db, statement.stmt, 4, session_id, "updateSessionCounts id")) {
+        return false;
+    }
+    return stepExpectDone(db, statement.stmt, "updateSessionCounts");
 }
 
 bool SQLiteStore::sessionExists(const std::string& session_id) const {
+    std::lock_guard<std::recursive_mutex> lock(db_mutex_);
     if (!db_) return false;
     if (session_id.empty()) return false;
 
-    std::string sql = "SELECT 1 FROM session WHERE id='" + session_id + "' LIMIT 1;";
-    bool exists = false;
-
-    auto callback = [](void* data, int argc, char** argv, char**) -> int {
-        if (argc > 0 && argv[0]) {
-            *static_cast<bool*>(data) = true;
-        }
-        return 0;
-    };
-
-    char* errMsg = nullptr;
-    if (sqlite3_exec(reinterpret_cast<sqlite3*>(db_), sql.c_str(), callback, &exists, &errMsg) != SQLITE_OK) {
-        sqlite3_free(errMsg);
+    sqlite3* db = dbHandle(db_);
+    StatementGuard statement;
+    constexpr const char* kSql = "SELECT 1 FROM session WHERE id = ? LIMIT 1;";
+    if (!prepareStatement(db, kSql, statement, "sessionExists") ||
+        !bindText(db, statement.stmt, 1, session_id, "sessionExists id")) {
         return false;
     }
 
-    return exists;
+    const int rc = sqlite3_step(statement.stmt);
+    if (rc == SQLITE_ROW) {
+        return true;
+    }
+    if (rc != SQLITE_DONE) {
+        LOGE("SQLiteStore", "sessionExists step error: %s", sqlite3_errmsg(db));
+        return false;
+    }
+    return false;
 }
 
 SQLiteStore::SessionHistoryPage SQLiteStore::querySessionHistory(const std::string& cursor, int limit) {
+    std::lock_guard<std::recursive_mutex> lock(db_mutex_);
     SessionHistoryPage page;
     if (!db_) return page;
 
@@ -323,6 +448,7 @@ SQLiteStore::SessionHistoryPage SQLiteStore::querySessionHistory(const std::stri
 }
 
 SQLiteStore::SessionRecord SQLiteStore::queryLastCompletedSession() {
+    std::lock_guard<std::recursive_mutex> lock(db_mutex_);
     SessionRecord rec;
     if (!db_) return rec;
 
@@ -354,20 +480,24 @@ SQLiteStore::SessionRecord SQLiteStore::queryLastCompletedSession() {
 }
 
 int SQLiteStore::closeOpenSessions(int64_t end_time_ms, const std::string& end_reason) {
+    std::lock_guard<std::recursive_mutex> lock(db_mutex_);
     if (!db_) return 0;
-    std::string sql = "UPDATE session SET end_time=" + std::to_string(end_time_ms) +
-                      ", actual_duration=CASE WHEN start_time IS NOT NULL THEN (" +
-                      std::to_string(end_time_ms) + " - start_time) / 1000 ELSE 0 END" +
-                      ", focus_duration=0" +
-                      ", end_reason='" + end_reason +
-                      "', status='completed' WHERE status='active';";
-    char* errMsg = nullptr;
-    if (sqlite3_exec(reinterpret_cast<sqlite3*>(db_), sql.c_str(), nullptr, nullptr, &errMsg) != SQLITE_OK) {
-        LOGE("SQLiteStore", "closeOpenSessions error: %s", errMsg);
-        sqlite3_free(errMsg);
+    sqlite3* db = dbHandle(db_);
+    StatementGuard statement;
+    constexpr const char* kSql =
+        "UPDATE session SET end_time=?, "
+        "actual_duration=CASE WHEN start_time IS NOT NULL THEN (? - start_time) / 1000 ELSE 0 END, "
+        "focus_duration=0, end_reason=?, status='completed' WHERE status='active';";
+    if (!prepareStatement(db, kSql, statement, "closeOpenSessions")) {
         return 0;
     }
-    return sqlite3_changes(reinterpret_cast<sqlite3*>(db_));
+    if (!bindInt64(db, statement.stmt, 1, end_time_ms, "closeOpenSessions end_time") ||
+        !bindInt64(db, statement.stmt, 2, end_time_ms, "closeOpenSessions duration_end_time") ||
+        !bindText(db, statement.stmt, 3, end_reason, "closeOpenSessions end_reason") ||
+        !stepExpectDone(db, statement.stmt, "closeOpenSessions")) {
+        return 0;
+    }
+    return sqlite3_changes(db);
 }
 
 // ---------------------------------------------------------------------------
@@ -375,27 +505,33 @@ int SQLiteStore::closeOpenSessions(int64_t end_time_ms, const std::string& end_r
 // ---------------------------------------------------------------------------
 
 bool SQLiteStore::saveFeedback(const std::string& session_id, const std::string& rating) {
+    std::lock_guard<std::recursive_mutex> lock(db_mutex_);
     if (!sessionExists(session_id)) {
         return false;
     }
     if (!db_) return false;
+    sqlite3* db = dbHandle(db_);
     int64_t now = std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
-    std::string sql = "INSERT OR REPLACE INTO feedback (session_id, rating, updated_at) VALUES ('" +
-                      session_id + "', '" + rating + "', " + std::to_string(now) + ");";
-    char* errMsg = nullptr;
-    if (sqlite3_exec(reinterpret_cast<sqlite3*>(db_), sql.c_str(), nullptr, nullptr, &errMsg) != SQLITE_OK) {
-        LOGE("SQLiteStore", "saveFeedback error: %s", errMsg);
-        sqlite3_free(errMsg);
+    StatementGuard saveStatement;
+    constexpr const char* kSaveSql =
+        "INSERT OR REPLACE INTO feedback (session_id, rating, updated_at) VALUES (?, ?, ?);";
+    if (!prepareStatement(db, kSaveSql, saveStatement, "saveFeedback") ||
+        !bindText(db, saveStatement.stmt, 1, session_id, "saveFeedback session_id") ||
+        !bindText(db, saveStatement.stmt, 2, rating, "saveFeedback rating") ||
+        !bindInt64(db, saveStatement.stmt, 3, now, "saveFeedback updated_at") ||
+        !stepExpectDone(db, saveStatement.stmt, "saveFeedback")) {
         return false;
     }
-    sql = "UPDATE session SET feedback='" + rating + "' WHERE id='" + session_id + "';";
-    errMsg = nullptr;
-    if (sqlite3_exec(reinterpret_cast<sqlite3*>(db_), sql.c_str(), nullptr, nullptr, &errMsg) != SQLITE_OK) {
-        LOGE("SQLiteStore", "updateSessionFeedback error: %s", errMsg);
-        sqlite3_free(errMsg);
+
+    StatementGuard updateStatement;
+    constexpr const char* kUpdateSql = "UPDATE session SET feedback=? WHERE id=?;";
+    if (!prepareStatement(db, kUpdateSql, updateStatement, "updateSessionFeedback") ||
+        !bindText(db, updateStatement.stmt, 1, rating, "updateSessionFeedback feedback") ||
+        !bindText(db, updateStatement.stmt, 2, session_id, "updateSessionFeedback session_id")) {
+        return false;
     }
-    return true;
+    return stepExpectDone(db, updateStatement.stmt, "updateSessionFeedback");
 }
 
 // ---------------------------------------------------------------------------
@@ -403,36 +539,49 @@ bool SQLiteStore::saveFeedback(const std::string& session_id, const std::string&
 // ---------------------------------------------------------------------------
 
 bool SQLiteStore::savePreference(const std::string& key, const std::string& value) {
+    std::lock_guard<std::recursive_mutex> lock(db_mutex_);
     if (!db_) return false;
-    std::string sql = "INSERT OR REPLACE INTO preferences (key, value) VALUES ('" +
-                      key + "', '" + value + "');";
-    char* errMsg = nullptr;
-    if (sqlite3_exec(reinterpret_cast<sqlite3*>(db_), sql.c_str(), nullptr, nullptr, &errMsg) != SQLITE_OK) {
-        LOGE("SQLiteStore", "savePreference error: %s", errMsg);
-        sqlite3_free(errMsg);
+    sqlite3* db = dbHandle(db_);
+    StatementGuard statement;
+    constexpr const char* kSql = "INSERT OR REPLACE INTO preferences (key, value) VALUES (?, ?);";
+    if (!prepareStatement(db, kSql, statement, "savePreference")) {
         return false;
     }
-    return true;
+    if (!bindText(db, statement.stmt, 1, key, "savePreference key") ||
+        !bindText(db, statement.stmt, 2, value, "savePreference value")) {
+        return false;
+    }
+    return stepExpectDone(db, statement.stmt, "savePreference");
 }
 
 std::string SQLiteStore::getPreference(const std::string& key, const std::string& default_val) {
+    std::lock_guard<std::recursive_mutex> lock(db_mutex_);
     if (!db_) return default_val;
     std::string result = default_val;
-    std::string sql = "SELECT value FROM preferences WHERE key='" + key + "';";
-    auto callback = [](void* data, int argc, char** argv, char**) -> int {
-        if (argc > 0 && argv[0]) {
-            *static_cast<std::string*>(data) = argv[0];
+    sqlite3* db = dbHandle(db_);
+    StatementGuard statement;
+    constexpr const char* kSql = "SELECT value FROM preferences WHERE key = ?;";
+    if (!prepareStatement(db, kSql, statement, "getPreference") ||
+        !bindText(db, statement.stmt, 1, key, "getPreference key")) {
+        return default_val;
+    }
+
+    const int rc = sqlite3_step(statement.stmt);
+    if (rc == SQLITE_ROW) {
+        const unsigned char* value = sqlite3_column_text(statement.stmt, 0);
+        if (value) {
+            result = reinterpret_cast<const char*>(value);
         }
-        return 0;
-    };
-    char* errMsg = nullptr;
-    if (sqlite3_exec(reinterpret_cast<sqlite3*>(db_), sql.c_str(), callback, &result, &errMsg) != SQLITE_OK) {
-        sqlite3_free(errMsg);
+        return result;
+    }
+    if (rc != SQLITE_DONE) {
+        LOGE("SQLiteStore", "getPreference step error: %s", sqlite3_errmsg(db));
     }
     return result;
 }
 
 std::map<std::string, std::string> SQLiteStore::getAllPreferences() {
+    std::lock_guard<std::recursive_mutex> lock(db_mutex_);
     std::map<std::string, std::string> prefs;
     if (!db_) return prefs;
     std::string sql = "SELECT key, value FROM preferences;";
@@ -444,7 +593,7 @@ std::map<std::string, std::string> SQLiteStore::getAllPreferences() {
         return 0;
     };
     char* errMsg = nullptr;
-    if (sqlite3_exec(reinterpret_cast<sqlite3*>(db_), sql.c_str(), callback, &prefs, &errMsg) != SQLITE_OK) {
+    if (sqlite3_exec(dbHandle(db_), sql.c_str(), callback, &prefs, &errMsg) != SQLITE_OK) {
         sqlite3_free(errMsg);
     }
     return prefs;

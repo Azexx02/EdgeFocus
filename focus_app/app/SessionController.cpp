@@ -27,6 +27,7 @@ SessionController::SessionController(SystemStateStore& store, SQLiteStore& sqlit
 
 SessionController::StartResult SessionController::startSession(int target_duration_min,
                                                                const std::string& source) {
+    auto lifecycle_lock = store_.lockSessionLifecycle();
     StartResult result;
     auto snap = store_.snapshot();
     if (snap.session.active) {
@@ -48,7 +49,7 @@ SessionController::StartResult SessionController::startSession(int target_durati
     const int effective_target_min = target_duration_min > 0 ? target_duration_min : kDefaultTargetDurationMin;
     s.target_duration_ms = static_cast<int64_t>(effective_target_min) * 60000;
     s.remaining_ms = s.target_duration_ms;
-    s.away_timeout_ms = snap.session.away_timeout_ms;
+    s.away_timeout_ms = snap.preferences.away_timeout_min * 60000;
 
     store_.updateSession(s);
     store_.updateFocusState(FocusState::CALIBRATING, monotonicMs(), "Session precheck started");
@@ -67,6 +68,7 @@ SessionController::StartResult SessionController::startSession(int target_durati
 }
 
 bool SessionController::skipPrecheck(const std::string& reason) {
+    auto lifecycle_lock = store_.lockSessionLifecycle();
     auto snap = store_.snapshot();
     if (!snap.session.active) {
         LOGW("SessionController", "Skip precheck failed: no active session");
@@ -94,6 +96,7 @@ bool SessionController::skipPrecheck(const std::string& reason) {
 }
 
 bool SessionController::pauseSession(const std::string& reason) {
+    auto lifecycle_lock = store_.lockSessionLifecycle();
     auto snap = store_.snapshot();
     if (!snap.session.active) {
         LOGW("SessionController", "Pause failed: no active session");
@@ -126,6 +129,7 @@ bool SessionController::pauseSession(const std::string& reason) {
 }
 
 bool SessionController::resumeSession(const std::string& reason) {
+    auto lifecycle_lock = store_.lockSessionLifecycle();
     auto snap = store_.snapshot();
     if (!snap.session.active) {
         LOGW("SessionController", "Resume failed: no active session");
@@ -155,6 +159,7 @@ bool SessionController::resumeSession(const std::string& reason) {
 }
 
 SessionController::EndResult SessionController::endSession(const std::string& reason) {
+    auto lifecycle_lock = store_.lockSessionLifecycle();
     EndResult result;
     auto snap = store_.snapshot();
     if (!snap.session.active) {

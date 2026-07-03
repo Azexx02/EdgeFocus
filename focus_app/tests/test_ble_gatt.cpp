@@ -4,11 +4,16 @@
 #include "storage/SQLiteStore.h"
 #include "policy/ReminderPolicy.h"
 #include "device/DeviceManager.h"
+#include "device/GimbalMonitor.h"
 #include <iostream>
 #include <cassert>
 #include <cmath>
 #include <string>
 #include <nlohmann/json.hpp>
+#ifdef _MSC_VER
+#include <crtdbg.h>
+#include <cstdlib>
+#endif
 
 using namespace edgefocus;
 using json = nlohmann::json;
@@ -23,6 +28,11 @@ void assertSuccess(const json& resp, int expected_id) {
 }
 
 int main() {
+#ifdef _MSC_VER
+    _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE);
+    _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
+    _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
+#endif
     std::cout << "Starting BLE GATT Server tests...\n";
     json response;
 
@@ -80,6 +90,179 @@ int main() {
         std::cout << "  persisted preferences load after init: OK\n";
     }
 
+    // Test 0c: precheck.gimbal stays hidden when a monitor exists but the
+    // hardware is still offline.
+    {
+        SystemStateStore offline_store;
+        SQLiteStore offline_sqlite(":memory:");
+        AppContext offline_ctx;
+        offline_sqlite.init(offline_ctx);
+        DeviceManager offline_dev_mgr(offline_store);
+        ReminderPolicy offline_policy(offline_store, offline_sqlite, offline_dev_mgr);
+        offline_policy.init(offline_ctx);
+        GimbalMonitor offline_gimbal_monitor(offline_store);
+        BleGattServer offline_server(offline_store, offline_sqlite, offline_policy,
+                                     offline_policy.getModeManager(), &offline_gimbal_monitor);
+        offline_server.init(offline_ctx);
+
+        json start_resp = parseResponse(offline_server.handleCommand(
+            R"({"cmd":"session_control","id":30,"data":{"action":"start","target_duration_min":25}})"));
+        assertSuccess(start_resp, 30);
+        assert(start_resp["data"].contains("precheck"));
+        assert(start_resp["data"]["precheck"].contains("camera"));
+        assert(!start_resp["data"]["precheck"].contains("gimbal"));
+
+        json current_resp = parseResponse(offline_server.handleCommand(
+            R"({"cmd":"get_current_state","id":31})"));
+        assertSuccess(current_resp, 31);
+        assert(current_resp["data"].contains("precheck"));
+        assert(current_resp["data"]["precheck"].contains("camera"));
+        assert(!current_resp["data"]["precheck"].contains("gimbal"));
+
+        json end_resp = parseResponse(offline_server.handleCommand(
+            R"({"cmd":"session_control","id":32,"data":{"action":"end"}})"));
+        assertSuccess(end_resp, 32);
+
+        offline_server.shutdown(offline_ctx);
+        offline_sqlite.shutdown(offline_ctx);
+        std::cout << "  precheck.gimbal hidden while offline: OK\n";
+    }
+
+    // Test 0d: online but unsafe gimbal remains hidden and motion commands are
+    // rejected before the App enters a manual calibration flow.
+    {
+        SystemStateStore unsafe_store;
+        SQLiteStore unsafe_sqlite(":memory:");
+        AppContext unsafe_ctx;
+        unsafe_sqlite.init(unsafe_ctx);
+        DeviceManager unsafe_dev_mgr(unsafe_store);
+        ReminderPolicy unsafe_policy(unsafe_store, unsafe_sqlite, unsafe_dev_mgr);
+        unsafe_policy.init(unsafe_ctx);
+        GimbalMonitor unsafe_gimbal_monitor(unsafe_store);
+        BleGattServer unsafe_server(unsafe_store, unsafe_sqlite, unsafe_policy,
+                                    unsafe_policy.getModeManager(), &unsafe_gimbal_monitor);
+        unsafe_server.init(unsafe_ctx);
+
+        DeviceStatus unsafe_gimbal = unsafe_store.snapshot().device;
+        unsafe_gimbal.gimbal_connected = true;
+        unsafe_gimbal.gimbal_online = true;
+        unsafe_gimbal.gimbal_safe = false;
+        unsafe_store.updateDeviceStatus(unsafe_gimbal);
+
+        json start_resp = parseResponse(unsafe_server.handleCommand(
+            R"({"cmd":"session_control","id":40,"data":{"action":"start","target_duration_min":25}})"));
+        assertSuccess(start_resp, 40);
+        assert(!start_resp["data"]["precheck"].contains("gimbal"));
+
+        json control_resp = parseResponse(unsafe_server.handleCommand(
+            R"({"cmd":"gimbal_control","id":41,"data":{"action":"nudge_left","step_deg":3}})"));
+        assert(control_resp["status"] == "error");
+        assert(control_resp["error"] == "Gimbal not ready for motion");
+
+        json end_resp = parseResponse(unsafe_server.handleCommand(
+            R"({"cmd":"session_control","id":42,"data":{"action":"end"}})"));
+        assertSuccess(end_resp, 42);
+
+        unsafe_server.shutdown(unsafe_ctx);
+        unsafe_sqlite.shutdown(unsafe_ctx);
+        std::cout << "  precheck.gimbal hidden while unsafe: OK\n";
+    }
+
+    // Test 0e: precheck.gimbal appears only after the host has explicit online
+    // and safe gimbal state.
+    {
+        SystemStateStore online_store;
+        SQLiteStore online_sqlite(":memory:");
+        AppContext online_ctx;
+        online_sqlite.init(online_ctx);
+        DeviceManager online_dev_mgr(online_store);
+        ReminderPolicy online_policy(online_store, online_sqlite, online_dev_mgr);
+        online_policy.init(online_ctx);
+        GimbalMonitor online_gimbal_monitor(online_store);
+        BleGattServer online_server(online_store, online_sqlite, online_policy,
+                                    online_policy.getModeManager(), &online_gimbal_monitor);
+        online_server.init(online_ctx);
+
+        DeviceStatus gimbal_online = online_store.snapshot().device;
+        gimbal_online.gimbal_connected = true;
+        gimbal_online.gimbal_online = true;
+        gimbal_online.gimbal_safe = true;
+        gimbal_online.gimbal_xhome = true;
+        gimbal_online.gimbal_yhome = true;
+        gimbal_online.gimbal_calibrated = true;
+        gimbal_online.gimbal_angle_x = 90.0f;
+        gimbal_online.gimbal_angle_y = 0.0f;
+        online_store.updateDeviceStatus(gimbal_online);
+
+        json start_resp = parseResponse(online_server.handleCommand(
+            R"({"cmd":"session_control","id":43,"data":{"action":"start","target_duration_min":25}})"));
+        assertSuccess(start_resp, 43);
+        assert(start_resp["data"].contains("precheck"));
+        assert(start_resp["data"]["precheck"].contains("gimbal"));
+        assert(start_resp["data"]["precheck"]["gimbal"]["online"] == true);
+
+        json current_resp = parseResponse(online_server.handleCommand(
+            R"({"cmd":"get_current_state","id":44})"));
+        assertSuccess(current_resp, 44);
+        assert(current_resp["data"]["precheck"].contains("gimbal"));
+
+        json end_resp = parseResponse(online_server.handleCommand(
+            R"({"cmd":"session_control","id":45,"data":{"action":"end"}})"));
+        assertSuccess(end_resp, 45);
+
+        online_server.shutdown(online_ctx);
+        online_sqlite.shutdown(online_ctx);
+        std::cout << "  precheck.gimbal shown when online: OK\n";
+    }
+
+    // Test 0f: disabled gimbal never enters precheck and gimbal_control
+    // returns disabled even if stale device flags suggest it was once online.
+    {
+        SystemStateStore disabled_store;
+        SQLiteStore disabled_sqlite(":memory:");
+        AppContext disabled_ctx;
+        disabled_sqlite.init(disabled_ctx);
+        disabled_sqlite.savePreference("gimbal_enabled", "0");
+        DeviceManager disabled_dev_mgr(disabled_store);
+        ReminderPolicy disabled_policy(disabled_store, disabled_sqlite, disabled_dev_mgr);
+        disabled_policy.init(disabled_ctx);
+        GimbalMonitor disabled_gimbal_monitor(disabled_store);
+        BleGattServer disabled_server(disabled_store, disabled_sqlite, disabled_policy,
+                                      disabled_policy.getModeManager(), &disabled_gimbal_monitor);
+        disabled_server.init(disabled_ctx);
+
+        DeviceStatus stale_online = disabled_store.snapshot().device;
+        stale_online.gimbal_connected = true;
+        stale_online.gimbal_online = true;
+        stale_online.gimbal_safe = true;
+        disabled_store.updateDeviceStatus(stale_online);
+
+        json start_resp = parseResponse(disabled_server.handleCommand(
+            R"({"cmd":"session_control","id":36,"data":{"action":"start","target_duration_min":25}})"));
+        assertSuccess(start_resp, 36);
+        assert(start_resp["data"].contains("precheck"));
+        assert(!start_resp["data"]["precheck"].contains("gimbal"));
+
+        json current_resp = parseResponse(disabled_server.handleCommand(
+            R"({"cmd":"get_current_state","id":37})"));
+        assertSuccess(current_resp, 37);
+        assert(!current_resp["data"]["precheck"].contains("gimbal"));
+
+        json control_resp = parseResponse(disabled_server.handleCommand(
+            R"({"cmd":"gimbal_control","id":38,"data":{"action":"nudge_left","step_deg":3}})"));
+        assert(control_resp["status"] == "error");
+        assert(control_resp["id"] == 38);
+        assert(control_resp["error"] == "Gimbal disabled");
+
+        json end_resp = parseResponse(disabled_server.handleCommand(
+            R"({"cmd":"session_control","id":39,"data":{"action":"end"}})"));
+        assertSuccess(end_resp, 39);
+
+        disabled_server.shutdown(disabled_ctx);
+        disabled_sqlite.shutdown(disabled_ctx);
+        std::cout << "  precheck.gimbal hidden when disabled: OK\n";
+    }
+
     SystemStateStore store;
     SQLiteStore sqlite_store(":memory:");
     AppContext ctx;
@@ -97,6 +280,8 @@ int main() {
         assertSuccess(resp, 1);
         assert(resp["data"].contains("battery_percent"));
         assert(resp["data"].contains("battery_voltage_mv"));
+        assert(resp["data"]["battery_percent"].is_null());
+        assert(resp["data"]["battery_voltage_mv"].is_null());
         assert(resp["data"].contains("battery_charging"));
         assert(resp["data"].contains("power_source"));
         assert(resp["data"].contains("system_mode"));
@@ -420,6 +605,22 @@ int main() {
         std::cout << "  session_control start configured default duration: OK\n";
     }
 
+    // Test 12c: idle away-time preference should affect the next session
+    // without relying on a stale inactive SessionInfo overwrite.
+    {
+        json prefs_resp = parseResponse(server.handleCommand(
+            R"({"cmd":"update_preferences","id":123,"data":{"away_timeout_min":7}})"));
+        assertSuccess(prefs_resp, 123);
+        json start_resp = parseResponse(server.handleCommand(
+            R"({"cmd":"session_control","id":124,"data":{"action":"start","target_duration_min":10}})"));
+        assertSuccess(start_resp, 124);
+        assert(store.snapshot().session.away_timeout_ms == 7 * 60000);
+        json end_resp = parseResponse(server.handleCommand(
+            R"({"cmd":"session_control","id":125,"data":{"action":"end"}})"));
+        assertSuccess(end_resp, 125);
+        std::cout << "  idle away timeout applies to next session: OK\n";
+    }
+
     // Test 13: reminder_ack
     {
         json resp = parseResponse(server.handleCommand(
@@ -477,12 +678,15 @@ int main() {
         std::cout << "  phone_sync (not in use): OK\n";
     }
 
-    // Test 16: phone_sync (local_session_sync)
+    // Test 16: phone_sync must not expose local stats mutation shortcuts.
     {
+        const auto before_focus_seconds = store.snapshot().today.focus_seconds;
         json resp = parseResponse(server.handleCommand(
             R"({"cmd":"phone_sync","id":16,"data":{"is_in_use":false,"app_name":"local_session_sync","duration_sec":1500}})"));
         assertSuccess(resp, 16);
-        std::cout << "  phone_sync (local_session_sync): OK\n";
+        assert(resp["data"]["action_taken"] == false);
+        assert(store.snapshot().today.focus_seconds == before_focus_seconds);
+        std::cout << "  phone_sync rejects local stats side effects: OK\n";
     }
 
     // Test 17: get_console_data
@@ -553,6 +757,35 @@ int main() {
         assert(error.find("unavailable") != std::string::npos ||
                error.find("disabled") != std::string::npos);
         std::cout << "  gimbal_control nudge unavailable without monitor: OK\n";
+    }
+
+    // Test 17c.1: raw gimbal diagnostics are not ordinary App calibration controls.
+    {
+        SystemStateStore diag_store;
+        SQLiteStore diag_sqlite(":memory:");
+        AppContext diag_ctx;
+        diag_sqlite.init(diag_ctx);
+        DeviceManager diag_dev_mgr(diag_store);
+        ReminderPolicy diag_policy(diag_store, diag_sqlite, diag_dev_mgr);
+        diag_policy.init(diag_ctx);
+        GimbalMonitor diag_gimbal_monitor(diag_store);
+        BleGattServer diag_server(diag_store, diag_sqlite, diag_policy,
+                                  diag_policy.getModeManager(), &diag_gimbal_monitor);
+        diag_server.init(diag_ctx);
+
+        DeviceStatus gimbal_ready = diag_store.snapshot().device;
+        gimbal_ready.gimbal_online = true;
+        gimbal_ready.gimbal_safe = true;
+        diag_store.updateDeviceStatus(gimbal_ready);
+
+        json diag_resp = parseResponse(diag_server.handleCommand(
+            R"({"cmd":"gimbal_control","id":173,"data":{"action":"ping"}})"));
+        assert(diag_resp["status"] == "error");
+        assert(diag_resp["error"] == "Gimbal diagnostic action requires debug=true");
+
+        diag_server.shutdown(diag_ctx);
+        diag_sqlite.shutdown(diag_ctx);
+        std::cout << "  gimbal diagnostics require debug flag: OK\n";
     }
 
     // Test 17d: get_camera_preview_image returns the latest low-bandwidth snapshot container.

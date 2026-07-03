@@ -53,6 +53,9 @@ private:
 int main(int argc, char* argv[]) {
     // Parse --log-level if provided
     LogLevel logLevel = LogLevel::INFO;
+#ifndef EDGEFOCUS_WITH_DEMO_HTTP
+    bool demo_http_flag_seen = false;
+#endif
 #ifdef EDGEFOCUS_WITH_DEMO_HTTP
     int demo_http_port = 0;
 #endif
@@ -65,17 +68,24 @@ int main(int argc, char* argv[]) {
             else if (lv == "warn")  logLevel = LogLevel::WARN;
             else if (lv == "error") logLevel = LogLevel::ERROR;
             ++i;
-#ifdef EDGEFOCUS_WITH_DEMO_HTTP
         } else if (arg == "--demo-http-port" && i + 1 < argc) {
+#ifdef EDGEFOCUS_WITH_DEMO_HTTP
             demo_http_port = std::stoi(argv[i + 1]);
-            ++i;
+#else
+            demo_http_flag_seen = true;
 #endif
+            ++i;
         }
     }
 
     Logger::setLevel(logLevel);
     LOGI("Main", "=== EdgeFocus focus_app starting ===");
     LOGI("Main", "Log level: %d", static_cast<int>(logLevel));
+#ifndef EDGEFOCUS_WITH_DEMO_HTTP
+    if (demo_http_flag_seen) {
+        LOGW("Main", "--demo-http-port ignored because EDGEFOCUS_WITH_DEMO_HTTP=OFF");
+    }
+#endif
 #ifdef EDGEFOCUS_WITH_DEMO_HTTP
     if (demo_http_port > 0) {
         LOGW("Main", "Demo HTTP enabled on port %d", demo_http_port);

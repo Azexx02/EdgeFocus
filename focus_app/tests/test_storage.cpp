@@ -4,10 +4,44 @@
 #include "sqlite3.h"
 #include <iostream>
 #include <cassert>
+#include <cstdio>
+#include <string>
+#include <thread>
+#include <vector>
+#ifdef _MSC_VER
+#include <crtdbg.h>
+#include <cstdlib>
+#endif
 
 using namespace edgefocus;
 
+namespace {
+
+std::string querySingleText(sqlite3* db, const char* sql, const std::string& param) {
+    sqlite3_stmt* stmt = nullptr;
+    assert(sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) == SQLITE_OK);
+    assert(sqlite3_bind_text(stmt, 1, param.c_str(), -1, SQLITE_TRANSIENT) == SQLITE_OK);
+
+    std::string result;
+    assert(sqlite3_step(stmt) == SQLITE_ROW);
+    const unsigned char* text = sqlite3_column_text(stmt, 0);
+    if (text) {
+        result = reinterpret_cast<const char*>(text);
+    }
+
+    sqlite3_finalize(stmt);
+    return result;
+}
+
+} // namespace
+
 int main() {
+#ifdef _MSC_VER
+    _CrtSetReportMode(_CRT_ASSERT, _CRTDBG_MODE_FILE);
+    _CrtSetReportFile(_CRT_ASSERT, _CRTDBG_FILE_STDERR);
+    _set_abort_behavior(0, _WRITE_ABORT_MSG | _CALL_REPORTFAULT);
+#endif
+
     std::cout << "Starting storage tests...\n";
     
     std::string dbPath = "test.db";
@@ -153,6 +187,114 @@ int main() {
     assert(sqlite3_exec(migratedDb, "PRAGMA table_info(feedback);", feedbackColumnCallback, &hasUpdatedAt, nullptr) == SQLITE_OK);
     assert(hasUpdatedAt);
     sqlite3_close(migratedDb);
+
+    // Regression: session/feedback/preference values with quotes or special
+    // characters should persist cleanly and read back intact.
+    std::string quotedDbPath = "quoted_storage.db";
+    std::remove(quotedDbPath.c_str());
+    SQLiteStore quotedStore(quotedDbPath);
+    assert(quotedStore.init(dummyCtx));
+
+    const std::string quotedSessionId = "session_'\";[]{}";
+    const std::string quotedEventData = "payload with 'quotes', \"double\", and ; punctuation";
+    const std::string quotedEndReason = "ended because user's app said \"stop\"";
+    const std::string quotedFeedback = "need'less_sound";
+    const std::string quotedPrefKey = "channel'mask";
+    const std::string quotedPrefValue = "screen+'band';sound=\"off\"";
+
+    assert(quotedStore.saveSession(quotedSessionId, 7000, 90000));
+    assert(quotedStore.logEvent({StorageEventType::StateChange, quotedSessionId, 7010, quotedEventData}));
+    quotedStore.runOnce(dummyCtx);
+    assert(quotedStore.updateSessionEnd(quotedSessionId, 9000, 2, 2, 1, 1, 0, quotedEndReason));
+    assert(quotedStore.saveFeedback(quotedSessionId, quotedFeedback));
+    assert(quotedStore.savePreference(quotedPrefKey, quotedPrefValue));
+    assert(quotedStore.getPreference(quotedPrefKey, "") == quotedPrefValue);
+
+    auto quotedEvents = quotedStore.queryEvents(quotedSessionId);
+    assert(quotedEvents.size() == 1);
+    assert(quotedEvents.front().session_id == quotedSessionId);
+    assert(quotedEvents.front().data == quotedEventData);
+
+    auto quotedSession = quotedStore.queryLastCompletedSession();
+    assert(quotedSession.session_id == quotedSessionId);
+    assert(quotedSession.feedback == quotedFeedback);
+
+    sqlite3* quotedDb = nullptr;
+    assert(sqlite3_open(quotedDbPath.c_str(), &quotedDb) == SQLITE_OK);
+    assert(querySingleText(quotedDb, "SELECT end_reason FROM session WHERE id = ?;", quotedSessionId) == quotedEndReason);
+    sqlite3_close(quotedDb);
+
+    // Regression: shutdown should flush queued operations even if runOnce was
+    // never called for the queued events.
+    std::string shutdownDrainDbPath = "shutdown_drain.db";
+    std::remove(shutdownDrainDbPath.c_str());
+    {
+        SQLiteStore shutdownDrainStore(shutdownDrainDbPath);
+        assert(shutdownDrainStore.init(dummyCtx));
+        for (int i = 0; i < 4; ++i) {
+            assert(shutdownDrainStore.logEvent({
+                StorageEventType::ReminderIssued,
+                "drain_session",
+                10000 + i,
+                "queued event " + std::to_string(i)
+            }));
+        }
+        assert(shutdownDrainStore.savePreference("shutdown'pref", "value before shutdown"));
+        shutdownDrainStore.shutdown(dummyCtx);
+    }
+
+    SQLiteStore shutdownDrainVerifyStore(shutdownDrainDbPath);
+    assert(shutdownDrainVerifyStore.init(dummyCtx));
+    auto drainedEvents = shutdownDrainVerifyStore.queryEvents("drain_session");
+    assert(drainedEvents.size() == 4);
+    assert(drainedEvents.front().data == "queued event 0");
+    assert(shutdownDrainVerifyStore.getPreference("shutdown'pref", "") == "value before shutdown");
+
+    // Regression: runtime SQLite access can come from module ticks and App
+    // command handlers at the same time, so DB handle access must be serialized.
+    std::string concurrentDbPath = "concurrent_storage.db";
+    std::remove(concurrentDbPath.c_str());
+    SQLiteStore concurrentStore(concurrentDbPath);
+    assert(concurrentStore.init(dummyCtx));
+    assert(concurrentStore.saveSession("concurrent_session", 1000, 60000));
+    std::vector<std::thread> workers;
+    for (int t = 0; t < 4; ++t) {
+        workers.emplace_back([&concurrentStore, &dummyCtx, t]() {
+            for (int i = 0; i < 50; ++i) {
+                assert(concurrentStore.savePreference("k" + std::to_string(t) + "_" + std::to_string(i),
+                                                      "v" + std::to_string(i)));
+                assert(concurrentStore.updateSessionCounts("concurrent_session", i, i + 1, i + 2));
+                concurrentStore.logEvent({StorageEventType::StateChange,
+                                          "concurrent_session",
+                                          2000 + t * 100 + i,
+                                          "worker " + std::to_string(t)});
+                concurrentStore.runOnce(dummyCtx);
+                auto page = concurrentStore.querySessionHistory("", 2);
+                (void)page;
+            }
+        });
+    }
+    for (auto& worker : workers) {
+        worker.join();
+    }
+    concurrentStore.shutdown(dummyCtx);
+
+    store.shutdown(dummyCtx);
+    store2.shutdown(dummyCtx);
+    legacyStore.shutdown(dummyCtx);
+    lastReportStore.shutdown(dummyCtx);
+    legacyFeedbackStore.shutdown(dummyCtx);
+    quotedStore.shutdown(dummyCtx);
+    shutdownDrainVerifyStore.shutdown(dummyCtx);
+
+    std::remove(dbPath.c_str());
+    std::remove(dbPath2.c_str());
+    std::remove(legacyDbPath.c_str());
+    std::remove(lastReportDbPath.c_str());
+    std::remove(legacyFeedbackDbPath.c_str());
+    std::remove(quotedDbPath.c_str());
+    std::remove(shutdownDrainDbPath.c_str());
+    std::remove(concurrentDbPath.c_str());
     
     std::cout << "Storage tests passed!\n";
     return 0;

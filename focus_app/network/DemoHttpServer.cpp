@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cctype>
 #include <cmath>
 #include <cstring>
 #include <sstream>
@@ -15,6 +16,7 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <unistd.h>
 #endif
 
@@ -65,7 +67,16 @@ CommandLevel parseCommandLevel(int level) {
 
 std::string httpResponse(int status, const std::string& body,
                          const std::string& content_type = "application/json") {
-    const char* status_text = status == 200 ? "OK" : "Bad Request";
+    const char* status_text = "Bad Request";
+    switch (status) {
+    case 200: status_text = "OK"; break;
+    case 400: status_text = "Bad Request"; break;
+    case 404: status_text = "Not Found"; break;
+    case 413: status_text = "Payload Too Large"; break;
+    case 500: status_text = "Internal Server Error"; break;
+    default: break;
+    }
+
     std::ostringstream out;
     out << "HTTP/1.1 " << status << " " << status_text << "\r\n"
         << "Content-Type: " << content_type << "\r\n"
@@ -79,7 +90,7 @@ std::string httpResponse(int status, const std::string& body,
 
 std::string demoPageHtml() {
     return R"HTML(<!doctype html>
-<html lang="zh-CN">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -87,6 +98,7 @@ std::string demoPageHtml() {
 <style>
 body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;margin:20px;background:#f6f7f9;color:#111}
 h1{font-size:22px;margin:0 0 16px}
+p{margin:0 0 12px;color:#444}
 section{background:#fff;border:1px solid #ddd;border-radius:8px;padding:14px;margin:12px 0}
 button{margin:4px;padding:8px 10px;border:1px solid #bbb;border-radius:6px;background:#fff}
 button.primary{background:#0b57d0;color:#fff;border-color:#0b57d0}
@@ -96,12 +108,13 @@ pre{white-space:pre-wrap;background:#111;color:#eee;padding:12px;border-radius:8
 </head>
 <body>
 <h1>EdgeFocus Demo Console</h1>
+<p>Video-only demo page. Open it from another machine with the board host IP and the configured port.</p>
 <section>
-<button class="primary" onclick="snapshot()">刷新状态</button>
-<button onclick="cmd('clear_overrides')">清除兜底</button>
+<button class="primary" onclick="snapshot()">Refresh Snapshot</button>
+<button onclick="cmd('clear_overrides')">Clear Overrides</button>
 </section>
 <section>
-<h3>行为兜底</h3>
+<h3>Focus Override</h3>
 <button onclick="forceState('FOCUSED',10)">FOCUSED</button>
 <button onclick="forceState('LOOKING_AWAY',80)">LOOKING_AWAY</button>
 <button onclick="forceState('AWAY',85)">AWAY</button>
@@ -109,30 +122,30 @@ pre{white-space:pre-wrap;background:#111;color:#eee;padding:12px;border-radius:8
 <button onclick="forceState('PHONE_IN_PLAYING',95)">PHONE_IN_PLAYING</button>
 </section>
 <section>
-<h3>校准提示</h3>
-<button onclick="precheck('move_closer','sit_in_front_of_camera',false)">靠近一点</button>
-<button onclick="precheck('move_farther_or_center','keep_head_in_frame',false)">远一点/居中</button>
-<button onclick="precheck('distance_ok','pose_ok',true)">画面合适</button>
+<h3>Precheck Guidance</h3>
+<button onclick="precheck('move_closer','sit_in_front_of_camera',false)">Move Closer</button>
+<button onclick="precheck('move_farther_or_center','keep_head_in_frame',false)">Move Back or Center</button>
+<button onclick="precheck('distance_ok','pose_ok',true)">Ready</button>
 </section>
 <section>
-<h3>提醒</h3>
-<button onclick="cmd('trigger_reminder',{level:1,message:'保持专注'})">提醒 L1</button>
-<button onclick="cmd('trigger_reminder',{level:2,message:'注意回到学习'})">提醒 L2</button>
-<button onclick="cmd('trigger_reminder',{level:3,message:'请放下手机'})">提醒 L3</button>
+<h3>Reminder</h3>
+<button onclick="cmd('trigger_reminder',{level:1,message:'Stay focused'})">Trigger L1</button>
+<button onclick="cmd('trigger_reminder',{level:2,message:'Return to study'})">Trigger L2</button>
+<button onclick="cmd('trigger_reminder',{level:3,message:'Put the phone down'})">Trigger L3</button>
 </section>
 <section>
-<h3>云台微调</h3>
-<button onclick="nudge('up')">上</button>
-<button onclick="nudge('left')">左</button>
-<button onclick="nudge('right')">右</button>
-<button onclick="nudge('down')">下</button>
+<h3>Gimbal Nudge</h3>
+<button onclick="nudge('up')">Up</button>
+<button onclick="nudge('left')">Left</button>
+<button onclick="nudge('right')">Right</button>
+<button onclick="nudge('down')">Down</button>
 </section>
 <section>
-<h3>报告计数</h3>
-<input id="d" type="number" value="2" min="0">走神
-<input id="r" type="number" value="2" min="0">提醒
-<input id="p" type="number" value="1" min="0">手机
-<button onclick="counts()">设置计数</button>
+<h3>Report Counters</h3>
+<input id="d" type="number" value="2" min="0">Distractions
+<input id="r" type="number" value="2" min="0">Reminders
+<input id="p" type="number" value="1" min="0">Phone events
+<button onclick="counts()">Apply Counts</button>
 </section>
 <pre id="out"></pre>
 <script>
@@ -169,7 +182,6 @@ bool DemoHttpServer::init(AppContext& /*ctx*/) {
 #else
     running_ = true;
     server_thread_ = std::thread(&DemoHttpServer::serveLoop, this);
-    LOGI("DemoHttpServer", "Demo HTTP listening on 0.0.0.0:%d", port_);
     return true;
 #endif
 }
@@ -218,28 +230,65 @@ void DemoHttpServer::serveLoop() {
         ::close(server_fd);
         return;
     }
+    LOGI("DemoHttpServer", "Demo HTTP listening on 0.0.0.0:%d", port_);
 
     while (running_) {
         int client = ::accept(server_fd, nullptr, nullptr);
         if (client < 0) continue;
+        timeval io_timeout{};
+        io_timeout.tv_sec = 2;
+        io_timeout.tv_usec = 0;
+        ::setsockopt(client, SOL_SOCKET, SO_RCVTIMEO, &io_timeout, sizeof(io_timeout));
+        ::setsockopt(client, SOL_SOCKET, SO_SNDTIMEO, &io_timeout, sizeof(io_timeout));
 
-        char buffer[8192];
-        ssize_t n = ::recv(client, buffer, sizeof(buffer) - 1, 0);
-        if (n <= 0) {
-            ::close(client);
-            continue;
+        std::string request_buffer;
+        request_buffer.reserve(4096);
+        std::string response;
+        bool have_response = false;
+
+        while (running_ && !have_response) {
+            char buffer[4096];
+            const ssize_t n = ::recv(client, buffer, sizeof(buffer), 0);
+            if (n <= 0) {
+                if (!request_buffer.empty()) {
+                    response = httpResponse(
+                        400, json{{"status", "error"}, {"error", "unexpected end of request"}}.dump());
+                    have_response = true;
+                }
+                break;
+            }
+
+            request_buffer.append(buffer, static_cast<size_t>(n));
+            demo_http::DemoHttpParsedRequest request;
+            std::string parse_error;
+            size_t expected_bytes = 0;
+            const auto parse_status = demo_http::parseDemoHttpRequestBuffer(
+                request_buffer, request, expected_bytes, parse_error);
+            if (parse_status == demo_http::DemoHttpParseStatus::INCOMPLETE) {
+                continue;
+            }
+            if (parse_status == demo_http::DemoHttpParseStatus::ERROR) {
+                const int status = parse_error == "request body too large" ? 413 : 400;
+                response = httpResponse(status, json{{"status", "error"}, {"error", parse_error}}.dump());
+                have_response = true;
+                break;
+            }
+
+            response = handleRequest(request.method, request.path, request.body);
+            have_response = true;
         }
-        buffer[n] = '\0';
-        std::string req(buffer);
-        std::istringstream first_line(req.substr(0, req.find("\r\n")));
-        std::string method;
-        std::string path;
-        first_line >> method >> path;
-        const auto body_pos = req.find("\r\n\r\n");
-        std::string body = body_pos == std::string::npos ? "" : req.substr(body_pos + 4);
 
-        std::string response = handleRequest(method, path, body);
-        ::send(client, response.data(), response.size(), 0);
+        if (have_response) {
+            size_t sent_total = 0;
+            while (sent_total < response.size()) {
+                const ssize_t sent = ::send(client, response.data() + sent_total,
+                                            response.size() - sent_total, 0);
+                if (sent <= 0) {
+                    break;
+                }
+                sent_total += static_cast<size_t>(sent);
+            }
+        }
         ::close(client);
     }
 
@@ -261,7 +310,7 @@ std::string DemoHttpServer::handleRequest(const std::string& method, const std::
             json req = body.empty() ? json::object() : json::parse(body);
             return httpResponse(200, handleCommand(req).dump());
         }
-        return httpResponse(400, json{{"status", "error"}, {"error", "unknown endpoint"}}.dump());
+        return httpResponse(404, json{{"status", "error"}, {"error", "unknown endpoint"}}.dump());
     } catch (const std::exception& e) {
         return httpResponse(400, json{{"status", "error"}, {"error", e.what()}}.dump());
     }
@@ -398,7 +447,9 @@ DemoHttpServer::json DemoHttpServer::setDemoCounts(const json& data) {
     if (data.contains("phone_distraction_count")) {
         session.phone_distraction_count = std::max(0, data["phone_distraction_count"].get<int>());
     }
-    store_.updateSession(session);
+    if (!session.active || !store_.updateSessionIfCurrent(session)) {
+        return json{{"status", "error"}, {"error", "no active session"}};
+    }
     return json{{"status", "success"}, {"data", {{"distraction_count", session.distraction_count},
                                                   {"reminder_count", session.reminder_count},
                                                   {"phone_distraction_count", session.phone_distraction_count}}}};
@@ -411,6 +462,9 @@ DemoHttpServer::json DemoHttpServer::gimbalNudge(const json& data) {
     const auto direction = lowerCopy(data.value("direction", ""));
     const int step = clampInt(data.value("step_deg", 3), 1, 8);
     auto snap = store_.snapshot();
+    if (!snap.device.gimbal_online || !snap.device.gimbal_safe) {
+        return json{{"status", "error"}, {"error", "gimbal not ready for motion"}};
+    }
     int x = clampInt(static_cast<int>(std::lround(snap.device.gimbal_angle_x)), 0, 180);
     int y = clampInt(static_cast<int>(std::lround(snap.device.gimbal_angle_y)), 0, 359);
     if (direction == "left") y = clampInt(y - step, 0, 359);

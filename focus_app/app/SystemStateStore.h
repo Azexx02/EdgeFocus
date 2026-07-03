@@ -114,6 +114,7 @@ struct CameraPreviewImage {
     std::string data_base64;
 };
 
+#ifdef EDGEFOCUS_WITH_DEMO_HTTP
 struct DemoOverride {
     bool        focus_override_enabled = false;
     FocusState  focus_state = FocusState::FOCUSED;
@@ -124,6 +125,7 @@ struct DemoOverride {
     std::string pose_hint;
     bool        precheck_ready = false;
 };
+#endif
 
 struct Preferences {
     int         system_mode = 0;
@@ -158,7 +160,9 @@ struct SystemSnapshot {
     SessionReport last_report;
     Preferences preferences;
     BehaviorContext behavior_context;
+#ifdef EDGEFOCUS_WITH_DEMO_HTTP
     DemoOverride demo_override;
+#endif
 
     int64_t snapshot_ms = 0;
 };
@@ -171,6 +175,7 @@ public:
 
     void updateFocusState(FocusState state, int64_t since_ms, const std::string& reason);
     void updateSession(const SessionInfo& info);
+    bool updateSessionIfCurrent(const SessionInfo& info);
     void updateTodayStats(const TodayStats& stats);
     void updateReminder(CommandLevel level, const std::string& message, int64_t since_ms);
     void clearReminder();
@@ -182,14 +187,17 @@ public:
     void updateLastReport(const SessionReport& report);
     void updatePreferences(const Preferences& prefs);
     void updateBehaviorContext(const BehaviorContext& context);
+#ifdef EDGEFOCUS_WITH_DEMO_HTTP
     void updateDemoOverride(const DemoOverride& demo_override);
     void clearDemoOverride();
+#endif
 
     void incrementDistraction();
     void incrementReminder();
 
     void notifySessionChange();
     bool waitForSessionChange(std::unique_lock<std::mutex>& lock, int timeout_ms);
+    std::unique_lock<std::mutex> lockSessionLifecycle();
     void resetSession();
     std::mutex& mutexForCV() { return mutex_; }
 
@@ -207,6 +215,7 @@ public:
 
 private:
     mutable std::mutex mutex_;
+    mutable std::mutex session_lifecycle_mutex_;
     std::condition_variable session_cv_;
     SystemSnapshot state_;
 

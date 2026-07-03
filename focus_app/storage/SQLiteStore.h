@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <mutex>
 
 namespace edgefocus {
 
@@ -66,8 +67,11 @@ private:
     bool migrateSchema();
     bool sessionColumnExists(const std::string& column_name) const;
     bool tableColumnExists(const std::string& table_name, const std::string& column_name) const;
+    bool persistEvent(const StorageEvent& event);
+    void drainPendingEvents();
 
     void* db_; // sqlite3* pointer
+    mutable std::recursive_mutex db_mutex_;
     std::string dbPath_;
     BoundedQueue<StorageEvent> eventQueue_;
 };

@@ -50,7 +50,6 @@ bool AppContext::startAll() {
             while (running() && raw->isRunning()) {
                 raw->runOnce(*this);
             }
-            raw->shutdown(*this);
             LOGI(raw->name().c_str(), "Thread stopped");
         });
     }
@@ -71,6 +70,10 @@ void AppContext::stopAll() {
         if (t.joinable()) t.join();
     }
     threads_.clear();
+
+    for (auto it = modules_.rbegin(); it != modules_.rend(); ++it) {
+        (*it)->shutdown(*this);
+    }
     LOGI("AppContext", "All modules stopped");
 }
 

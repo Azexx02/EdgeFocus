@@ -14,7 +14,7 @@ public:
     ~BleBandController();
     void startConnection();
     void stopConnection();
-    void sendAlert(uint8_t level);
+    bool sendAlert(uint8_t level);
     bool isConnected() const { return connected_.load(); }
     bool isEnabled() const { return enabled_.load(); }
     uint8_t lastAlertPattern() const { return last_alert_pattern_.load(); }

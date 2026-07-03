@@ -24,6 +24,16 @@ int64_t wallClockMs() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
 }
+
+std::pair<std::string, std::string> alertHeadlineCopy(CommandLevel level) {
+    if (level == CommandLevel::REST_SUGGESTION) {
+        return {"REST", "NOW"};
+    }
+    if (level == CommandLevel::LEVEL_3) {
+        return {"STAY", "FOCUSED"};
+    }
+    return {"BACK TO", "FOCUS"};
+}
 } // namespace
 
 void StatusPage::render(FrameBuffer& fb, const SystemSnapshot& snap) {
@@ -35,15 +45,16 @@ void StatusPage::render(FrameBuffer& fb, const SystemSnapshot& snap) {
     // Check if we have an active level 2+ reminder (Red Alert Screen - Modal)
     if (snap.reminder.level >= CommandLevel::LEVEL_2 && !snap.reminder.message.empty()) {
         fb.clear(Color::errorContainer());
+        const auto title = alertHeadline(snap.reminder.level, snap.reminder.message);
         
         // Draw Triangle Alert
         fb.drawIconWarning(W / 2, H / 3, 60, Color::error());
         
-        // "REST NOW" or similar text
+        // Reminder headline varies by reminder semantics.
         FontInfo huge_font;
         huge_font.scale = 4;
-        fb.drawTextCentered(Rect(0, H / 2 - 40, W, 50), "REST", Color::error(), huge_font);
-        fb.drawTextCentered(Rect(0, H / 2 + 10, W, 50), "NOW", Color::error(), huge_font);
+        fb.drawTextCentered(Rect(0, H / 2 - 40, W, 50), title.first, Color::error(), huge_font);
+        fb.drawTextCentered(Rect(0, H / 2 + 10, W, 50), title.second, Color::error(), huge_font);
 
         // Subtext
         FontInfo sub_font;
@@ -259,10 +270,14 @@ void StatusPage::render(FrameBuffer& fb, const SystemSnapshot& snap) {
         fb.fillRoundRect(Rect(20, 250, W - 40, 50), 8, Color::bgCard());
         fb.drawTextCentered(Rect(20, 250, W - 40, 50), "PAUSE", Color::textPrimary(), title_font);
         
-        // Focus State
-        Color state_color = focusStateColor(snap.focus_state);
-        const char* state_text = focusStateText(snap.focus_state);
-        if (snap.focus_state != FocusState::FOCUSED) {
+        // Level-1 board screen reminder remains visible without taking over the whole page.
+        if (snap.reminder.level == CommandLevel::LEVEL_1 && !snap.reminder.message.empty()) {
+            fb.drawRoundRect(Rect(12, 214, W - 24, 28), 8, Color::secondary(), 2);
+            fb.drawTextCentered(Rect(16, 220, W - 32, 16), snap.reminder.message,
+                                Color::secondary(), small_font);
+        } else if (snap.focus_state != FocusState::FOCUSED) {
+            Color state_color = focusStateColor(snap.focus_state);
+            const char* state_text = focusStateText(snap.focus_state);
             fb.drawTextCentered(Rect(0, 220, W, 20), state_text, state_color, small_font);
         }
     } else if (internal_state_ == InternalState::PAUSED) {
@@ -383,7 +398,9 @@ bool StatusPage::onTouch(int x, int y) {
             s.start_ms = now_ms;
             s.elapsed_ms = 0;
             s.remaining_ms = s.target_duration_ms;
-            store_->updateSession(s);
+            if (!store_->updateSessionIfCurrent(s)) {
+                return false;
+            }
             store_->updateFocusState(FocusState::FOCUSED, now_ms, "Calibration skipped");
             store_->notifySessionChange();
             return true;
@@ -501,6 +518,16 @@ int64_t StatusPage::countdownSeconds(const SystemSnapshot& snap) const {
 
 int64_t StatusPage::countdownSecondsForTest(const SystemSnapshot& snap) const {
     return countdownSeconds(snap);
+}
+
+std::pair<std::string, std::string> StatusPage::alertHeadlineForTest(
+    CommandLevel level, const std::string& message) {
+    return alertHeadline(level, message);
+}
+
+std::pair<std::string, std::string> StatusPage::alertHeadline(
+    CommandLevel level, const std::string& /*message*/) {
+    return alertHeadlineCopy(level);
 }
 
 } // namespace edgefocus

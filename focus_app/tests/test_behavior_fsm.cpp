@@ -97,6 +97,32 @@ void test_low_confidence() {
     std::cout << "test_low_confidence passed\n";
 }
 
+void test_phone_signal_survives_low_confidence_vision() {
+    FocusStateMachine fsm;
+    for (int i = 0; i < 20; ++i) fsm.processFrame(createFrame(i * 100));
+
+    for (int i = 20; i < 70; ++i) {
+        VisionResult r = createFrame(i * 100);
+        r.reason_code = ReasonCode::LOW_CONFIDENCE;
+        fsm.processFrame(r);
+    }
+
+    PhoneUsageSignal sig;
+    sig.active = true;
+    sig.timestamp_ms = 7000;
+    sig.distraction_level = 2;
+    fsm.injectPhoneSignal(sig);
+
+    VisionResult low_conf_phone_frame = createFrame(7100);
+    low_conf_phone_frame.reason_code = ReasonCode::LOW_CONFIDENCE;
+    fsm.processFrame(low_conf_phone_frame);
+
+    assert(fsm.getCurrentState() == FocusState::PHONE_IN_USE);
+    assert(fsm.getLastEvent().phone_signal);
+    assert(fsm.getLastEvent().is_low_confidence);
+    std::cout << "test_phone_signal_survives_low_confidence_vision passed\n";
+}
+
 void test_hysteresis() {
     FocusStateMachine fsm;
     for (int i = 0; i < 10; ++i) fsm.processFrame(createFrame(i * 100));
@@ -276,6 +302,7 @@ int main() {
     test_phone_in_use();
     test_away();
     test_low_confidence();
+    test_phone_signal_survives_low_confidence_vision();
     test_hysteresis();
     test_looking_away();
     test_phone_usage_state_is_separate_from_distraction_level();

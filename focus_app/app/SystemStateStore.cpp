@@ -16,6 +16,14 @@ void SystemStateStore::updateSession(const SessionInfo& info) {
     state_.session = info;
 }
 
+bool SystemStateStore::updateSessionIfCurrent(const SessionInfo& info) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!state_.session.active) return false;
+    if (state_.session.session_id != info.session_id) return false;
+    state_.session = info;
+    return true;
+}
+
 void SystemStateStore::updateTodayStats(const TodayStats& stats) {
     std::lock_guard<std::mutex> lock(mutex_);
     state_.today = stats;
@@ -78,6 +86,7 @@ void SystemStateStore::updateBehaviorContext(const BehaviorContext& context) {
     state_.behavior_context = context;
 }
 
+#ifdef EDGEFOCUS_WITH_DEMO_HTTP
 void SystemStateStore::updateDemoOverride(const DemoOverride& demo_override) {
     std::lock_guard<std::mutex> lock(mutex_);
     state_.demo_override = demo_override;
@@ -87,6 +96,7 @@ void SystemStateStore::clearDemoOverride() {
     std::lock_guard<std::mutex> lock(mutex_);
     state_.demo_override = DemoOverride{};
 }
+#endif
 
 void SystemStateStore::incrementDistraction() {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -106,6 +116,10 @@ bool SystemStateStore::waitForSessionChange(std::unique_lock<std::mutex>& lock, 
     session_cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms),
                          [this]() { return state_.session.active; });
     return state_.session.active;
+}
+
+std::unique_lock<std::mutex> SystemStateStore::lockSessionLifecycle() {
+    return std::unique_lock<std::mutex>(session_lifecycle_mutex_);
 }
 
 void SystemStateStore::resetSession() {

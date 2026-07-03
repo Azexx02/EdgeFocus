@@ -47,7 +47,9 @@ void SettingsPage::render(FrameBuffer& fb, const SystemSnapshot& snap) {
 
     // Value display
     fb.fillRoundRect(Rect(20 + small_btn_w, timeout_panel_y, value_w, 60), 8, Color::bgCard());
-    int timeout_min = static_cast<int>(snap.session.away_timeout_ms / 60000);
+    int timeout_min = snap.session.active
+        ? static_cast<int>(snap.session.away_timeout_ms / 60000)
+        : snap.preferences.away_timeout_min;
     char timeout_buf[16];
     snprintf(timeout_buf, sizeof(timeout_buf), "%d min", timeout_min);
     fb.drawTextCentered(Rect(20 + small_btn_w, timeout_panel_y, value_w, 60), timeout_buf, Color::textPrimary(), btn_font);
@@ -108,22 +110,29 @@ bool SettingsPage::onTouch(int x, int y) {
 
     if (y >= timeout_panel_y && y <= timeout_panel_y + 60) {
         if (!store_) return false;
-        SessionInfo s = store_->snapshot().session;
-        int current_min = static_cast<int>(s.away_timeout_ms / 60000);
+        auto snap = store_->snapshot();
+        SessionInfo s = snap.session;
+        Preferences prefs = snap.preferences;
+        int current_min = s.active ? static_cast<int>(s.away_timeout_ms / 60000)
+                                   : prefs.away_timeout_min;
 
         if (x >= 20 && x <= 20 + small_btn_w) {
             // Minus button
             current_min -= TIMEOUT_STEP;
             if (current_min < TIMEOUT_MIN_VAL) current_min = TIMEOUT_MIN_VAL;
+            prefs.away_timeout_min = current_min;
+            store_->updatePreferences(prefs);
             s.away_timeout_ms = current_min * 60 * 1000;
-            store_->updateSession(s);
+            if (s.active) store_->updateSessionIfCurrent(s);
             return true;
         } else if (x >= 20 + small_btn_w + value_w && x <= W - 20) {
             // Plus button
             current_min += TIMEOUT_STEP;
             if (current_min > TIMEOUT_MAX_VAL) current_min = TIMEOUT_MAX_VAL;
+            prefs.away_timeout_min = current_min;
+            store_->updatePreferences(prefs);
             s.away_timeout_ms = current_min * 60 * 1000;
-            store_->updateSession(s);
+            if (s.active) store_->updateSessionIfCurrent(s);
             return true;
         }
     }

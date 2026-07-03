@@ -4,12 +4,18 @@
 
 本文只记录 App 侧需要新增或适配的事项。主机内部策略语义不要求 App 复现。
 
+重要边界：
+- `screen_output_route`、`sound_output_route`、`gimbal_enabled` 是工程/高级诊断配置，用于不同硬件版本适配；普通用户设置页不要暴露成可随手切换的入口。
+- `normal_channels` / `silent_channels` 才是普通用户可见的提醒渠道偏好；normal/silent 只筛渠道，不改变提醒等级。
+- `get_console_data` 和云台诊断动作只用于开发/联调，不做普通用户入口。
+
 ## P0：主链路必须适配
 
 1. 会话控制闭环
    - 支持 `session_control start / skip_precheck / pause / resume / end`。
-   - App 发起 `session_control start` 后必须等待主机响应，再按主机返回的 `session_phase` 和 `precheck` 渲染当前步骤。
+   - App 发起 `session_control start` 后必须等待主机响应，再按主机返回的 `session_phase` 和 `precheck` 渲染当前步骤；这是既有主流程，不是新增等待环节。
    - `session_phase=precheck` 时展示预检内容；如果 `precheck` 中包含 `gimbal` 对象，则展示云台校准弹窗或页面；如果不包含 `gimbal`，不要展示云台校准内容。
+   - `precheck.gimbal` 只在主机确认“本次会话云台已启用且运行时 online/safe”时出现；`gimbal_enabled=false`、`EDGEFOCUS_DISABLE_GIMBAL=1`、或硬件仍离线/不安全时，都按“无云台 precheck”处理。
    - focusing 阶段展示倒计时，使用主机返回的 `remaining_ms`，不要自行正计时替代。
    - 结束后按同一 `session_id` 查询 report/history，并提交 feedback。
 
@@ -18,6 +24,7 @@
    - 字段至少包含 `is_in_use`、`distraction_level`、`phone_state` 或 `app_category`。
    - 退出手机使用时必须发 `is_in_use=false`，让主机清除旧手机压力。
    - App 不把 `PHONE_IN_PLAYING` 固定理解成 LEVEL_3。
+   - `phone_sync` 响应只表示主机收到了这次输入，不代表最终行为判定或提醒结果；真正状态以后续 `get_current_state` / `push_state` / `push_alert` 为准。
 
 3. 历史和反馈
    - 实现 `get_session_history` 分页。
@@ -39,10 +46,13 @@
 3. 云台状态与控制
    - 云台属于会话 precheck 主流程的一部分，不是普通用户单独打开的调试功能。
    - 优先读取 `session_control start` 和 `get_current_state` 返回的 `precheck.gimbal`，决定当前预检阶段是否展示云台校准内容。
+   - 如果 `precheck.gimbal` 不存在，不要因为 `get_gimbal_status` 有诊断数据就强行展示云台校准页。
    - 调用 `get_gimbal_status` 展示云台在线、安全、归位、角度、错误信息。
    - 调用 `gimbal_control` 支持预检阶段用户手动小步调整。
+   - 如果运动类 `gimbal_control` 返回 `Gimbal not ready for motion`，不要卡住主流程；提示用户等待或跳过云台预检。
    - UI 提供上下左右/归中/停止按钮。
    - 小步默认 3 度，最大不超过 8 度。
+   - 普通用户主流程优先使用 `nudge_* / move_xy / set_xy / stop`；`ver/ping/stat/fault/angle` 如保留，应放入调试/诊断入口。
 
 4. 提醒输出路由
    - 在设置页增加两个独立路由：
@@ -82,6 +92,8 @@
 
 3. 设备能力展示
    - 展示 `board_screen_available`、`board_sound_available`、`bracelet_connected`。
+   - 展示 `output_capability` 中的 `screen_output_route`、`sound_output_route`、`band_available`、`last_attempted_channels`、`last_delivered_channels`。
+   - 注意 `board_screen_available` / `board_sound_available` 是当前路由下板载输出有效性；route 为 `phone` 时为 false 是旁路行为，不代表硬件损坏。
    - 展示 `last_attempted_channels` / `last_delivered_channels`，便于调试提醒是否实际发出。
 
 ## P2：体验优化

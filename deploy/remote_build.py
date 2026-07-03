@@ -33,6 +33,7 @@ def create_zip():
 
 def remote_build(zip_path):
     print(f"[2] Connecting to {HOST}...")
+    print(f"    Demo HTTP build: {'ON' if DEMO_HTTP else 'OFF'} (video-only, disabled by default)")
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     client.connect(HOST, username=USER, password=PASS)

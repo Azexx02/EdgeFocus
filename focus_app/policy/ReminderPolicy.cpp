@@ -104,24 +104,26 @@ void ReminderPolicy::runOnce(AppContext& /*ctx*/) {
             });
         std::vector<DeviceAction> board_actions;
         std::vector<std::string> phone_actions;
+        std::vector<NotificationChannel> attempted_channels;
+        std::vector<NotificationChannel> phone_delivered_channels;
         board_actions.reserve(actions.size());
         phone_actions.reserve(actions.size());
+        attempted_channels.reserve(actions.size());
+        phone_delivered_channels.reserve(actions.size());
         for (const auto& action : actions) {
+            attempted_channels.push_back(action.channel);
             if (isPhoneRoute(snap.preferences, action.channel)) {
                 phone_actions.push_back(notificationChannelName(action.channel));
+                phone_delivered_channels.push_back(action.channel);
             } else {
                 board_actions.push_back(action);
             }
         }
-        const int attempted_mask = notificationChannelsToMask([&board_actions]() {
-            std::vector<NotificationChannel> channels;
-            channels.reserve(board_actions.size());
-            for (const auto& action : board_actions) channels.push_back(action.channel);
-            return channels;
-        }());
+        const int attempted_mask = notificationChannelsToMask(attempted_channels);
+        const int phone_delivered_mask = notificationChannelsToMask(phone_delivered_channels);
         DeviceStatus device_status = snap.device;
         device_status.last_attempted_channels_mask = attempted_mask;
-        device_status.last_delivered_channels_mask = 0;
+        device_status.last_delivered_channels_mask = phone_delivered_mask;
         store_.updateDeviceStatus(device_status);
         for (const auto& action : board_actions) {
             device_mgr_.issueAction(action);
@@ -170,19 +172,18 @@ std::optional<InterventionCommand> ReminderPolicy::processState(FocusState state
     }
 
     if (state == FocusState::FOCUSED || state == FocusState::PAUSED ||
-        state == FocusState::CALIBRATING || state == FocusState::PHONE_IN_LEARNING) {
+        state == FocusState::CALIBRATING) {
         last_level_ = CommandLevel::NONE;
         return std::nullopt;
     }
 
-    SystemMode mode = mode_manager_.getMode();
-
-    int64_t effective_cooling = current_cooling_ms_;
-    if (mode == SystemMode::HOME) {
-        effective_cooling /= 2; // Shorter cooling in HOME mode (STRICT)
+    if (state == FocusState::LOW_CONFIDENCE || state == FocusState::AWAY) {
+        last_level_ = CommandLevel::NONE;
+        store_.clearReminder();
+        return std::nullopt;
     }
 
-    if (last_reminder_time_ms_ > 0 && (now_ms - last_reminder_time_ms_) < effective_cooling) {
+    if (last_reminder_time_ms_ > 0 && (now_ms - last_reminder_time_ms_) < current_cooling_ms_) {
         return std::nullopt;
     }
 
@@ -202,24 +203,14 @@ std::optional<InterventionCommand> ReminderPolicy::processState(FocusState state
     } else if (state == FocusState::PHONE_IN_USE) {
         target_level = phoneContextLevel(behavior_context);
         cmd.message = "Phone usage detected";
+    } else if (state == FocusState::PHONE_IN_LEARNING) {
+        target_level = phoneContextLevel(behavior_context);
+        cmd.message = "Learning app usage detected";
     } else if (state == FocusState::PHONE_IN_PLAYING) {
         target_level = phoneContextLevel(behavior_context);
         cmd.message = "High phone distraction detected";
-    } else if (state == FocusState::LOW_CONFIDENCE) {
-        target_level = CommandLevel::NONE;
-        cmd.message = "Vision signal unreliable";
-    } else if (state == FocusState::AWAY) {
-        target_level = CommandLevel::NONE;
-        cmd.message = "Long away from desk, no reminder";
     } else {
         return std::nullopt;
-    }
-
-    // SILENT mode only changes the reminder medium marker, not policy severity.
-    if (mode == SystemMode::SILENT) {
-        if (target_level == CommandLevel::LEVEL_3 || target_level == CommandLevel::LEVEL_2) {
-            cmd.message = "[Silent] " + cmd.message;
-        }
     }
 
     cmd.level = target_level;

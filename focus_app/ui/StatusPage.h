@@ -2,6 +2,8 @@
 #include "Page.h"
 #include "storage/ReportGenerator.h"
 #include "storage/SQLiteStore.h"
+#include <string>
+#include <utility>
 
 namespace edgefocus {
 
@@ -15,6 +17,8 @@ public:
     void setReportGenerator(ReportGenerator* rg) { report_gen_ = rg; }
     void setSQLiteStore(SQLiteStore* store) { sqlite_store_ = store; }
     void syncWithSnapshotForTest(const SystemSnapshot& snap);
+    static std::pair<std::string, std::string> alertHeadlineForTest(
+        CommandLevel level, const std::string& message);
 
     int currentInternalStateForTest() const { return static_cast<int>(internal_state_); }
     int targetDurationMinForTest() const { return target_duration_min_; }
@@ -55,6 +59,8 @@ private:
     int64_t countdownSeconds(const SystemSnapshot& snap) const;
     int64_t elapsedSeconds(const SystemSnapshot& snap) const;
     void syncFromSnapshot(const SystemSnapshot& snap);
+    static std::pair<std::string, std::string> alertHeadline(
+        CommandLevel level, const std::string& message);
 };
 
 } // namespace edgefocus

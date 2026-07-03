@@ -106,6 +106,7 @@ BehaviorContext makeVisionContext(const FocusEvent& event, int64_t risk_score, i
     return ctx;
 }
 
+#ifdef EDGEFOCUS_WITH_DEMO_HTTP
 BehaviorContext makeDemoContext(const DemoOverride& demo) {
     BehaviorContext ctx = {};
     ctx.risk_score = std::clamp(demo.risk_score, 0, 100);
@@ -128,6 +129,7 @@ BehaviorContext makeDemoContext(const DemoOverride& demo) {
     ctx.reason = demo.reason.empty() ? "demo_override" : demo.reason;
     return ctx;
 }
+#endif
 
 struct PrecheckGuidance {
     std::string distance_hint;
@@ -227,7 +229,7 @@ void BehaviorEngine::runOnce(AppContext& /*ctx*/) {
                     phone_episode_active_ = true;
                 }
                 s.current_phone_distraction_level = clampPhoneDistractionLevel(phone_sig.distraction_level);
-                store_.updateSession(s);
+                store_.updateSessionIfCurrent(s);
 
                 FocusState phone_state = focusStateForPhoneUsage(phone_sig.usage_state);
                 if (!isDistractionState(previous_state) && isDistractionState(phone_state)) {
@@ -248,7 +250,7 @@ void BehaviorEngine::runOnce(AppContext& /*ctx*/) {
             } else {
                 phone_episode_active_ = false;
                 s.current_phone_distraction_level = 0;
-                store_.updateSession(s);
+                store_.updateSessionIfCurrent(s);
                 if (isPhoneState(previous_state)) {
                     store_.updateFocusState(FocusState::FOCUSED, phone_sig.timestamp_ms, "phone_sync_inactive");
                     nlohmann::json push_data = {
@@ -301,7 +303,7 @@ void BehaviorEngine::runOnce(AppContext& /*ctx*/) {
         auto s = store_.snapshot().session;
         s.focus_accumulated_ms = std::max(s.focus_accumulated_ms, focus_accumulated_ms_);
         applyFocusAccumulation(s, now_ms, FocusState::AWAY, last_focus_update_ms_, focus_accumulated_ms_);
-        store_.updateSession(s);
+        store_.updateSessionIfCurrent(s);
         // Pause should freeze behavior progression: discard queued vision frames
         // and keep focus/distraction counters unchanged.
         while (vision_queue_.tryPop().has_value()) {}
@@ -313,8 +315,9 @@ void BehaviorEngine::runOnce(AppContext& /*ctx*/) {
         auto s = store_.snapshot().session;
         s.focus_accumulated_ms = std::max(s.focus_accumulated_ms, focus_accumulated_ms_);
         applyFocusAccumulation(s, now_ms, FocusState::AWAY, last_focus_update_ms_, focus_accumulated_ms_);
-        store_.updateSession(s);
+        store_.updateSessionIfCurrent(s);
         snap = store_.snapshot();
+#ifdef EDGEFOCUS_WITH_DEMO_HTTP
         if (snap.demo_override.precheck_guidance_override_enabled) {
             store_.updatePrecheckGuidance(snap.demo_override.distance_hint,
                                           snap.demo_override.pose_hint,
@@ -322,6 +325,7 @@ void BehaviorEngine::runOnce(AppContext& /*ctx*/) {
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
             return;
         }
+#endif
         std::optional<VisionResult> latest;
         while (auto item = vision_queue_.tryPop()) {
             latest = *item;
@@ -382,22 +386,23 @@ void BehaviorEngine::runOnce(AppContext& /*ctx*/) {
                 if (s.remaining_ms <= 0) {
                     s.remaining_ms = 0;
                     LOGI("BehaviorEngine", "Target duration reached, auto-terminating session");
-                    store_.updateSession(s);
+                    store_.updateSessionIfCurrent(s);
                     SessionController controller(store_, sqlite_store_);
                     auto ended = controller.endSession("timer_completed");
                     const SessionReport& report = ended.report;
 
-                    // Push timer_complete event
-                    nlohmann::json push_data = {
-                        {"elapsed_ms", report.total_duration * 1000},
-                        {"target_duration_ms", ended.target_duration_ms},
-                        {"distraction_count", report.distraction_count},
-                        {"reminder_count", report.reminder_count},
-                        {"phone_distraction_count", report.phone_distraction_count},
-                        {"session_id", report.session_id}
-                    };
-                    nlohmann::json push_event = {{"cmd", "push_timer_complete"}, {"data", push_data}};
-                    store_.pushEvent(push_event.dump());
+                    if (ended.success && !report.session_id.empty()) {
+                        nlohmann::json push_data = {
+                            {"elapsed_ms", report.total_duration * 1000},
+                            {"target_duration_ms", ended.target_duration_ms},
+                            {"distraction_count", report.distraction_count},
+                            {"reminder_count", report.reminder_count},
+                            {"phone_distraction_count", report.phone_distraction_count},
+                            {"session_id", report.session_id}
+                        };
+                        nlohmann::json push_event = {{"cmd", "push_timer_complete"}, {"data", push_data}};
+                        store_.pushEvent(push_event.dump());
+                    }
                     session_was_active_ = false;
                     focus_accumulated_ms_ = 0;
                     last_focus_update_ms_ = 0;
@@ -407,12 +412,13 @@ void BehaviorEngine::runOnce(AppContext& /*ctx*/) {
                     return;
                 }
             }
-            store_.updateSession(s);
+            store_.updateSessionIfCurrent(s);
         }
-        store_.updateSession(s);
+        store_.updateSessionIfCurrent(s);
     }
 
     snap = store_.snapshot();
+#ifdef EDGEFOCUS_WITH_DEMO_HTTP
     if (snap.demo_override.focus_override_enabled) {
         const FocusState old_state = snap.focus_state;
         const FocusState new_state = snap.demo_override.focus_state;
@@ -438,6 +444,7 @@ void BehaviorEngine::runOnce(AppContext& /*ctx*/) {
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
         return;
     }
+#endif
 
     // --- ACTIVE: process vision results ---
     auto result_opt = vision_queue_.tryPop();
@@ -488,13 +495,13 @@ void BehaviorEngine::runOnce(AppContext& /*ctx*/) {
         if (new_state == FocusState::AWAY) {
             if (s.away_since_ms == 0) {
                 s.away_since_ms = vision_result.timestamp_ms;
-                store_.updateSession(s);
+                store_.updateSessionIfCurrent(s);
             }
         } else {
             // Reset away timer when no longer away
             if (s.away_since_ms != 0) {
                 s.away_since_ms = 0;
-                store_.updateSession(s);
+                store_.updateSessionIfCurrent(s);
             }
         }
 
@@ -521,22 +528,23 @@ void BehaviorEngine::runOnce(AppContext& /*ctx*/) {
                      (long long)away_duration);
                 SessionInfo s = snap.session;
                 s.focus_accumulated_ms = std::max(s.focus_accumulated_ms, focus_accumulated_ms_);
-                store_.updateSession(s);
+                store_.updateSessionIfCurrent(s);
                 SessionController controller(store_, sqlite_store_);
                 auto ended = controller.endSession("away_timeout");
                 const SessionReport& report = ended.report;
 
-                // Push session_end event
-                nlohmann::json push_data = {
-                    {"total_duration", report.total_duration},
-                    {"focus_duration", report.focus_duration},
-                    {"distraction_count", report.distraction_count},
-                    {"reminder_count", report.reminder_count},
-                    {"phone_distraction_count", report.phone_distraction_count},
-                    {"session_id", report.session_id}
-                };
-                nlohmann::json push_event = {{"cmd", "push_session_end"}, {"data", push_data}};
-                store_.pushEvent(push_event.dump());
+                if (ended.success && !report.session_id.empty()) {
+                    nlohmann::json push_data = {
+                        {"total_duration", report.total_duration},
+                        {"focus_duration", report.focus_duration},
+                        {"distraction_count", report.distraction_count},
+                        {"reminder_count", report.reminder_count},
+                        {"phone_distraction_count", report.phone_distraction_count},
+                        {"session_id", report.session_id}
+                    };
+                    nlohmann::json push_event = {{"cmd", "push_session_end"}, {"data", push_data}};
+                    store_.pushEvent(push_event.dump());
+                }
                 session_was_active_ = false;
                 focus_accumulated_ms_ = 0;
                 last_focus_update_ms_ = 0;
@@ -560,7 +568,7 @@ void BehaviorEngine::runOnce(AppContext& /*ctx*/) {
         SessionInfo focused_session = store_.snapshot().session;
         focused_session.focus_accumulated_ms =
             std::max(focused_session.focus_accumulated_ms, focus_accumulated_ms_);
-        store_.updateSession(focused_session);
+        store_.updateSessionIfCurrent(focused_session);
     }
 }
 

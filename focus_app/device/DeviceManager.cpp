@@ -111,8 +111,9 @@ void DeviceManager::executeAction(const DeviceAction& action) {
         uint8_t alert_level = static_cast<uint8_t>(action.level);
         if (alert_level < 1) alert_level = 1;
         if (alert_level > 3) alert_level = 3;
-        ble_ctrl_.sendAlert(alert_level);
-        status.last_delivered_channels_mask |= channel_mask;
+        if (ble_ctrl_.sendAlert(alert_level)) {
+            status.last_delivered_channels_mask |= channel_mask;
+        }
     } else if (action.channel == NotificationChannel::SOUND) {
         if (store_.snapshot().preferences.sound_output_route != "phone") {
             sound_ctrl_.playReminderSound(store_.snapshot().preferences.sound_volume);

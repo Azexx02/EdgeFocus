@@ -28,6 +28,8 @@
 #include <cassert>
 #include <string>
 #include <sstream>
+#include <atomic>
+#include <thread>
 #include <nlohmann/json.hpp>
 
 using namespace edgefocus;
@@ -144,11 +146,14 @@ void test_behavior_to_policy_contract() {
     CHECK(cmd.has_value(), "PHONE_IN_USE high-risk can escalate");
     CHECK(cmd->level == CommandLevel::LEVEL_3, "PHONE_IN_USE high-risk can be LEVEL_3");
 
-    // PHONE_IN_LEARNING → no intervention
+    // PHONE_IN_LEARNING is still a phone input state; policy decides level
+    // from risk context instead of hard-coding "no intervention".
+    setBehaviorContext(store, 1, 20);
     store.updateFocusState(FocusState::PHONE_IN_LEARNING, 33000, "test");
     snap = store.snapshot();
     cmd = policy.processState(snap.focus_state, 34000);
-    CHECK(!cmd.has_value(), "PHONE_IN_LEARNING → no intervention");
+    CHECK(cmd.has_value(), "PHONE_IN_LEARNING → policy generates command");
+    CHECK(cmd->level == CommandLevel::LEVEL_1, "PHONE_IN_LEARNING can be LEVEL_1");
 
     // SLEEPY_OR_SLUMPED → REST_SUGGESTION
     store.updateFocusState(FocusState::SLEEPY_OR_SLUMPED, 39000, "test");
@@ -356,18 +361,87 @@ void test_mode_sync_contract() {
     store.updateFocusState(FocusState::PHONE_IN_USE, 1000, "test");
     auto silent_cmd = policy.processState(FocusState::PHONE_IN_USE, 8000);
     CHECK(silent_cmd.has_value(), "PHONE_IN_USE generates command");
-    CHECK(silent_cmd->message.find("[Silent]") != std::string::npos, "Message has [Silent] prefix");
+    CHECK(silent_cmd->message == "Phone usage detected", "SILENT keeps policy message unchanged");
 
     mm.setMode(SystemMode::NORMAL);
     auto normal_cmd = policy.processState(FocusState::PHONE_IN_USE, 16000);
     CHECK(normal_cmd.has_value(), "PHONE_IN_USE generates command");
     CHECK(normal_cmd->level == silent_cmd->level, "NORMAL and SILENT keep the same policy level");
+    CHECK(normal_cmd->message == silent_cmd->message, "NORMAL and SILENT keep the same policy message");
+
+    mm.setMode(SystemMode::HOME);
+    auto home_first = policy.processState(FocusState::LOOKING_AWAY, 24000);
+    CHECK(home_first.has_value(), "HOME mode first reminder still works");
+    auto home_during_cooldown = policy.processState(FocusState::LOOKING_AWAY, 27000);
+    CHECK(!home_during_cooldown.has_value(), "HOME mode does not shorten cooldown");
 
     // Also verify store is updated (for UI display)
+    mm.setMode(SystemMode::NORMAL);
     DeviceStatus ds = store.snapshot().device;
     ds.system_mode = mm.getMode();
     store.updateDeviceStatus(ds);
     CHECK(store.snapshot().device.system_mode == SystemMode::NORMAL, "Store reflects mode");
+}
+
+void test_policy_skips_non_reminder_states_without_side_effects() {
+    std::cout << "\n[Test 5.5] ReminderPolicy skips non-reminder states cleanly\n";
+
+    SystemStateStore store;
+    SQLiteStore sqlite(":memory:");
+    AppContext ctx;
+    sqlite.init(ctx);
+
+    SessionInfo session;
+    session.active = true;
+    session.calibration_completed = true;
+    session.session_id = "policy_skip_states";
+    store.updateSession(session);
+
+    DeviceManager dev_mgr(store);
+    ReminderPolicy policy(store, sqlite, dev_mgr);
+    policy.init(ctx);
+
+    BehaviorContext high_risk_phone;
+    high_risk_phone.phone_signal = true;
+    high_risk_phone.phone_distraction_level = 3;
+    high_risk_phone.risk_score = 95;
+    high_risk_phone.reason = "phone";
+    store.updateBehaviorContext(high_risk_phone);
+
+    auto low_conf = policy.processState(FocusState::LOW_CONFIDENCE, 1000);
+    CHECK(!low_conf.has_value(), "LOW_CONFIDENCE produces no reminder command");
+    auto after_low_conf = store.snapshot();
+    CHECK(after_low_conf.session.reminder_count == 0, "LOW_CONFIDENCE does not increment reminder_count");
+    CHECK(after_low_conf.reminder.level == CommandLevel::NONE, "LOW_CONFIDENCE does not update active reminder");
+
+    auto phone_after_low_conf = policy.processState(FocusState::PHONE_IN_USE, 2000);
+    CHECK(phone_after_low_conf.has_value(), "LOW_CONFIDENCE does not block next real phone reminder");
+    CHECK(phone_after_low_conf->level == CommandLevel::LEVEL_3, "High-risk phone reminder still escalates");
+
+    BehaviorContext neutral_ctx;
+    neutral_ctx.reason = "away";
+    store.updateBehaviorContext(neutral_ctx);
+    auto away = policy.processState(FocusState::AWAY, 8000);
+    CHECK(!away.has_value(), "AWAY produces no reminder command");
+    auto after_away = store.snapshot();
+    CHECK(after_away.session.reminder_count == 1, "AWAY does not add a fake reminder");
+    CHECK(after_away.reminder.level == CommandLevel::NONE, "AWAY clears stale active reminder");
+
+    auto looking_away = policy.processState(FocusState::LOOKING_AWAY, 9000);
+    CHECK(looking_away.has_value(), "AWAY does not block next real visual reminder");
+    CHECK(looking_away->level == CommandLevel::LEVEL_1, "Visual reminder level is preserved after AWAY");
+
+    for (int i = 0; i < 6; ++i) {
+        sqlite.runOnce(ctx);
+    }
+    auto events = sqlite.queryEvents("policy_skip_states");
+    int reminder_events = 0;
+    for (const auto& event : events) {
+        if (event.type == StorageEventType::ReminderIssued) {
+            reminder_events++;
+        }
+    }
+    CHECK(reminder_events == 2, "Only real reminders are persisted");
 }
 
 // ============================================================================
@@ -866,6 +940,22 @@ void test_status_page_syncs_with_session_snapshot() {
           "StatusPage resets to preference default after session becomes inactive");
 }
 
+void test_status_page_alert_copy_mapping() {
+    std::cout << "\n[Test 12.6] StatusPage maps reminder copy by reminder semantics\n";
+
+    auto rest_copy = StatusPage::alertHeadlineForTest(CommandLevel::REST_SUGGESTION, "Take a short break");
+    CHECK(rest_copy.first == "REST", "REST_SUGGESTION primary title is REST");
+    CHECK(rest_copy.second == "NOW", "REST_SUGGESTION secondary title is NOW");
+
+    auto phone_copy = StatusPage::alertHeadlineForTest(CommandLevel::LEVEL_2, "Phone usage detected");
+    CHECK(phone_copy.first == "BACK TO", "Phone reminder primary title avoids REST copy");
+    CHECK(phone_copy.second == "FOCUS", "Phone reminder secondary title avoids REST copy");
+
+    auto high_copy = StatusPage::alertHeadlineForTest(CommandLevel::LEVEL_3, "High phone distraction detected");
+    CHECK(high_copy.first == "STAY", "High-severity focus reminder uses focus copy");
+    CHECK(high_copy.second == "FOCUSED", "High-severity focus reminder uses focus copy");
+}
+
 // ============================================================================
 // Test 13: UIManager auto-switches to status when session becomes active
 // ============================================================================
@@ -1026,6 +1116,167 @@ void test_session_controller_end_refreshes_stale_elapsed() {
     CHECK(ended.report.total_duration >= 4, "Stale elapsed is refreshed to avoid zero-length report");
     CHECK(ended.report.session_id == s.session_id, "Ended report keeps session_id");
     CHECK(store.snapshot().session.active == false, "Session ends inactive");
+}
+
+void test_session_controller_end_is_idempotent() {
+    std::cout << "\n[Test 13.65] SessionController end is idempotent\n";
+
+    SystemStateStore store;
+    SQLiteStore sqlite(":memory:");
+    AppContext ctx;
+    sqlite.init(ctx);
+
+    SessionController controller(store, sqlite);
+    auto start = controller.startSession(20, "test_end_idempotent");
+    CHECK(start.success, "Idempotent end test starts session");
+    CHECK(start.session.session_id.empty() == false, "Idempotent end test has session_id");
+
+    SessionInfo s = store.snapshot().session;
+    s.active = true;
+    s.calibration_completed = true;
+    s.calibrating = false;
+    s.elapsed_ms = 90000;
+    s.focus_accumulated_ms = 30000;
+    s.distraction_count = 3;
+    s.reminder_count = 2;
+    s.phone_distraction_count = 1;
+    store.updateSession(s);
+
+    auto first_end = controller.endSession("first_end");
+    for (int i = 0; i < 4; ++i) sqlite.runOnce(ctx);
+    auto after_first = store.snapshot();
+
+    auto second_end = controller.endSession("second_end");
+    for (int i = 0; i < 4; ++i) sqlite.runOnce(ctx);
+    auto after_second = store.snapshot();
+
+    CHECK(first_end.success, "First end succeeds");
+    CHECK(second_end.success == false, "Second end is rejected once session already ended");
+    CHECK(after_first.today.sessions == 1, "First end increments today sessions once");
+    CHECK(after_second.today.sessions == 1, "Second end does not increment today sessions again");
+    CHECK(after_first.today.events == 3, "First end stores today events once");
+    CHECK(after_second.today.events == 3, "Second end does not duplicate today events");
+    CHECK(after_second.today.total_seconds == 90, "Second end does not duplicate today total seconds");
+    CHECK(after_second.last_report.session_id == start.session.session_id,
+          "Second end preserves last_report session_id");
+    CHECK(after_second.last_report.total_duration == 90,
+          "Second end preserves last_report total_duration");
+    CHECK(after_second.last_report.focus_duration == 30,
+          "Second end preserves last_report focus_duration");
+
+    auto rec = sqlite.queryLastCompletedSession();
+    CHECK(rec.session_id == start.session.session_id, "SQLite completed session remains the original session");
+    CHECK(rec.total_duration == 90, "SQLite completed session keeps original duration");
+    CHECK(rec.focus_duration == 30, "SQLite completed session keeps original focus duration");
+
+    auto events = sqlite.queryEvents(start.session.session_id);
+    int session_end_events = 0;
+    for (const auto& ev : events) {
+        if (ev.type == StorageEventType::SessionEnd) {
+            session_end_events++;
+        }
+    }
+    CHECK(session_end_events == 1, "Only one SessionEnd event is persisted");
+}
+
+void test_session_controller_end_is_idempotent_under_concurrency() {
+    std::cout << "\n[Test 13.66] SessionController end is idempotent under concurrency\n";
+
+    for (int iteration = 0; iteration < 20; ++iteration) {
+        SystemStateStore store;
+        SQLiteStore sqlite(":memory:");
+        AppContext ctx;
+        sqlite.init(ctx);
+
+        SessionController controller(store, sqlite);
+        auto start = controller.startSession(20, "test_end_concurrent");
+        CHECK(start.success, "Concurrent end test starts session");
+
+        SessionInfo s = store.snapshot().session;
+        s.active = true;
+        s.calibration_completed = true;
+        s.calibrating = false;
+        s.elapsed_ms = 90000;
+        s.focus_accumulated_ms = 30000;
+        s.distraction_count = 3;
+        s.reminder_count = 2;
+        s.phone_distraction_count = 1;
+        store.updateSession(s);
+
+        std::atomic<int> ready{0};
+        std::atomic<bool> go{false};
+        SessionController::EndResult first;
+        SessionController::EndResult second;
+
+        auto worker = [&](SessionController::EndResult* out, const char* reason) {
+            ready.fetch_add(1);
+            while (!go.load()) {
+                std::this_thread::yield();
+            }
+            *out = controller.endSession(reason);
+        };
+
+        std::thread t1(worker, &first, "concurrent_end_1");
+        std::thread t2(worker, &second, "concurrent_end_2");
+
+        while (ready.load() < 2) {
+            std::this_thread::yield();
+        }
+        go.store(true);
+
+        t1.join();
+        t2.join();
+
+        for (int i = 0; i < 4; ++i) sqlite.runOnce(ctx);
+
+        const int success_count = (first.success ? 1 : 0) + (second.success ? 1 : 0);
+        auto snap = store.snapshot();
+        auto rec = sqlite.queryLastCompletedSession();
+        auto events = sqlite.queryEvents(start.session.session_id);
+        int session_end_events = 0;
+        for (const auto& ev : events) {
+            if (ev.type == StorageEventType::SessionEnd) {
+                session_end_events++;
+            }
+        }
+
+        CHECK(success_count == 1, "Exactly one concurrent end succeeds");
+        CHECK(snap.today.sessions == 1, "Concurrent end increments today sessions once");
+        CHECK(snap.today.events == 3, "Concurrent end increments today events once");
+        CHECK(snap.last_report.session_id == start.session.session_id,
+              "Concurrent end keeps last_report session_id");
+        CHECK(rec.session_id == start.session.session_id,
+              "Concurrent end persists original session");
+        CHECK(session_end_events == 1, "Concurrent end persists one SessionEnd event");
+    }
+}
+
+void test_stale_session_update_cannot_resurrect_ended_session() {
+    std::cout << "\n[Test 13.67] Stale session update cannot resurrect ended session\n";
+
+    SystemStateStore store;
+    SQLiteStore sqlite(":memory:");
+    AppContext ctx;
+    sqlite.init(ctx);
+
+    SessionController controller(store, sqlite);
+    auto start = controller.startSession(20, "test_stale_update");
+    CHECK(start.success, "Stale update test starts session");
+
+    SessionInfo stale = store.snapshot().session;
+    stale.calibration_completed = true;
+    stale.calibrating = false;
+    stale.elapsed_ms = 120000;
+    stale.remaining_ms = 0;
+
+    auto ended = controller.endSession("ended_before_stale_write");
+    CHECK(ended.success, "Session ends before stale write");
+    CHECK(store.snapshot().session.active == false, "Session inactive after end");
+
+    CHECK(!store.updateSessionIfCurrent(stale), "Stale active session update is rejected");
+    CHECK(store.snapshot().session.active == false, "Rejected stale update does not resurrect session");
+    CHECK(store.snapshot().last_report.session_id == start.session.session_id,
+          "Rejected stale update preserves last report");
 }
 
 void test_session_controller_precheck_does_not_count_as_focus_time() {
@@ -1232,6 +1483,10 @@ void test_distraction_count_is_episode_based() {
     CHECK(snap.session.phone_distraction_count == 1,
           "Phone usage subtype change in same active episode does not increment phone distraction count");
 
+    sig.timestamp_ms += 200;
+    sig.active = false;
+    store.setPhoneSignal(sig);
+    behavior.runOnce(ctx);
     store.updateFocusState(FocusState::FOCUSED, sig.timestamp_ms + 100, "focus back");
 
     const int64_t frame_base = sig.timestamp_ms + 1000;
@@ -1394,6 +1649,7 @@ int main() {
     test_session_info_contract();
     test_snapshot_to_gatt_contract();
     test_mode_sync_contract();
+    test_policy_skips_non_reminder_states_without_side_effects();
     test_report_contract();
     test_session_lifecycle();
     test_focus_state_enum_consistency();
@@ -1403,10 +1659,14 @@ int main() {
     test_calibration_placeholder_without_frames();
     test_status_page_local_lifecycle_persists_session();
     test_status_page_syncs_with_session_snapshot();
+    test_status_page_alert_copy_mapping();
     test_uimanager_auto_switch_to_status_on_session_start();
     test_session_controller_lifecycle_and_recovery();
     test_session_controller_end_focus_accumulation();
     test_session_controller_end_refreshes_stale_elapsed();
+    test_session_controller_end_is_idempotent();
+    test_session_controller_end_is_idempotent_under_concurrency();
+    test_stale_session_update_cannot_resurrect_ended_session();
     test_session_controller_precheck_does_not_count_as_focus_time();
     test_phone_signal_updates_focus_state_immediately();
     test_inactive_phone_sync_clears_stale_pressure();

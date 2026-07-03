@@ -277,7 +277,7 @@ void BleBandController::stopConnection() {
     LOGI("BleBandController", "BLE connection stopped");
 }
 
-void BleBandController::sendAlert(uint8_t level) {
+bool BleBandController::sendAlert(uint8_t level) {
     const uint8_t clamped_level = clampBandLevel(level);
     uint8_t pattern = patternForLevel(clamped_level);
     last_alert_pattern_ = pattern;
@@ -292,12 +292,13 @@ void BleBandController::sendAlert(uint8_t level) {
         last_write_status_ = "skipped: disconnected";
         LOGI("BleBandController", "BLE alert queued diagnostically (level=%d, pattern=0x%02x, disconnected)",
              clamped_level, pattern);
-        return;
+        return false;
     }
 
     bool ok = writeAlertFrame(pattern, clamped_level);
     LOGI("BleBandController", "BLE alert %s (level=%d, pattern=0x%02x)",
          ok ? "sent" : "failed", clamped_level, pattern);
+    return ok;
 }
 
 bool BleBandController::writeAlertFrame(uint8_t pattern, uint8_t level) {

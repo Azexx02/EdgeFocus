@@ -16,7 +16,7 @@ enum class FocusState : uint8_t {
     CALIBRATING = 7,
 
     // Phone distraction subtypes
-    PHONE_IN_LEARNING = 8,  // Learning app (no intervention)
+    PHONE_IN_LEARNING = 8,  // Learning app usage input; severity is policy-decided.
     PHONE_IN_PLAYING = 9    // Entertainment/playing phone usage input; severity is policy-decided.
 };
 

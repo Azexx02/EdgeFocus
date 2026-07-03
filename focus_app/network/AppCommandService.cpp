@@ -138,6 +138,24 @@ json gimbalStatusData(const SystemSnapshot& snap) {
     };
 }
 
+bool gimbalPrecheckAvailable(const SystemSnapshot& snap, const GimbalMonitor* gimbal_monitor) {
+    if (!gimbal_monitor) return false;
+    if (!snap.preferences.gimbal_enabled) return false;
+    return snap.device.gimbal_online && snap.device.gimbal_safe;
+}
+
+bool isGimbalMotionAction(const std::string& action) {
+    return action == "auto_init" || action == "center_x" || action == "deg_x" ||
+           action == "deg_y" || action == "set_xy" || action == "move_xy" ||
+           action == "nudge_left" || action == "nudge_right" ||
+           action == "nudge_up" || action == "nudge_down";
+}
+
+bool isGimbalDiagnosticAction(const std::string& action) {
+    return action == "ver" || action == "ping" || action == "stat" ||
+           action == "fault" || action == "angle";
+}
+
 std::string lowerCopy(std::string value) {
     std::transform(value.begin(), value.end(), value.begin(), [](unsigned char c) {
         return static_cast<char>(std::tolower(c));
@@ -248,7 +266,7 @@ std::string normalizeOutputRoute(std::string value, const std::string& fallback)
     return fallback;
 }
 
-json precheckFlowData(const SystemSnapshot& snap, bool gimbal_available) {
+json precheckFlowData(const SystemSnapshot& snap, bool gimbal_precheck_available) {
     json data = {
         {"session_phase", sessionPhaseToString(deriveSessionPhase(snap.session))},
         {"camera", {
@@ -257,7 +275,7 @@ json precheckFlowData(const SystemSnapshot& snap, bool gimbal_available) {
             {"guidance", precheckGuidanceData(snap)}
         }}
     };
-    if (gimbal_available && snap.preferences.gimbal_enabled) {
+    if (gimbal_precheck_available) {
         data["gimbal"] = gimbalStatusData(snap);
     }
     return data;
@@ -342,7 +360,9 @@ void AppCommandService::loadPreferences() {
 
     SessionInfo session = store_.snapshot().session;
     session.away_timeout_ms = prefs.away_timeout_min * 60000;
-    store_.updateSession(session);
+    if (session.active) {
+        store_.updateSessionIfCurrent(session);
+    }
 }
 
 std::string AppCommandService::makeResponse(int req_id, const json& data) {
@@ -401,9 +421,16 @@ std::string AppCommandService::handleCommand(const std::string& json_cmd) {
 
 std::string AppCommandService::handleGetDeviceStatus(int req_id) {
     auto snap = store_.snapshot();
+    json battery_percent = snap.device.battery_percent >= 0
+        ? json(snap.device.battery_percent)
+        : json(nullptr);
+    json battery_voltage_mv = snap.device.battery_voltage_mv >= 0
+        ? json(snap.device.battery_voltage_mv)
+        : json(nullptr);
     json data = {
-        {"battery_percent", snap.device.battery_percent},
-        {"battery_voltage_mv", snap.device.battery_voltage_mv},
+        {"battery_available", snap.device.battery_percent >= 0 || snap.device.battery_voltage_mv >= 0},
+        {"battery_percent", battery_percent},
+        {"battery_voltage_mv", battery_voltage_mv},
         {"battery_charging", snap.device.battery_charging},
         {"power_source", snap.device.power_source},
         {"system_mode", static_cast<int>(snap.device.system_mode)},
@@ -422,6 +449,7 @@ std::string AppCommandService::handleGetDeviceStatus(int req_id) {
 
 std::string AppCommandService::handleGetCurrentState(int req_id) {
     auto snap = store_.snapshot();
+    const bool gimbal_precheck_available = gimbalPrecheckAvailable(snap, gimbal_monitor_);
     json data = {
         {"active", snap.session.active},
         {"paused", snap.session.paused},
@@ -435,7 +463,7 @@ std::string AppCommandService::handleGetCurrentState(int req_id) {
         {"calibration_completed", snap.session.calibration_completed},
         {"session_phase", sessionPhaseToString(deriveSessionPhase(snap.session))},
         {"reminder", reminderData(snap)},
-        {"precheck", precheckFlowData(snap, gimbal_monitor_ != nullptr)},
+        {"precheck", precheckFlowData(snap, gimbal_precheck_available)},
         {"output_capability", outputCapabilityData(snap)},
         {"precheck_guidance", precheckGuidanceData(snap)},
         {"camera_preview", cameraPreviewData(snap)},
@@ -492,6 +520,9 @@ std::string AppCommandService::handleSessionControl(const json& data, int req_id
         SessionController controller(store_, sqlite_store_);
         auto started = controller.startSession(target_min, "app");
         const auto& s = started.session;
+        const auto started_snapshot = store_.snapshot();
+        const bool gimbal_precheck_available =
+            gimbalPrecheckAvailable(started_snapshot, gimbal_monitor_);
         LOGI("AppCommandService", "Session started: %s", s.session_id.c_str());
         json resp = {
             {"success", started.success},
@@ -499,10 +530,10 @@ std::string AppCommandService::handleSessionControl(const json& data, int req_id
             {"session_id", s.session_id},
             {"remaining_ms", s.remaining_ms},
             {"target_duration_ms", s.target_duration_ms},
-            {"focus_state", static_cast<int>(store_.snapshot().focus_state)},
+            {"focus_state", static_cast<int>(started_snapshot.focus_state)},
             {"calibration_completed", s.calibration_completed},
             {"session_phase", sessionPhaseToString(deriveSessionPhase(s))},
-            {"precheck", precheckFlowData(store_.snapshot(), gimbal_monitor_ != nullptr)}
+            {"precheck", precheckFlowData(started_snapshot, gimbal_precheck_available)}
         };
         return makeResponse(req_id, resp);
 
@@ -601,7 +632,9 @@ std::string AppCommandService::handleUpdatePreferences(const json& data, int req
         prefs.away_timeout_min = data["away_timeout_min"].get<int>();
         SessionInfo s = store_.snapshot().session;
         s.away_timeout_ms = prefs.away_timeout_min * 60000;
-        store_.updateSession(s);
+        if (s.active) {
+            store_.updateSessionIfCurrent(s);
+        }
     }
     if (data.contains("default_focus_duration_min")) {
         prefs.default_focus_duration_min = clampMinutes(data["default_focus_duration_min"].get<int>(), 5, 120);
@@ -684,21 +717,8 @@ std::string AppCommandService::handleReminderAck(const json& /*data*/, int req_i
 
 std::string AppCommandService::handlePhoneSync(const json& data, int req_id) {
     auto parsed = parsePhoneSyncPayload(data);
-    std::string app_name = data.value("app_name", "");
 
     auto snap = store_.snapshot();
-
-    if (app_name == "local_session_sync") {
-        int duration_sec = data.value("duration_sec", 0);
-        TodayStats today = snap.today;
-        today.focus_seconds += duration_sec;
-        store_.updateTodayStats(today);
-        json resp = {
-            {"focus_state", static_cast<int>(snap.focus_state)},
-            {"action_taken", true}
-        };
-        return makeResponse(req_id, resp);
-    }
 
     if (!parsed.active) {
         PhoneUsageSignal sig;
@@ -877,6 +897,15 @@ std::string AppCommandService::handleGimbalControl(const json& data, int req_id)
     }
 
     const std::string action = lowerCopy(data.value("action", ""));
+    if (isGimbalDiagnosticAction(action) && !data.value("debug", false)) {
+        return makeError(req_id, "Gimbal diagnostic action requires debug=true");
+    }
+    if (isGimbalMotionAction(action)) {
+        const auto snap = store_.snapshot();
+        if (!snap.device.gimbal_online || !snap.device.gimbal_safe) {
+            return makeError(req_id, "Gimbal not ready for motion");
+        }
+    }
     if (action == "auto_init") {
         auto center = gimbal_monitor_->executeBusinessCommand("CENTER X", 30000);
         auto y = center.success ? gimbal_monitor_->executeBusinessCommand("DEG Y 0", 10000)

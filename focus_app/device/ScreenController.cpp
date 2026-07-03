@@ -13,7 +13,7 @@ bool ScreenController::isAvailable() {
 
 void ScreenController::flashScreen() {
     ++flash_count_;
-    LOGI("ScreenController", "Flashing screen (visual flash should be implemented in UIManager)");
+    LOGI("ScreenController", "Screen flash requested (visible cue rendered by UI or phone route)");
     // Removed hazardous system() call to lcd_spi_touch_test which locks the SPI bus.
 }
 } // namespace edgefocus

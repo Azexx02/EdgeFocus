@@ -72,8 +72,8 @@ add_executable(focus_app ${APP_SOURCES})
 target_include_directories(focus_app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(focus_app PRIVATE sqlite3_lib nlohmann_json::nlohmann_json)
 
-# Video-only demo console. Submission cleanup is isolated to DemoHttpServer.*,
-# the EDGEFOCUS_WITH_DEMO_HTTP guards in main.cpp, and the deploy env switch.
+# Video-only demo console. Default builds exclude the HTTP entry and its
+# SystemStateStore/BehaviorEngine override path through EDGEFOCUS_WITH_DEMO_HTTP.
 if(EDGEFOCUS_WITH_DEMO_HTTP)
     target_sources(focus_app PRIVATE network/DemoHttpServer.cpp)
     target_compile_definitions(focus_app PRIVATE EDGEFOCUS_WITH_DEMO_HTTP)
