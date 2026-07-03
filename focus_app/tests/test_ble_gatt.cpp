@@ -90,8 +90,9 @@ int main() {
         std::cout << "  persisted preferences load after init: OK\n";
     }
 
-    // Test 0c: precheck.gimbal stays hidden when a monitor exists but the
-    // hardware is still offline.
+    // Test 0c: enabled gimbal precheck is shown when the module exists, even
+    // while hardware is still offline. Offline is a page state, not a reason to
+    // hide the main-flow gimbal step.
     {
         SystemStateStore offline_store;
         SQLiteStore offline_sqlite(":memory:");
@@ -110,14 +111,17 @@ int main() {
         assertSuccess(start_resp, 30);
         assert(start_resp["data"].contains("precheck"));
         assert(start_resp["data"]["precheck"].contains("camera"));
-        assert(!start_resp["data"]["precheck"].contains("gimbal"));
+        assert(start_resp["data"]["precheck"].contains("gimbal"));
+        assert(start_resp["data"]["precheck"]["gimbal"]["enabled"] == true);
+        assert(start_resp["data"]["precheck"]["gimbal"]["online"] == false);
 
         json current_resp = parseResponse(offline_server.handleCommand(
             R"({"cmd":"get_current_state","id":31})"));
         assertSuccess(current_resp, 31);
         assert(current_resp["data"].contains("precheck"));
         assert(current_resp["data"]["precheck"].contains("camera"));
-        assert(!current_resp["data"]["precheck"].contains("gimbal"));
+        assert(current_resp["data"]["precheck"].contains("gimbal"));
+        assert(current_resp["data"]["precheck"]["gimbal"]["online"] == false);
 
         json end_resp = parseResponse(offline_server.handleCommand(
             R"({"cmd":"session_control","id":32,"data":{"action":"end"}})"));
@@ -125,11 +129,11 @@ int main() {
 
         offline_server.shutdown(offline_ctx);
         offline_sqlite.shutdown(offline_ctx);
-        std::cout << "  precheck.gimbal hidden while offline: OK\n";
+        std::cout << "  enabled precheck.gimbal shown while offline: OK\n";
     }
 
-    // Test 0d: online but unsafe gimbal remains hidden and motion commands are
-    // rejected before the App enters a manual calibration flow.
+    // Test 0d: online but unsafe gimbal still appears in the main flow, while
+    // motion commands remain rejected for hardware safety.
     {
         SystemStateStore unsafe_store;
         SQLiteStore unsafe_sqlite(":memory:");
@@ -152,7 +156,9 @@ int main() {
         json start_resp = parseResponse(unsafe_server.handleCommand(
             R"({"cmd":"session_control","id":40,"data":{"action":"start","target_duration_min":25}})"));
         assertSuccess(start_resp, 40);
-        assert(!start_resp["data"]["precheck"].contains("gimbal"));
+        assert(start_resp["data"]["precheck"].contains("gimbal"));
+        assert(start_resp["data"]["precheck"]["gimbal"]["online"] == true);
+        assert(start_resp["data"]["precheck"]["gimbal"]["safe"] == false);
 
         json control_resp = parseResponse(unsafe_server.handleCommand(
             R"({"cmd":"gimbal_control","id":41,"data":{"action":"nudge_left","step_deg":3}})"));
@@ -165,11 +171,10 @@ int main() {
 
         unsafe_server.shutdown(unsafe_ctx);
         unsafe_sqlite.shutdown(unsafe_ctx);
-        std::cout << "  precheck.gimbal hidden while unsafe: OK\n";
+        std::cout << "  enabled precheck.gimbal shown while unsafe: OK\n";
     }
 
-    // Test 0e: precheck.gimbal appears only after the host has explicit online
-    // and safe gimbal state.
+    // Test 0e: online and safe gimbal appears with ready state details.
     {
         SystemStateStore online_store;
         SQLiteStore online_sqlite(":memory:");

@@ -15,7 +15,8 @@
    - 支持 `session_control start / skip_precheck / pause / resume / end`。
    - App 发起 `session_control start` 后必须等待主机响应，再按主机返回的 `session_phase` 和 `precheck` 渲染当前步骤；这是既有主流程，不是新增等待环节。
    - `session_phase=precheck` 时展示预检内容；如果 `precheck` 中包含 `gimbal` 对象，则展示云台校准弹窗或页面；如果不包含 `gimbal`，不要展示云台校准内容。
-   - `precheck.gimbal` 只在主机确认“本次会话云台已启用且运行时 online/safe”时出现；`gimbal_enabled=false`、`EDGEFOCUS_DISABLE_GIMBAL=1`、或硬件仍离线/不安全时，都按“无云台 precheck”处理。
+   - `precheck.gimbal` 只在主机确认“本次会话云台功能已启用且运行时接入云台模块”时出现；`gimbal_enabled=false` 或 `EDGEFOCUS_DISABLE_GIMBAL=1` 时，都按“无云台 precheck”处理。
+   - `precheck.gimbal.online/safe/fault` 是云台页内部状态：用于禁用运动按钮、显示等待/重试/跳过，不用于决定是否进入云台页。
    - focusing 阶段展示倒计时，使用主机返回的 `remaining_ms`，不要自行正计时替代。
    - 结束后按同一 `session_id` 查询 report/history，并提交 feedback。
 
@@ -49,7 +50,7 @@
    - 如果 `precheck.gimbal` 不存在，不要因为 `get_gimbal_status` 有诊断数据就强行展示云台校准页。
    - 调用 `get_gimbal_status` 展示云台在线、安全、归位、角度、错误信息。
    - 调用 `gimbal_control` 支持预检阶段用户手动小步调整。
-   - 如果运动类 `gimbal_control` 返回 `Gimbal not ready for motion`，不要卡住主流程；提示用户等待或跳过云台预检。
+   - 如果运动类 `gimbal_control` 返回 `Gimbal not ready for motion`，不要卡住主流程；在云台页内提示用户等待、重试或跳过云台预检。
    - UI 提供上下左右/归中/停止按钮。
    - 小步默认 3 度，最大不超过 8 度。
    - 普通用户主流程优先使用 `nudge_* / move_xy / set_xy / stop`；`ver/ping/stat/fault/angle` 如保留，应放入调试/诊断入口。
