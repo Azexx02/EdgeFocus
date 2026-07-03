@@ -1212,6 +1212,7 @@ void test_distraction_count_is_episode_based() {
     behavior.runOnce(ctx);
     auto snap = store.snapshot();
     CHECK(snap.session.distraction_count == 1, "Phone distraction episode increments once on first entry");
+    CHECK(snap.session.phone_distraction_count == 1, "Phone distraction count increments once on first active phone_sync");
     CHECK(snap.focus_state == FocusState::PHONE_IN_USE, "Phone signal updates focus state");
 
     sig.timestamp_ms += 200;
@@ -1219,6 +1220,8 @@ void test_distraction_count_is_episode_based() {
     behavior.runOnce(ctx);
     snap = store.snapshot();
     CHECK(snap.session.distraction_count == 1, "Same phone distraction episode does not keep incrementing");
+    CHECK(snap.session.phone_distraction_count == 1,
+          "Repeated active phone_sync heartbeat does not increment phone distraction count");
 
     sig.timestamp_ms += 200;
     sig.usage_state = PhoneUsageState::PLAYING;
@@ -1226,6 +1229,8 @@ void test_distraction_count_is_episode_based() {
     behavior.runOnce(ctx);
     snap = store.snapshot();
     CHECK(snap.session.distraction_count == 1, "Phone usage subtype changes do not create a new episode");
+    CHECK(snap.session.phone_distraction_count == 1,
+          "Phone usage subtype change in same active episode does not increment phone distraction count");
 
     store.updateFocusState(FocusState::FOCUSED, sig.timestamp_ms + 100, "focus back");
 

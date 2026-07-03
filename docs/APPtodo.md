@@ -8,7 +8,8 @@
 
 1. 会话控制闭环
    - 支持 `session_control start / skip_precheck / pause / resume / end`。
-   - start 后展示 precheck/云台页，由用户手动 skip。
+   - App 发起 `session_control start` 后必须等待主机响应，再按主机返回的 `session_phase` 和 `precheck` 渲染当前步骤。
+   - `session_phase=precheck` 时展示预检内容；如果 `precheck` 中包含 `gimbal` 对象，则展示云台校准弹窗或页面；如果不包含 `gimbal`，不要展示云台校准内容。
    - focusing 阶段展示倒计时，使用主机返回的 `remaining_ms`，不要自行正计时替代。
    - 结束后按同一 `session_id` 查询 report/history，并提交 feedback。
 
@@ -36,8 +37,10 @@
    - UI 文案需要有防抖，不要提示频繁跳变。
 
 3. 云台状态与控制
+   - 云台属于会话 precheck 主流程的一部分，不是普通用户单独打开的调试功能。
+   - 优先读取 `session_control start` 和 `get_current_state` 返回的 `precheck.gimbal`，决定当前预检阶段是否展示云台校准内容。
    - 调用 `get_gimbal_status` 展示云台在线、安全、归位、角度、错误信息。
-   - 调用 `gimbal_control` 支持用户手动小步调整。
+   - 调用 `gimbal_control` 支持预检阶段用户手动小步调整。
    - UI 提供上下左右/归中/停止按钮。
    - 小步默认 3 度，最大不超过 8 度。
 

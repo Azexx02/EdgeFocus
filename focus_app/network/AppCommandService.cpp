@@ -169,6 +169,17 @@ int parseNotificationMaskOrDefault(const std::string& value, int fallback) {
     return parseIntOrDefault(value, fallback);
 }
 
+bool isValidSystemMode(int value) {
+    return value == static_cast<int>(SystemMode::NORMAL) ||
+           value == static_cast<int>(SystemMode::SILENT) ||
+           value == static_cast<int>(SystemMode::HOME);
+}
+
+int parseSystemModeOrDefault(const std::string& value, int fallback) {
+    const int parsed = parseIntOrDefault(value, fallback);
+    return isValidSystemMode(parsed) ? parsed : fallback;
+}
+
 int sanitizeNotificationChannelMask(int value, bool allow_sound) {
     int mask = 0;
     if (value & kNotificationChannelScreenMask) mask |= kNotificationChannelScreenMask;
@@ -237,6 +248,21 @@ std::string normalizeOutputRoute(std::string value, const std::string& fallback)
     return fallback;
 }
 
+json precheckFlowData(const SystemSnapshot& snap, bool gimbal_available) {
+    json data = {
+        {"session_phase", sessionPhaseToString(deriveSessionPhase(snap.session))},
+        {"camera", {
+            {"required", true},
+            {"preview", cameraPreviewData(snap)},
+            {"guidance", precheckGuidanceData(snap)}
+        }}
+    };
+    if (gimbal_available && snap.preferences.gimbal_enabled) {
+        data["gimbal"] = gimbalStatusData(snap);
+    }
+    return data;
+}
+
 } // namespace
 
 AppCommandService::AppCommandService(SystemStateStore& store, SQLiteStore& sqlite_store,
@@ -246,10 +272,13 @@ AppCommandService::AppCommandService(SystemStateStore& store, SQLiteStore& sqlit
     , sqlite_store_(sqlite_store)
     , reminder_policy_(reminder_policy)
     , mode_mgr_(mode_mgr)
-    , gimbal_monitor_(gimbal_monitor) {
+    , gimbal_monitor_(gimbal_monitor) {}
+
+void AppCommandService::loadPreferences() {
     Preferences prefs = store_.snapshot().preferences;
-    prefs.system_mode = parseIntOrDefault(sqlite_store_.getPreference("system_mode", std::to_string(prefs.system_mode)),
-                                          prefs.system_mode);
+    prefs.system_mode = parseSystemModeOrDefault(
+        sqlite_store_.getPreference("system_mode", std::to_string(prefs.system_mode)),
+        prefs.system_mode);
     prefs.away_timeout_min = parseIntOrDefault(sqlite_store_.getPreference("away_timeout_min", std::to_string(prefs.away_timeout_min)),
                                                prefs.away_timeout_min);
     prefs.default_focus_duration_min = clampMinutes(
@@ -406,6 +435,7 @@ std::string AppCommandService::handleGetCurrentState(int req_id) {
         {"calibration_completed", snap.session.calibration_completed},
         {"session_phase", sessionPhaseToString(deriveSessionPhase(snap.session))},
         {"reminder", reminderData(snap)},
+        {"precheck", precheckFlowData(snap, gimbal_monitor_ != nullptr)},
         {"output_capability", outputCapabilityData(snap)},
         {"precheck_guidance", precheckGuidanceData(snap)},
         {"camera_preview", cameraPreviewData(snap)},
@@ -471,7 +501,8 @@ std::string AppCommandService::handleSessionControl(const json& data, int req_id
             {"target_duration_ms", s.target_duration_ms},
             {"focus_state", static_cast<int>(store_.snapshot().focus_state)},
             {"calibration_completed", s.calibration_completed},
-            {"session_phase", sessionPhaseToString(deriveSessionPhase(s))}
+            {"session_phase", sessionPhaseToString(deriveSessionPhase(s))},
+            {"precheck", precheckFlowData(store_.snapshot(), gimbal_monitor_ != nullptr)}
         };
         return makeResponse(req_id, resp);
 
@@ -557,6 +588,9 @@ std::string AppCommandService::handleUpdatePreferences(const json& data, int req
 
     if (data.contains("system_mode")) {
         int mode = data["system_mode"].get<int>();
+        if (!isValidSystemMode(mode)) {
+            throw std::invalid_argument("invalid system_mode");
+        }
         prefs.system_mode = mode;
         mode_mgr_.setMode(static_cast<SystemMode>(mode));
         DeviceStatus ds = store_.snapshot().device;

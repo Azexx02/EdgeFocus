@@ -6,6 +6,7 @@
 #include "device/DeviceManager.h"
 #include <iostream>
 #include <cassert>
+#include <cmath>
 #include <string>
 #include <nlohmann/json.hpp>
 
@@ -43,6 +44,40 @@ int main() {
         recovery_server.shutdown(recovery_ctx);
         recovery_sqlite.shutdown(recovery_ctx);
         std::cout << "  startup recovery: OK\n";
+    }
+
+    // Test 0b: persisted preferences load after SQLite init, not during service construction.
+    {
+        SystemStateStore pref_store;
+        SQLiteStore pref_sqlite(":memory:");
+        AppContext pref_ctx;
+        pref_sqlite.init(pref_ctx);
+        pref_sqlite.savePreference("system_mode", "1");
+        pref_sqlite.savePreference("sound_volume", "0.33");
+        pref_sqlite.savePreference("screen_output_route", "phone");
+        pref_sqlite.savePreference("sound_output_route", "board");
+        pref_sqlite.savePreference("gimbal_enabled", "0");
+        pref_sqlite.savePreference("normal_channels_mask", "3");
+        pref_sqlite.savePreference("silent_channels_mask", "2");
+        DeviceManager pref_dev_mgr(pref_store);
+        ReminderPolicy pref_policy(pref_store, pref_sqlite, pref_dev_mgr);
+        pref_policy.init(pref_ctx);
+        BleGattServer pref_server(pref_store, pref_sqlite, pref_policy,
+                                  pref_policy.getModeManager());
+        pref_server.init(pref_ctx);
+        json resp = parseResponse(pref_server.handleCommand(R"({"cmd":"get_preferences","id":2})"));
+        assertSuccess(resp, 2);
+        assert(resp["data"]["system_mode"] == 1);
+        assert(std::fabs(resp["data"]["sound_volume"].get<double>() - 0.33) < 0.001);
+        assert(resp["data"]["screen_output_route"] == "phone");
+        assert(resp["data"]["sound_output_route"] == "board");
+        assert(resp["data"]["gimbal_enabled"] == false);
+        assert(resp["data"]["normal_channels_mask"] == 3);
+        assert(resp["data"]["silent_channels_mask"] == 2);
+        assert(pref_policy.getModeManager().getMode() == SystemMode::SILENT);
+        pref_server.shutdown(pref_ctx);
+        pref_sqlite.shutdown(pref_ctx);
+        std::cout << "  persisted preferences load after init: OK\n";
     }
 
     SystemStateStore store;
@@ -138,6 +173,9 @@ int main() {
         assert(resp["data"]["focus_state"] == static_cast<int>(FocusState::CALIBRATING));
         assert(resp["data"].contains("calibration_completed"));
         assert(resp["data"]["calibration_completed"] == false);
+        assert(resp["data"].contains("precheck"));
+        assert(resp["data"]["precheck"].contains("camera"));
+        assert(!resp["data"]["precheck"].contains("gimbal"));
         auto snap = store.snapshot();
         assert(snap.session.active == true);
         assert(snap.session.target_duration_ms == 25 * 60000);
@@ -148,6 +186,9 @@ int main() {
             R"({"cmd":"get_current_state","id":49})"));
         assertSuccess(precheck_state, 49);
         assert(precheck_state["data"]["session_phase"] == "precheck");
+        assert(precheck_state["data"].contains("precheck"));
+        assert(precheck_state["data"]["precheck"].contains("camera"));
+        assert(!precheck_state["data"]["precheck"].contains("gimbal"));
 
         json skip_resp = parseResponse(server.handleCommand(
             R"({"cmd":"session_control","id":51,"data":{"action":"skip_precheck"}})"));
@@ -292,6 +333,16 @@ int main() {
         assert(resp["status"] == "error");
         assert(resp["id"] == 111);
         std::cout << "  update_preferences invalid type: OK\n";
+    }
+
+    // Test 11b.1: update_preferences rejects unknown system_mode enum values.
+    {
+        json resp = parseResponse(server.handleCommand(
+            R"({"cmd":"update_preferences","id":1111,"data":{"system_mode":99}})"));
+        assert(resp["status"] == "error");
+        assert(resp["id"] == 1111);
+        assert(policy.getModeManager().getMode() == SystemMode::SILENT);
+        std::cout << "  update_preferences invalid system_mode enum: OK\n";
     }
 
     // Test 11c: update_preferences accepts channel arrays and updates masks.

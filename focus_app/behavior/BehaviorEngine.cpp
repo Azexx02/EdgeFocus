@@ -216,9 +216,16 @@ void BehaviorEngine::runOnce(AppContext& /*ctx*/) {
         if (deriveSessionPhase(snap.session) == SessionPhase::FOCUSING) {
             auto current_snap = store_.snapshot();
             SessionInfo s = current_snap.session;
+            if (phone_episode_session_id_ != s.session_id) {
+                phone_episode_session_id_ = s.session_id;
+                phone_episode_active_ = false;
+            }
             const FocusState previous_state = current_snap.focus_state;
             if (phone_sig.active) {
-                s.phone_distraction_count++;
+                if (!phone_episode_active_) {
+                    s.phone_distraction_count++;
+                    phone_episode_active_ = true;
+                }
                 s.current_phone_distraction_level = clampPhoneDistractionLevel(phone_sig.distraction_level);
                 store_.updateSession(s);
 
@@ -239,6 +246,7 @@ void BehaviorEngine::runOnce(AppContext& /*ctx*/) {
                     store_.pushEvent(push_event.dump());
                 }
             } else {
+                phone_episode_active_ = false;
                 s.current_phone_distraction_level = 0;
                 store_.updateSession(s);
                 if (isPhoneState(previous_state)) {
@@ -254,6 +262,8 @@ void BehaviorEngine::runOnce(AppContext& /*ctx*/) {
                     store_.pushEvent(push_event.dump());
                 }
             }
+        } else if (!phone_sig.active) {
+            phone_episode_active_ = false;
         }
     }
 
@@ -275,6 +285,8 @@ void BehaviorEngine::runOnce(AppContext& /*ctx*/) {
             pending_pose_hint_.clear();
             pending_precheck_ready_ = false;
             pending_guidance_since_ms_ = 0;
+            phone_episode_active_ = false;
+            phone_episode_session_id_.clear();
             LOGI("BehaviorEngine", "Session ended, FSM reset");
         }
         // Block until session becomes active
@@ -389,6 +401,8 @@ void BehaviorEngine::runOnce(AppContext& /*ctx*/) {
                     session_was_active_ = false;
                     focus_accumulated_ms_ = 0;
                     last_focus_update_ms_ = 0;
+                    phone_episode_active_ = false;
+                    phone_episode_session_id_.clear();
 
                     return;
                 }
@@ -526,6 +540,8 @@ void BehaviorEngine::runOnce(AppContext& /*ctx*/) {
                 session_was_active_ = false;
                 focus_accumulated_ms_ = 0;
                 last_focus_update_ms_ = 0;
+                phone_episode_active_ = false;
+                phone_episode_session_id_.clear();
                 return;
             }
         }

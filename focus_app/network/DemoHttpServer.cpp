@@ -169,7 +169,7 @@ bool DemoHttpServer::init(AppContext& /*ctx*/) {
 #else
     running_ = true;
     server_thread_ = std::thread(&DemoHttpServer::serveLoop, this);
-    LOGI("DemoHttpServer", "Demo HTTP listening on port %d", port_);
+    LOGI("DemoHttpServer", "Demo HTTP listening on 127.0.0.1:%d", port_);
     return true;
 #endif
 }
@@ -210,7 +210,7 @@ void DemoHttpServer::serveLoop() {
 
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
     addr.sin_port = htons(static_cast<uint16_t>(port_));
     if (::bind(server_fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0 ||
         ::listen(server_fd, 4) < 0) {

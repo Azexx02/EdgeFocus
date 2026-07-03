@@ -18,6 +18,7 @@ public:
                       ReminderPolicy& reminder_policy, ModeManager& mode_mgr,
                       GimbalMonitor* gimbal_monitor = nullptr);
 
+    void loadPreferences();
     std::string handleCommand(const std::string& json_cmd);
 
     using json = nlohmann::json;

@@ -127,6 +127,8 @@ BleGattServer::BleGattServer(SystemStateStore& store, SQLiteStore& sqlite_store,
 BleGattServer::~BleGattServer() = default;
 
 bool BleGattServer::init(AppContext& /*ctx*/) {
+    app_commands_.loadPreferences();
+
     SessionController controller(store_, sqlite_store_);
     int recovered = controller.closeInterruptedSessions();
     if (recovered > 0) {

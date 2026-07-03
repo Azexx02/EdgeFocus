@@ -34,6 +34,8 @@ private:
     std::string pending_pose_hint_;
     bool pending_precheck_ready_ = false;
     int64_t pending_guidance_since_ms_ = 0;
+    bool phone_episode_active_ = false;
+    std::string phone_episode_session_id_;
 };
 
 } // namespace edgefocus
