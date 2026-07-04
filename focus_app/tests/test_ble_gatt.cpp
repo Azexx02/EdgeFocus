@@ -1,5 +1,6 @@
 #include "network/BleGattServer.h"
 #include "app/AppContext.h"
+#include "app/SessionController.h"
 #include "app/SystemStateStore.h"
 #include "storage/SQLiteStore.h"
 #include "policy/ReminderPolicy.h"
@@ -386,6 +387,28 @@ int main() {
         std::cout << "  get_current_state: OK\n";
     }
 
+    // Test 2b: public state payload keeps focus_state compatible and exposes
+    // phone subtype details in dedicated fields.
+    {
+        BehaviorContext phone_ctx;
+        phone_ctx.risk_score = 50;
+        phone_ctx.phone_signal = true;
+        phone_ctx.phone_usage_state = static_cast<int>(PhoneUsageState::PLAYING);
+        phone_ctx.phone_distraction_level = 2;
+        phone_ctx.reason = "phone_sync";
+        store.updateBehaviorContext(phone_ctx);
+        store.updateFocusState(FocusState::PHONE_IN_PLAYING, 1234, "Phone sync signal");
+
+        json resp = parseResponse(server.handleCommand(R"({"cmd":"get_current_state","id":202})"));
+        assertSuccess(resp, 202);
+        assert(resp["data"]["focus_state"] == static_cast<int>(FocusState::PHONE_IN_USE));
+        assert(resp["data"]["phone_signal"] == true);
+        assert(resp["data"]["phone_usage_state"] == "playing");
+        assert(resp["data"]["phone_distraction_level"] == 2);
+        assert(resp["data"]["risk_score"] == 50);
+        std::cout << "  get_current_state phone subtype fields: OK\n";
+    }
+
     // Test 3: get_today_summary
     {
         json resp = parseResponse(server.handleCommand(R"({"cmd":"get_today_summary","id":3})"));
@@ -418,6 +441,24 @@ int main() {
             R"({"cmd":"session_control","id":42,"data":{"action":"end"}})"));
         assertSuccess(end_resp, 42);
         std::cout << "  session_control start default duration: OK\n";
+    }
+
+    // Test 4c: requested focus durations are clamped to the supported range.
+    {
+        json too_short = parseResponse(server.handleCommand(
+            R"({"cmd":"session_control","id":43,"data":{"action":"start","target_duration_min":1}})"));
+        assertSuccess(too_short, 43);
+        assert(too_short["data"]["success"] == true);
+        assert(too_short["data"]["target_duration_ms"] == 5 * 60000);
+        server.handleCommand(R"({"cmd":"session_control","id":44,"data":{"action":"end"}})");
+
+        json too_long = parseResponse(server.handleCommand(
+            R"({"cmd":"session_control","id":45,"data":{"action":"start","target_duration_min":9999}})"));
+        assertSuccess(too_long, 45);
+        assert(too_long["data"]["success"] == true);
+        assert(too_long["data"]["target_duration_ms"] == 120 * 60000);
+        server.handleCommand(R"({"cmd":"session_control","id":46,"data":{"action":"end"}})");
+        std::cout << "  session_control start duration clamp: OK\n";
     }
 
     // Test 5: session_control start
@@ -549,6 +590,24 @@ int main() {
         std::cout << "  session_control end: OK\n";
     }
 
+    // Test 10b: BLE cannot skip a board-owned precheck.
+    {
+        SessionController board_controller(store, sqlite_store);
+        auto started = board_controller.startSession(25, "board");
+        assert(started.success == true);
+        auto snap = store.snapshot();
+        assert(snap.session.active == true);
+        assert(snap.session.precheck_owner == "board");
+
+        json resp = parseResponse(server.handleCommand(
+            R"({"cmd":"session_control","id":101,"data":{"action":"skip_precheck"}})"));
+        assertSuccess(resp, 101);
+        assert(resp["data"]["success"] == false);
+        assert(resp["data"]["message"].get<std::string>().find("not allowed") != std::string::npos);
+        board_controller.endSession("cleanup_board_owned_precheck");
+        std::cout << "  session_control skip board-owned precheck denied: OK\n";
+    }
+
     // Test 11a: defaults are SCREEN+BAND+SOUND / SCREEN+BAND.
     {
         json resp = parseResponse(server.handleCommand(R"({"cmd":"get_preferences","id":1110})"));
@@ -648,6 +707,24 @@ int main() {
         assert(resp["data"]["gimbal_enabled"] == false);
     }
 
+    // Test 11g: update_preferences clamps out-of-range client values.
+    {
+        json resp = parseResponse(server.handleCommand(
+            R"({"cmd":"update_preferences","id":116,"data":{"away_timeout_min":999,"default_focus_duration_min":999,"vibration_strength":-0.5,"sound_volume":2.0,"led_brightness":250,"reminder_sensitivity":2.5}})"));
+        assertSuccess(resp, 116);
+        assert(resp["data"]["away_timeout_min"] == 180);
+        assert(resp["data"]["default_focus_duration_min"] == 120);
+        assert(resp["data"]["vibration_strength"] == 0.0);
+        assert(resp["data"]["sound_volume"] == 1.0);
+        assert(resp["data"]["led_brightness"] == 100);
+        assert(resp["data"]["reminder_sensitivity"] == 1.0);
+
+        json reset = parseResponse(server.handleCommand(
+            R"({"cmd":"update_preferences","id":117,"data":{"away_timeout_min":7,"default_focus_duration_min":35,"vibration_strength":0.5,"sound_volume":0.7,"led_brightness":80,"reminder_sensitivity":0.5}})"));
+        assertSuccess(reset, 117);
+        std::cout << "  update_preferences clamps values: OK\n";
+    }
+
     // Test 12: get_preferences
     {
         json resp = parseResponse(server.handleCommand(
@@ -713,7 +790,7 @@ int main() {
         std::cout << "  reminder_ack: OK\n";
     }
 
-    // Test 14: phone_sync (in use)
+    // Test 14: phone_sync can fall back from distraction_level when no usage_state is present.
     {
         json resp = parseResponse(server.handleCommand(
             R"({"cmd":"phone_sync","id":14,"data":{"is_in_use":true,"distraction_level":2,"app_name":"com.test.app"}})"));
@@ -727,11 +804,11 @@ int main() {
         assert(store.consumePhoneSignal(sig));
         assert(sig.active == true);
         assert(sig.distraction_level == 2);
-        assert(sig.usage_state == PhoneUsageState::IN_USE);
-        std::cout << "  phone_sync (in use): OK\n";
+        assert(sig.usage_state == PhoneUsageState::PLAYING);
+        std::cout << "  phone_sync level fallback: OK\n";
     }
 
-    // Test 14b: phone_sync keeps usage state separate from distraction level
+    // Test 14b: explicit usage_state wins over distraction_level; distraction_level is retained for diagnostics.
     {
         json resp_state = parseResponse(server.handleCommand(
             R"({"cmd":"phone_sync","id":114,"data":{"is_in_use":true,"distraction_level":3,"app_name":"unknown"}})"));
@@ -742,14 +819,22 @@ int main() {
         assert(sig.distraction_level == 3);
         assert(sig.usage_state == PhoneUsageState::IN_USE);
 
-        json resp_level = parseResponse(server.handleCommand(
-            R"({"cmd":"phone_sync","id":115,"data":{"is_in_use":true,"distraction_level":1,"app_category":"entertainment","app_name":"video"}})"));
-        assertSuccess(resp_level, 115);
+        json resp_usage_wins_learning = parseResponse(server.handleCommand(
+            R"({"cmd":"phone_sync","id":116,"data":{"is_in_use":true,"usage_state":"learning","distraction_level":2,"app_name":"study_app"}})"));
+        assertSuccess(resp_usage_wins_learning, 116);
         assert(store.consumePhoneSignal(sig));
         assert(sig.active == true);
-        assert(sig.distraction_level == 1);
+        assert(sig.distraction_level == 2);
+        assert(sig.usage_state == PhoneUsageState::LEARNING);
+
+        json resp_usage_wins_playing = parseResponse(server.handleCommand(
+            R"({"cmd":"phone_sync","id":115,"data":{"is_in_use":true,"usage_state":"playing","distraction_level":0,"app_name":"video"}})"));
+        assertSuccess(resp_usage_wins_playing, 115);
+        assert(store.consumePhoneSignal(sig));
+        assert(sig.active == true);
+        assert(sig.distraction_level == 0);
         assert(sig.usage_state == PhoneUsageState::PLAYING);
-        std::cout << "  phone_sync (state/level separated): OK\n";
+        std::cout << "  phone_sync explicit usage_state priority: OK\n";
     }
 
     // Test 15: phone_sync (not in use)
@@ -918,6 +1003,26 @@ int main() {
         std::cout << "  upload_local_session idempotent: OK\n";
     }
 
+    // Test 17f: upload_local_session rejects invalid report payloads.
+    {
+        json reversed_time = parseResponse(server.handleCommand(
+            R"({"cmd":"upload_local_session","id":176,"data":{"session_id":"bad_reversed","start_time_ms":61000,"end_time_ms":1000,"total_duration":60,"focus_duration":55,"distraction_count":0,"reminder_count":0,"phone_distraction_count":0}})"));
+        assert(reversed_time["status"] == "error");
+
+        json too_long = parseResponse(server.handleCommand(
+            R"({"cmd":"upload_local_session","id":177,"data":{"session_id":"bad_long","start_time_ms":1000,"end_time_ms":90001000,"total_duration":90000,"focus_duration":10,"distraction_count":0,"reminder_count":0,"phone_distraction_count":0}})"));
+        assert(too_long["status"] == "error");
+
+        json bad_focus = parseResponse(server.handleCommand(
+            R"({"cmd":"upload_local_session","id":178,"data":{"session_id":"bad_focus","start_time_ms":1000,"end_time_ms":61000,"total_duration":60,"focus_duration":61,"distraction_count":0,"reminder_count":0,"phone_distraction_count":0}})"));
+        assert(bad_focus["status"] == "error");
+
+        json bad_count = parseResponse(server.handleCommand(
+            R"({"cmd":"upload_local_session","id":179,"data":{"session_id":"bad_count","start_time_ms":1000,"end_time_ms":61000,"total_duration":60,"focus_duration":55,"distraction_count":-1,"reminder_count":0,"phone_distraction_count":0}})"));
+        assert(bad_count["status"] == "error");
+        std::cout << "  upload_local_session invalid payloads rejected: OK\n";
+    }
+
     // Test 18: session_feedback
     {
         json start_resp = parseResponse(server.handleCommand(
@@ -942,6 +1047,43 @@ int main() {
         assert(resp["data"].contains("has_more"));
         assert(resp["data"].contains("next_cursor"));
         std::cout << "  get_session_history: OK\n";
+    }
+
+    // Test 19b: get_session_history clamps untrusted client limits.
+    {
+        SystemStateStore hist_store;
+        SQLiteStore hist_sqlite(":memory:");
+        AppContext hist_ctx;
+        hist_sqlite.init(hist_ctx);
+        DeviceManager hist_dev_mgr(hist_store);
+        ReminderPolicy hist_policy(hist_store, hist_sqlite, hist_dev_mgr);
+        hist_policy.init(hist_ctx);
+        BleGattServer hist_server(hist_store, hist_sqlite, hist_policy,
+                                  hist_policy.getModeManager());
+        hist_server.init(hist_ctx);
+
+        for (int i = 0; i < 105; ++i) {
+            const int id = 1900 + i;
+            const int64_t start_ms = 1000LL + static_cast<int64_t>(i) * 100000LL;
+            const int64_t end_ms = start_ms + 60000LL;
+            std::string payload = std::string("{\"cmd\":\"upload_local_session\",\"id\":") +
+                std::to_string(id) +
+                ",\"data\":{\"session_id\":\"hist_" + std::to_string(i) +
+                "\",\"start_time_ms\":" + std::to_string(start_ms) +
+                ",\"end_time_ms\":" + std::to_string(end_ms) +
+                ",\"total_duration\":60,\"focus_duration\":60,\"distraction_count\":0,\"reminder_count\":0,\"phone_distraction_count\":0}}";
+            json upload = parseResponse(hist_server.handleCommand(payload));
+            assertSuccess(upload, id);
+        }
+
+        json resp = parseResponse(hist_server.handleCommand(
+            R"({"cmd":"get_session_history","id":2000,"data":{"limit":1000}})"));
+        assertSuccess(resp, 2000);
+        assert(resp["data"]["sessions"].is_array());
+        assert(resp["data"]["sessions"].size() == 100);
+        hist_server.shutdown(hist_ctx);
+        hist_sqlite.shutdown(hist_ctx);
+        std::cout << "  get_session_history limit clamp: OK\n";
     }
 
     // Test 20: session_feedback (invalid value)
@@ -1002,6 +1144,16 @@ int main() {
         assert(response["status"] == "error");
         assert(response["id"] == 99);
         std::cout << "  unknown command: OK\n";
+    }
+
+    // Test 23b: oversized BLE requests fail explicitly instead of being parsed silently.
+    {
+        std::string huge = R"({"cmd":"get_current_state","id":9900,"data":{"blob":")" +
+            std::string(9000, 'x') + R"("}})";
+        response = parseResponse(server.handleCommand(huge));
+        assert(response["status"] == "error");
+        assert(response["error"].get<std::string>().find("too large") != std::string::npos);
+        std::cout << "  oversized BLE request rejected: OK\n";
     }
 
     // Test 22: push callback registration

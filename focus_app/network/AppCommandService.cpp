@@ -33,11 +33,43 @@ int64_t wallClockMs() {
         std::chrono::system_clock::now().time_since_epoch()).count();
 }
 
+constexpr int kMinFocusDurationMin = 5;
+constexpr int kMaxFocusDurationMin = 120;
+constexpr int kMinAwayTimeoutMin = 1;
+constexpr int kMaxAwayTimeoutMin = 180;
+constexpr int kMaxSessionHistoryLimit = 100;
+constexpr int64_t kMaxLocalSessionDurationSec = 24LL * 60LL * 60LL;
+constexpr int kMaxUploadedCounter = 10000;
+
 json outputCapabilityData(const SystemSnapshot& snap);
 json cameraPreviewData(const SystemSnapshot& snap);
 json behaviorContextData(const SystemSnapshot& snap);
 json precheckFlowData(const SystemSnapshot& snap, bool gimbal_precheck_available);
 bool gimbalPrecheckAvailable(const SystemSnapshot& snap, const GimbalMonitor* gimbal_monitor);
+
+int publicFocusStateCode(FocusState state) {
+    if (state == FocusState::PHONE_IN_LEARNING ||
+        state == FocusState::PHONE_IN_PLAYING) {
+        return static_cast<int>(FocusState::PHONE_IN_USE);
+    }
+    return static_cast<int>(state);
+}
+
+std::string phoneUsageStateToWire(int usage_state) {
+    if (usage_state == static_cast<int>(PhoneUsageState::LEARNING)) return "learning";
+    if (usage_state == static_cast<int>(PhoneUsageState::PLAYING)) return "playing";
+    if (usage_state == static_cast<int>(PhoneUsageState::IN_USE)) return "using";
+    return "unknown";
+}
+
+bool frameQualityReady(const SystemSnapshot& snap) {
+    return snap.frame_quality.score >= 0.6f && !snap.frame_quality.guidance_needed;
+}
+
+bool gimbalReady(const SystemSnapshot& snap) {
+    return !snap.preferences.gimbal_enabled ||
+           (snap.device.gimbal_online && snap.device.gimbal_safe);
+}
 
 json sessionStateData(const SystemSnapshot& snap, bool gimbal_precheck_available = false) {
     const std::string owner = snap.session.precheck_owner.empty()
@@ -48,10 +80,20 @@ json sessionStateData(const SystemSnapshot& snap, bool gimbal_precheck_available
         {"paused", snap.session.paused},
         {"session_id", snap.session.session_id},
         {"session_start_source", owner == "app" ? "app" : "board"},
-        {"focus_state", static_cast<int>(snap.focus_state)},
+        {"focus_state", publicFocusStateCode(snap.focus_state)},
         {"focus_reason", snap.focus_reason},
+        {"risk_score", snap.behavior_context.risk_score},
+        {"command_level", static_cast<int>(snap.reminder.level)},
+        {"phone_signal", snap.behavior_context.phone_signal},
+        {"phone_usage_state", phoneUsageStateToWire(snap.behavior_context.phone_usage_state)},
+        {"phone_distraction_level", snap.behavior_context.phone_distraction_level},
+        {"camera_ok", snap.device.camera_ok},
+        {"frame_quality_ready", frameQualityReady(snap)},
+        {"gimbal_ready", gimbalReady(snap)},
         {"elapsed_ms", snap.session.elapsed_ms},
+        {"elapsed_sec", snap.session.elapsed_ms / 1000},
         {"remaining_ms", snap.session.remaining_ms},
+        {"remaining_sec", snap.session.remaining_ms / 1000},
         {"target_duration_ms", snap.session.target_duration_ms},
         {"distraction_count", snap.session.distraction_count},
         {"reminder_count", snap.session.reminder_count},
@@ -322,6 +364,52 @@ float clampFloat(float value, float min_value, float max_value) {
     return value;
 }
 
+int clampFocusDurationMin(int value) {
+    return clampMinutes(value, kMinFocusDurationMin, kMaxFocusDurationMin);
+}
+
+int clampedDefaultFocusDurationMin(const Preferences& prefs) {
+    return clampFocusDurationMin(prefs.default_focus_duration_min);
+}
+
+Preferences sanitizePreferences(Preferences prefs) {
+    prefs.away_timeout_min = clampMinutes(prefs.away_timeout_min, kMinAwayTimeoutMin, kMaxAwayTimeoutMin);
+    prefs.default_focus_duration_min = clampFocusDurationMin(prefs.default_focus_duration_min);
+    prefs.vibration_strength = clampFloat(prefs.vibration_strength, 0.0f, 1.0f);
+    prefs.sound_volume = clampFloat(prefs.sound_volume, 0.0f, 1.0f);
+    prefs.led_brightness = clampInt(prefs.led_brightness, 0, 100);
+    prefs.reminder_sensitivity = clampFloat(prefs.reminder_sensitivity, 0.0f, 1.0f);
+    return prefs;
+}
+
+int64_t minutesToMs(int minutes) {
+    return static_cast<int64_t>(minutes) * 60000LL;
+}
+
+int durationMsToClampedMinutes(int64_t duration_ms, int fallback_min) {
+    if (duration_ms <= 0) return clampFocusDurationMin(fallback_min);
+    return clampFocusDurationMin(static_cast<int>((duration_ms + 59999LL) / 60000LL));
+}
+
+int targetDurationMinutesFromPayload(const json& data, const Preferences& prefs) {
+    const int fallback_min = clampedDefaultFocusDurationMin(prefs);
+    if (data.contains("target_duration_min")) {
+        const int requested = data["target_duration_min"].get<int>();
+        return requested > 0 ? clampFocusDurationMin(requested) : fallback_min;
+    }
+    if (data.contains("target_duration_ms")) {
+        return durationMsToClampedMinutes(data["target_duration_ms"].get<int64_t>(), fallback_min);
+    }
+    if (data.contains("duration_ms")) {
+        return durationMsToClampedMinutes(data["duration_ms"].get<int64_t>(), fallback_min);
+    }
+    return fallback_min;
+}
+
+bool isValidUploadedCounter(int value) {
+    return value >= 0 && value <= kMaxUploadedCounter;
+}
+
 std::string normalizeOutputRoute(std::string value, const std::string& fallback) {
     value = lowerCopy(value);
     if (value == "board" || value == "phone") return value;
@@ -531,6 +619,7 @@ void AppCommandService::loadPreferences() {
     prefs.gimbal_enabled = parseIntOrDefault(
         sqlite_store_.getPreference("gimbal_enabled", prefs.gimbal_enabled ? "1" : "0"),
         prefs.gimbal_enabled ? 1 : 0) != 0;
+    prefs = sanitizePreferences(prefs);
     if (const char* disabled = std::getenv("EDGEFOCUS_DISABLE_LCD")) {
         const auto value = lowerCopy(disabled);
         if (value == "1" || value == "true" || value == "yes" || value == "on") {
@@ -549,6 +638,7 @@ void AppCommandService::loadPreferences() {
             prefs.gimbal_enabled = false;
         }
     }
+    prefs = sanitizePreferences(prefs);
     store_.updatePreferences(prefs);
     mode_mgr_.setMode(systemModeFromNotificationMode(prefs.notification_mode));
 
@@ -559,7 +649,7 @@ void AppCommandService::loadPreferences() {
     store_.updateDeviceStatus(device);
 
     SessionInfo session = store_.snapshot().session;
-    session.away_timeout_ms = prefs.away_timeout_min * 60000;
+    session.away_timeout_ms = minutesToMs(prefs.away_timeout_min);
     if (session.active) {
         store_.updateSessionIfCurrent(session);
     }
@@ -653,33 +743,9 @@ std::string AppCommandService::handleGetDeviceStatus(int req_id) {
 std::string AppCommandService::handleGetCurrentState(int req_id) {
     auto snap = store_.snapshot();
     const bool gimbal_precheck_available = gimbalPrecheckAvailable(snap, gimbal_monitor_);
-    json data = {
-        {"active", snap.session.active},
-        {"paused", snap.session.paused},
-        {"session_id", snap.session.session_id},
-        {"focus_state", static_cast<int>(snap.focus_state)},
-        {"elapsed_ms", snap.session.elapsed_ms},
-        {"remaining_ms", snap.session.remaining_ms},
-        {"target_duration_ms", snap.session.target_duration_ms},
-        {"distraction_count", snap.session.distraction_count},
-        {"reminder_count", snap.session.reminder_count},
-        {"phone_distraction_count", snap.session.phone_distraction_count},
-        {"calibration_completed", snap.session.calibration_completed},
-        {"session_phase", sessionPhaseToString(deriveSessionPhase(snap.session))},
-        {"session_start_source", snap.session.precheck_owner == "app" ? "app" : "board"},
-        {"precheck_control", {
-            {"owner", snap.session.precheck_owner.empty() ? "board" : snap.session.precheck_owner},
-            {"app_can_skip_precheck", snap.session.precheck_owner == "app"},
-            {"board_can_continue", true}
-        }},
-        {"reminder", reminderData(snap)},
-        {"precheck", precheckFlowData(snap, gimbal_precheck_available)},
-        {"output_capability", outputCapabilityData(snap)},
-        {"precheck_guidance", precheckGuidanceData(snap)},
-        {"camera_preview", cameraPreviewData(snap)},
-        {"focus_reason", snap.focus_reason},
-        {"behavior_context", behaviorContextData(snap)}
-    };
+    json data = sessionStateData(snap, gimbal_precheck_available);
+    data["reminder"] = reminderData(snap);
+    data["precheck_guidance"] = precheckGuidanceData(snap);
     return makeResponse(req_id, data);
 }
 
@@ -719,16 +785,7 @@ std::string AppCommandService::handleSessionControl(const json& data, int req_id
     auto snap = store_.snapshot();
 
     if (action == "start") {
-        int target_min = data.value("target_duration_min", 0);
-        if (target_min <= 0 && data.contains("target_duration_ms")) {
-            target_min = static_cast<int>((data["target_duration_ms"].get<int64_t>() + 59999) / 60000);
-        }
-        if (target_min <= 0 && data.contains("duration_ms")) {
-            target_min = static_cast<int>((data["duration_ms"].get<int64_t>() + 59999) / 60000);
-        }
-        if (target_min <= 0) {
-            target_min = snap.preferences.default_focus_duration_min;
-        }
+        int target_min = targetDurationMinutesFromPayload(data, snap.preferences);
         SessionController controller(store_, sqlite_store_);
         auto started = controller.startSession(target_min, "app");
         const auto& s = started.session;
@@ -744,6 +801,15 @@ std::string AppCommandService::handleSessionControl(const json& data, int req_id
     } else if (action == "skip_precheck" || action == "skip_calibration") {
         if (!snap.session.active) {
             json resp = {{"success", false}, {"message", "No active session"}};
+            return makeResponse(req_id, resp);
+        }
+        const std::string owner = snap.session.precheck_owner.empty()
+            ? "board"
+            : snap.session.precheck_owner;
+        if (owner != "app") {
+            json resp = sessionStateData(snap, gimbalPrecheckAvailable(snap, gimbal_monitor_));
+            resp["success"] = false;
+            resp["message"] = "App is not allowed to skip board-owned precheck";
             return makeResponse(req_id, resp);
         }
         SessionController controller(store_, sqlite_store_);
@@ -841,15 +907,18 @@ std::string AppCommandService::handleUpdatePreferences(const json& data, int req
     ds.power_profile = prefs.power_profile;
     store_.updateDeviceStatus(ds);
     if (data.contains("away_timeout_min")) {
-        prefs.away_timeout_min = data["away_timeout_min"].get<int>();
+        prefs.away_timeout_min = clampMinutes(
+            data["away_timeout_min"].get<int>(),
+            kMinAwayTimeoutMin,
+            kMaxAwayTimeoutMin);
         SessionInfo s = store_.snapshot().session;
-        s.away_timeout_ms = prefs.away_timeout_min * 60000;
+        s.away_timeout_ms = minutesToMs(prefs.away_timeout_min);
         if (s.active) {
             store_.updateSessionIfCurrent(s);
         }
     }
     if (data.contains("default_focus_duration_min")) {
-        prefs.default_focus_duration_min = clampMinutes(data["default_focus_duration_min"].get<int>(), 5, 120);
+        prefs.default_focus_duration_min = clampFocusDurationMin(data["default_focus_duration_min"].get<int>());
     }
     if (data.contains("vibration_strength")) {
         prefs.vibration_strength = clampFloat(data["vibration_strength"].get<float>(), 0.0f, 1.0f);
@@ -858,10 +927,10 @@ std::string AppCommandService::handleUpdatePreferences(const json& data, int req
         prefs.sound_volume = clampFloat(data["sound_volume"].get<float>(), 0.0f, 1.0f);
     }
     if (data.contains("led_brightness")) {
-        prefs.led_brightness = data["led_brightness"].get<int>();
+        prefs.led_brightness = clampInt(data["led_brightness"].get<int>(), 0, 100);
     }
     if (data.contains("reminder_sensitivity")) {
-        prefs.reminder_sensitivity = data["reminder_sensitivity"].get<float>();
+        prefs.reminder_sensitivity = clampFloat(data["reminder_sensitivity"].get<float>(), 0.0f, 1.0f);
     }
     if (data.contains("normal_channels_mask")) {
         prefs.normal_channels_mask = parseChannelMaskFromValue(data["normal_channels_mask"], true);
@@ -884,6 +953,7 @@ std::string AppCommandService::handleUpdatePreferences(const json& data, int req
     if (data.contains("gimbal_enabled")) {
         prefs.gimbal_enabled = data["gimbal_enabled"].get<bool>();
     }
+    prefs = sanitizePreferences(prefs);
 
     store_.updatePreferences(prefs);
 
@@ -984,6 +1054,24 @@ std::string AppCommandService::handleUploadLocalSession(const json& data, int re
         const int distraction_count = data.value("distraction_count", 0);
         const int reminder_count = data.value("reminder_count", 0);
         const int phone_distraction_count = data.value("phone_distraction_count", 0);
+
+        if (start_time_ms <= 0) {
+            return makeError(req_id, "Invalid start_time_ms");
+        }
+        if (end_time_ms < start_time_ms) {
+            return makeError(req_id, "Invalid end_time_ms");
+        }
+        if (total_duration <= 0 || total_duration > kMaxLocalSessionDurationSec) {
+            return makeError(req_id, "Invalid total_duration");
+        }
+        if (focus_duration < 0 || focus_duration > total_duration) {
+            return makeError(req_id, "Invalid focus_duration");
+        }
+        if (!isValidUploadedCounter(distraction_count) ||
+            !isValidUploadedCounter(reminder_count) ||
+            !isValidUploadedCounter(phone_distraction_count)) {
+            return makeError(req_id, "Invalid count field");
+        }
 
         if (!sqlite_store_.saveSession(session_id, start_time_ms, total_duration * 1000)) {
             return makeError(req_id, "Failed to save local session");
@@ -1095,7 +1183,7 @@ std::string AppCommandService::handleSessionFeedback(const json& data, int req_i
 
 std::string AppCommandService::handleGetSessionHistory(const json& data, int req_id) {
     std::string cursor = data.value("cursor", "");
-    int limit = data.value("limit", 1);
+    int limit = clampInt(data.value("limit", 1), 1, kMaxSessionHistoryLimit);
 
     auto page = sqlite_store_.querySessionHistory(cursor, limit);
 

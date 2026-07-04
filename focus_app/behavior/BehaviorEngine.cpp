@@ -30,11 +30,19 @@ int clampPhoneDistractionLevel(int level) {
     return level;
 }
 
-int estimatePhoneRisk(int level) {
-    if (level <= 0) return 0;
-    if (level <= 1) return 20;
-    if (level == 2) return 40;
-    return 60;
+constexpr int kPhoneActiveBaseRisk = 25;
+
+int applyPhoneUsageMultiplier(int score, PhoneUsageState usage_state) {
+    if (score <= 0) return 0;
+    // phone_usage_state modulates the phone-only behavior risk_score. Reminder
+    // CommandLevel is decided later from risk context, not directly here.
+    if (usage_state == PhoneUsageState::PLAYING) {
+        return std::min(100, score * 2);
+    }
+    if (usage_state == PhoneUsageState::LEARNING) {
+        return std::max(1, (score + 1) / 2);
+    }
+    return std::min(100, ((score * 3) + 1) / 2);
 }
 
 bool isDistractionState(FocusState state) {
@@ -50,6 +58,37 @@ bool isPhoneState(FocusState state) {
     return state == FocusState::PHONE_IN_USE ||
            state == FocusState::PHONE_IN_LEARNING ||
            state == FocusState::PHONE_IN_PLAYING;
+}
+
+bool isVisualDistractionState(FocusState state) {
+    return state == FocusState::LOOKING_AWAY ||
+           state == FocusState::SLEEPY_OR_SLUMPED ||
+           state == FocusState::AWAY ||
+           state == FocusState::LOW_CONFIDENCE;
+}
+
+int publicFocusStateCode(FocusState state) {
+    if (state == FocusState::PHONE_IN_LEARNING ||
+        state == FocusState::PHONE_IN_PLAYING) {
+        return static_cast<int>(FocusState::PHONE_IN_USE);
+    }
+    return static_cast<int>(state);
+}
+
+std::string phoneUsageStateToWire(int usage_state) {
+    if (usage_state == static_cast<int>(PhoneUsageState::LEARNING)) return "learning";
+    if (usage_state == static_cast<int>(PhoneUsageState::PLAYING)) return "playing";
+    if (usage_state == static_cast<int>(PhoneUsageState::IN_USE)) return "using";
+    return "unknown";
+}
+
+bool frameQualityReady(const SystemSnapshot& snap) {
+    return snap.frame_quality.score >= 0.6f && !snap.frame_quality.guidance_needed;
+}
+
+bool gimbalReady(const SystemSnapshot& snap) {
+    return !snap.preferences.gimbal_enabled ||
+           (snap.device.gimbal_online && snap.device.gimbal_safe);
 }
 
 void applyFocusAccumulation(SessionInfo& s, int64_t now_ms, FocusState focus_state,
@@ -86,7 +125,7 @@ BehaviorContext makePhoneContext(const PhoneUsageSignal& sig) {
     if (sig.active) {
         ctx.phone_distraction_level = clampPhoneDistractionLevel(sig.distraction_level);
         ctx.phone_usage_state = static_cast<int>(sig.usage_state);
-        ctx.risk_score = estimatePhoneRisk(sig.distraction_level);
+        ctx.risk_score = applyPhoneUsageMultiplier(kPhoneActiveBaseRisk, sig.usage_state);
         ctx.reason = "phone_sync";
     } else {
         ctx.risk_score = 0;
@@ -118,10 +157,20 @@ nlohmann::json makePushStateData(const SystemSnapshot& snap) {
         {"session_id", snap.session.session_id},
         {"session_phase", sessionPhaseToString(deriveSessionPhase(snap.session))},
         {"session_start_source", owner == "app" ? "app" : "board"},
-        {"focus_state", static_cast<int>(snap.focus_state)},
+        {"focus_state", publicFocusStateCode(snap.focus_state)},
         {"focus_reason", snap.focus_reason},
+        {"risk_score", snap.behavior_context.risk_score},
+        {"command_level", static_cast<int>(snap.reminder.level)},
+        {"phone_signal", snap.behavior_context.phone_signal},
+        {"phone_usage_state", phoneUsageStateToWire(snap.behavior_context.phone_usage_state)},
+        {"phone_distraction_level", snap.behavior_context.phone_distraction_level},
+        {"camera_ok", snap.device.camera_ok},
+        {"frame_quality_ready", frameQualityReady(snap)},
+        {"gimbal_ready", gimbalReady(snap)},
         {"elapsed_ms", snap.session.elapsed_ms},
+        {"elapsed_sec", snap.session.elapsed_ms / 1000},
         {"remaining_ms", snap.session.remaining_ms},
+        {"remaining_sec", snap.session.remaining_ms / 1000},
         {"target_duration_ms", snap.session.target_duration_ms},
         {"distraction_count", snap.session.distraction_count},
         {"reminder_count", snap.session.reminder_count},
@@ -273,8 +322,7 @@ void BehaviorEngine::runOnce(AppContext& /*ctx*/) {
             const FocusState previous_state = current_snap.focus_state;
             if (phone_sig.active) {
                 const bool counts_as_distraction =
-                    phone_sig.usage_state != PhoneUsageState::LEARNING &&
-                    phone_sig.distraction_level > 0;
+                    phone_sig.usage_state != PhoneUsageState::LEARNING;
                 if (counts_as_distraction && !phone_episode_active_) {
                     s.phone_distraction_count++;
                     phone_episode_active_ = true;
@@ -289,7 +337,10 @@ void BehaviorEngine::runOnce(AppContext& /*ctx*/) {
                     !isDistractionState(previous_state) && isDistractionState(phone_state)) {
                     store_.incrementDistraction();
                 }
-                if (previous_state != phone_state) {
+                const bool should_apply_phone_state =
+                    phone_sig.usage_state != PhoneUsageState::LEARNING ||
+                    !isVisualDistractionState(previous_state);
+                if (should_apply_phone_state && previous_state != phone_state) {
                     store_.updateFocusState(phone_state, phone_sig.timestamp_ms, "Phone sync signal");
                     nlohmann::json push_data = makePushStateData(store_.snapshot());
                     nlohmann::json push_event = {{"cmd", "push_state"}, {"data", push_data}};
@@ -299,12 +350,9 @@ void BehaviorEngine::runOnce(AppContext& /*ctx*/) {
                 phone_episode_active_ = false;
                 s.current_phone_distraction_level = 0;
                 store_.updateSessionIfCurrent(s);
-                if (isPhoneState(previous_state)) {
-                    store_.updateFocusState(FocusState::FOCUSED, phone_sig.timestamp_ms, "phone_sync_inactive");
-                    nlohmann::json push_data = makePushStateData(store_.snapshot());
-                    nlohmann::json push_event = {{"cmd", "push_state"}, {"data", push_data}};
-                    store_.pushEvent(push_event.dump());
-                }
+                nlohmann::json push_data = makePushStateData(store_.snapshot());
+                nlohmann::json push_event = {{"cmd", "push_state"}, {"data", push_data}};
+                store_.pushEvent(push_event.dump());
             }
         } else if (!phone_sig.active) {
             phone_episode_active_ = false;

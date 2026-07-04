@@ -27,6 +27,7 @@ constexpr const char* kTxUuid = "0000ff01-0000-1000-8000-00805f9b34fb";
 constexpr const char* kRxUuid = "0000ff02-0000-1000-8000-00805f9b34fb";
 constexpr std::size_t kChunkPayloadBytes = 96;
 constexpr std::size_t kDirectPayloadBytes = 180;
+constexpr std::size_t kMaxBleRequestBytes = 8 * 1024;
 
 int64_t monotonicMs() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -189,6 +190,9 @@ void BleGattServer::shutdown(AppContext& /*ctx*/) {
 }
 
 std::string BleGattServer::handleCommand(const std::string& json_cmd) {
+    if (json_cmd.size() > kMaxBleRequestBytes) {
+        return AppCommandService::makeError(0, "BLE request too large");
+    }
     return app_commands_.handleCommand(json_cmd);
 }
 
@@ -615,6 +619,12 @@ void BleGattServer::bluezSetNotifying(bool notifying) {
     std::lock_guard<std::mutex> lock(bluez_mutex_);
     rx_notifying_ = notifying;
     phone_connected_.store(notifying);
+    if (!notifying) {
+        PhoneUsageSignal sig;
+        sig.active = false;
+        sig.timestamp_ms = monotonicMs();
+        store_.setPhoneSignal(sig);
+    }
 }
 
 void BleGattServer::shutdownBluez() {
@@ -665,6 +675,10 @@ void BleGattServer::shutdownBluez() {
     bluez_next_retry_ms_ = 0;
     rx_notifying_ = false;
     phone_connected_.store(false);
+    PhoneUsageSignal sig;
+    sig.active = false;
+    sig.timestamp_ms = monotonicMs();
+    store_.setPhoneSignal(sig);
 }
 
 void BleGattServer::notifyBluez(const std::string& payload) {

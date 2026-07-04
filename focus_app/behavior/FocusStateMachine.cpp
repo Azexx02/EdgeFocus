@@ -11,15 +11,17 @@ FocusStateMachine::FocusStateMachine()
 }
 
 FocusState FocusStateMachine::determineCandidateState(const FocusEvent& event) {
-    if (event.is_phone_in_use) {
-        if (event.phone_usage_state == PhoneUsageState::LEARNING) return FocusState::PHONE_IN_LEARNING;
-        if (event.phone_usage_state == PhoneUsageState::PLAYING) return FocusState::PHONE_IN_PLAYING;
-        return FocusState::PHONE_IN_USE;
-    }
     if (event.is_low_confidence) return FocusState::LOW_CONFIDENCE;
     if (event.is_away) return FocusState::AWAY;
     if (event.is_sleepy_or_slumped) return FocusState::SLEEPY_OR_SLUMPED;
     if (event.is_looking_away) return FocusState::LOOKING_AWAY;
+    if (event.is_phone_in_use && event.phone_usage_state != PhoneUsageState::LEARNING) {
+        if (event.phone_usage_state == PhoneUsageState::PLAYING) return FocusState::PHONE_IN_PLAYING;
+        return FocusState::PHONE_IN_USE;
+    }
+    if (event.is_phone_in_use && event.phone_usage_state == PhoneUsageState::LEARNING) {
+        return FocusState::PHONE_IN_LEARNING;
+    }
     
     return FocusState::FOCUSED;
 }

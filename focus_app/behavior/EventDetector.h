@@ -16,7 +16,7 @@ struct PhoneUsageSignal {
     int64_t timestamp_ms = 0;
     bool active = false;
     float confidence = 1.0f;
-    int distraction_level = 1; // 1=weak, 2=strong, 3=unclassified/high
+    int distraction_level = 1; // phone_sync phone-side code: 0=learning, 1=using, 2=playing, 3=unclassified/high using.
     PhoneUsageState usage_state = PhoneUsageState::IN_USE;
 };
 
@@ -28,7 +28,10 @@ struct FocusEvent {
     bool is_low_confidence = false;
     bool vision_signal = false;
     bool phone_signal = false;
-    int phone_distraction_level = -1; // 1=weak, 2=strong, 3=unclassified/high
+    bool visual_phone_detected = false;
+    float visual_phone_confidence = 0.0f;
+    bool hand_holding_phone = false;
+    int phone_distraction_level = -1; // Behavior-layer copy of the phone-side code, not CommandLevel.
     PhoneUsageState phone_usage_state = PhoneUsageState::IN_USE;
     int phone_usage_state_raw = -1;
     int risk_score = 0;

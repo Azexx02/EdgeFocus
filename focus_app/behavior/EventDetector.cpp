@@ -11,18 +11,24 @@ void appendReason(std::string& reason, const std::string& token) {
 }
 
 int clampPhoneLevel(int level) {
-    if (level < 1) return 1;
+    if (level < 0) return 0;
     if (level > 3) return 3;
     return level;
 }
 } // namespace
 
 void EventDetector::injectPhoneSignal(const PhoneUsageSignal& sig) {
+    if (!sig.active) {
+        resetPhoneSignal();
+        return;
+    }
     last_phone_sig_ = sig;
+    last_phone_sig_.active = true;
 }
 
 void EventDetector::resetPhoneSignal() {
     last_phone_sig_ = {};
+    last_phone_sig_.active = false;
 }
 
 static int64_t getContinuousDuration(const SlidingWindow& win, std::function<bool(const VisionResult&)> cond) {
@@ -54,14 +60,28 @@ FocusEvent EventDetector::detect(const SlidingWindow& win, const BehaviorConfig&
         return r.isLowConfidence(); 
     }) > config.low_confidence_ratio;
 
-    // Keep phone signal even when vision quality is low.
-    if (last_phone_sig_.active && (current_ts - last_phone_sig_.timestamp_ms) < 5000) {
+    const VisionResult& latest = items.back();
+    event.visual_phone_detected = latest.isPhoneDetected();
+    event.visual_phone_confidence = latest.phone.valid ? latest.phone.confidence : 0.0f;
+    event.hand_holding_phone = latest.hands.valid &&
+                               latest.hands.value == HandState::HOLDING_PHONE &&
+                               latest.hands.confidence >= 0.6f;
+
+    // Keep explicit phone_sync signal until it is explicitly cleared.
+    if (last_phone_sig_.active) {
         event.is_phone_in_use = true;
         event.phone_signal = true;
         event.phone_distraction_level = clampPhoneLevel(last_phone_sig_.distraction_level);
         event.phone_usage_state = last_phone_sig_.usage_state;
         event.phone_usage_state_raw = static_cast<int>(last_phone_sig_.usage_state);
         appendReason(event.reason, "phone_signal");
+    } else if (event.visual_phone_detected && event.hand_holding_phone) {
+        event.is_phone_in_use = true;
+        event.phone_signal = true;
+        event.phone_distraction_level = 1;
+        event.phone_usage_state = PhoneUsageState::IN_USE;
+        event.phone_usage_state_raw = static_cast<int>(PhoneUsageState::IN_USE);
+        appendReason(event.reason, "visual_phone_holding");
     } else {
         event.phone_signal = false;
         event.phone_distraction_level = -1;
