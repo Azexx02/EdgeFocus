@@ -19,6 +19,7 @@ import com.edgefocus.app.data.remote.AppEventLog
 import com.edgefocus.app.data.remote.BleManager
 import com.edgefocus.app.data.remote.PhoneUsage
 import com.edgefocus.app.data.remote.PhoneUsagePolicy
+import com.edgefocus.app.presentation.viewmodel.DistractionAppConfig
 import com.edgefocus.app.util.AppCategorizer
 import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
@@ -100,6 +101,8 @@ class AppMonitorService : Service() {
     private var lastBackgroundAlert = 0L
     private var lastUnclassifiedAlert = 0L
     private var lowDistractionInitialAlertSent = false
+    private var highDistractionInitialAlertSent = false
+    private var lastUsageAccessAlert = 0L
 
     // 通知计数器：每次生成新 ID，确保强干扰等持续提醒不会被 Android 系统静默
     // Android 对相同 ID 的通知只更新内容不重新提醒（不震动/不响铃），
@@ -107,7 +110,7 @@ class AppMonitorService : Service() {
     private var notificationCounter = 0
 
     // 通知间隔（毫秒）
-    private val HIGH_DISTRACTION_INTERVAL = 1000L // 强干扰：每秒
+    private val HIGH_DISTRACTION_INTERVAL = DistractionNotificationPolicy.HIGH_DISTRACTION_INTERVAL_MS
     private val LOW_DISTRACTION_INTERVAL = 60000L // 弱干扰：每分钟
     private val LOW_DISTRACTION_INITIAL_DELAY = 3000L // 弱干扰：启动后3秒首次提醒
     private val BACKGROUND_INTERVAL = 10000L // 后台：每10秒
@@ -157,18 +160,9 @@ class AppMonitorService : Service() {
 
     private fun loadDistractionLevels() {
         lastDistractionReload = System.currentTimeMillis()
-        val prefs = getSharedPreferences("test_prefs", MODE_PRIVATE)
-        val saved = prefs.getString("distraction_levels", "") ?: ""
-        if (saved.isNotEmpty()) {
-            distractionLevels = saved.split(";").filter { it.isNotEmpty() }.associate { entry ->
-                val parts = entry.split("=")
-                if (parts.size == 2) {
-                    parts[0] to (parts[1].toIntOrNull() ?: 3)
-                } else {
-                    "" to 3
-                }
-            }.filterKeys { it.isNotEmpty() }
-        }
+        val prefs = getSharedPreferences(DistractionAppConfig.PREFS_NAME, MODE_PRIVATE)
+        val saved = prefs.getString(DistractionAppConfig.LEVELS_KEY, "") ?: ""
+        distractionLevels = DistractionAppConfig.parseLevels(saved)
         distractionLevels = distractionLevels.toMutableMap().apply {
             put(packageName, 0)
         }
@@ -209,6 +203,24 @@ class AppMonitorService : Service() {
             loadDistractionLevels()
         }
 
+        if (!AppCategorizer.hasUsageStatsPermission(this)) {
+            val decision = AppMonitorForegroundPolicy.decide(
+                hasUsageAccess = false,
+                foregroundPackage = null,
+                selfPackage = packageName
+            )
+            if (decision.shouldCloseCurrentAppUsage) {
+                closeCurrentAppUsage()
+            }
+            if (decision.shouldShowUsageAccessAlert &&
+                now - lastUsageAccessAlert >= DistractionNotificationPolicy.USAGE_ACCESS_ALERT_INTERVAL_MS
+            ) {
+                lastUsageAccessAlert = now
+                showUsageAccessPermissionNotification()
+            }
+            return
+        }
+
         val foregroundPackage = AppCategorizer.getForegroundApp(this)
         Log.d(TAG, "Foreground: $foregroundPackage, self=$packageName")
 
@@ -247,6 +259,7 @@ class AppMonitorService : Service() {
             currentPackageName = foregroundPackage
             currentStartTime = now
             lowDistractionInitialAlertSent = false
+            highDistractionInitialAlertSent = false
             lastHighDistractionAlert = 0L
             lastLowDistractionAlert = 0L
             lastBackgroundAlert = 0L
@@ -264,6 +277,11 @@ class AppMonitorService : Service() {
             category = category,
             level = level
         )
+        handleDistractionNotificationForLevel(level, foregroundPackage, now)
+        return
+    }
+
+    /*
 
         // 下面的通知策略保持原样
         when (level) {
@@ -304,6 +322,56 @@ class AppMonitorService : Service() {
         }
     }
 
+    */
+
+    private fun handleDistractionNotificationForLevel(level: Int, foregroundPackage: String, now: Long) {
+        when (level) {
+            0 -> Unit
+            1 -> {
+                if (!lowDistractionInitialAlertSent) {
+                    val elapsed = now - currentStartTime
+                    if (elapsed >= LOW_DISTRACTION_INITIAL_DELAY) {
+                        lowDistractionInitialAlertSent = true
+                        lastLowDistractionAlert = now
+                        val appName = getAppName(foregroundPackage)
+                        showDistractionNotification("弱干扰应用", "您正在使用 $appName", level)
+                    }
+                } else if (now - lastLowDistractionAlert >= LOW_DISTRACTION_INTERVAL) {
+                    lastLowDistractionAlert = now
+                    val appName = getAppName(foregroundPackage)
+                    showDistractionNotification("弱干扰应用", "您已使用 $appName 超过一分钟", level)
+                }
+            }
+            2 -> {
+                val elapsed = now - currentStartTime
+                if ((!highDistractionInitialAlertSent &&
+                        DistractionNotificationPolicy.canShowHighDistraction(elapsed, 0L, false)) ||
+                    (highDistractionInitialAlertSent &&
+                        now - lastHighDistractionAlert >= HIGH_DISTRACTION_INTERVAL)
+                ) {
+                    highDistractionInitialAlertSent = true
+                    lastHighDistractionAlert = now
+                    val appName = getAppName(foregroundPackage)
+                    showDistractionNotification("强干扰应用", "请停止使用 $appName", level)
+                }
+            }
+            else -> {
+                if (now - lastUnclassifiedAlert >= BACKGROUND_INTERVAL) {
+                    lastUnclassifiedAlert = now
+                    showDistractionNotification("专注中", "请返回 EdgeFocus 继续专注", level)
+                }
+            }
+        }
+    }
+
+    private fun showUsageAccessPermissionNotification() {
+        showAlertNotification(
+            title = "需要开启使用情况访问权限",
+            message = "开启 Usage Access 后，EdgeFocus 才能识别专注期间使用的 App。",
+            notificationId = DistractionNotificationPolicy.USAGE_ACCESS_ALERT_ID
+        )
+    }
+
     private fun showBackgroundNotification() {
         showAlertNotification(
             title = "EdgeFocus 专注中",
@@ -316,10 +384,20 @@ class AppMonitorService : Service() {
         showAlertNotification(title = title, message = message)
     }
 
-    private fun showAlertNotification(title: String, message: String, bigText: String? = null) {
-        notificationCounter++
-        val notificationId = ALERT_NOTIFICATION_ID + notificationCounter
+    private fun showDistractionNotification(title: String, message: String, level: Int) {
+        showAlertNotification(
+            title = title,
+            message = message,
+            notificationId = DistractionNotificationPolicy.notificationIdForLevel(level)
+        )
+    }
 
+    private fun showAlertNotification(
+        title: String,
+        message: String,
+        bigText: String? = null,
+        notificationId: Int = ALERT_NOTIFICATION_ID
+    ) {
         val notificationManager = getSystemService(NotificationManager::class.java)
 
         val intent = Intent(this, MainActivity::class.java).apply {
@@ -378,8 +456,8 @@ class AppMonitorService : Service() {
 
         val usageState = when (category) {
             "learning" -> "learning"
-            "playing" -> "playing"
-            else -> "other"
+            "playing", "entertainment", "game", "video" -> "playing"
+            else -> "using"
         }
         val result = bleManager.phoneSync(
             PhoneUsage(

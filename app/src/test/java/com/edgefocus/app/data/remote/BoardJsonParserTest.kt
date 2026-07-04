@@ -263,7 +263,11 @@ class BoardJsonParserTest {
               "data":{
                 "active":true,
                 "session_phase":"focusing",
-                "focus_state":9,
+                "focus_state":3,
+                "phone_signal":true,
+                "phone_usage_state":"playing",
+                "phone_distraction_level":2,
+                "risk_score":50,
                 "elapsed_ms":30000,
                 "remaining_ms":1470000,
                 "target_duration_ms":1500000,
@@ -287,7 +291,11 @@ class BoardJsonParserTest {
         val state = BoardJsonParser.parseSessionState(response)
 
         assertEquals(BoardSessionPhase.FOCUSING, state.sessionPhase)
-        assertEquals(9, state.focusState)
+        assertEquals(3, state.focusState)
+        assertTrue(state.phoneSignal)
+        assertEquals("playing", state.phoneUsageState)
+        assertEquals(2, state.phoneDistractionLevel)
+        assertEquals(50, state.riskScore)
         assertEquals(30_000L, state.elapsedMs)
         assertTrue(state.precheckGuidance!!.contains("lean_left"))
         assertTrue(state.cameraPreview!!.available)

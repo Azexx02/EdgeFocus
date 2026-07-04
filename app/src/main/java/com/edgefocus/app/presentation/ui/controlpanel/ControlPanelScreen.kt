@@ -489,10 +489,17 @@ private fun StatsPage(
                     Spacer(modifier = Modifier.height(8.dp))
                     StatRow("会话 ID", uiState.sessionId?.takeLast(12) ?: "尚未开始")
                     StatRow("主机 active", yesNo(uiState.boardSessionActive))
-                    StatRow("主机 paused", yesNo(uiState.boardSessionPaused))
-                    StatRow("预检完成", yesNo(uiState.calibrationCompleted))
-                    StatRow("行为状态", focusStateLabel(uiState.focusState))
-                    uiState.focusReason?.let { StatRow("状态原因", compactJsonText(it)) }
+                        StatRow("主机 paused", yesNo(uiState.boardSessionPaused))
+                        StatRow("预检完成", yesNo(uiState.calibrationCompleted))
+                        StatRow("行为状态", focusStateLabel(uiState.focusState))
+                        if (uiState.phoneSignal) {
+                            StatRow("手机状态", phoneUsageStateLabel(uiState.phoneUsageState))
+                        }
+                        if (uiState.phoneDistractionLevel >= 0) {
+                            StatRow("手机信号等级", "L${uiState.phoneDistractionLevel}")
+                        }
+                        StatRow("风险分", "${uiState.riskScore}")
+                        uiState.focusReason?.let { StatRow("状态原因", compactJsonText(it)) }
                 }
             }
 
@@ -883,8 +890,15 @@ private fun focusStateLabel(value: Int): String {
         5 -> "视觉低置信"
         6 -> "暂停"
         7 -> "预检/校准"
-        8 -> "学习类手机使用"
-        9 -> "娱乐类手机使用"
+        else -> "未知"
+    }
+}
+
+private fun phoneUsageStateLabel(value: String): String {
+    return when (value.lowercase()) {
+        "learning" -> "学习"
+        "playing" -> "娱乐"
+        "using" -> "使用中"
         else -> "未知"
     }
 }

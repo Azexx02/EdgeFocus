@@ -39,13 +39,13 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.edgefocus.app.presentation.viewmodel.DistractionLevel
-import com.edgefocus.app.presentation.viewmodel.TestViewModel
+import com.edgefocus.app.presentation.viewmodel.DistractionAppsViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DistractionAppsScreen(
     onBack: () -> Unit,
-    viewModel: TestViewModel = hiltViewModel()
+    viewModel: DistractionAppsViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsState()
 

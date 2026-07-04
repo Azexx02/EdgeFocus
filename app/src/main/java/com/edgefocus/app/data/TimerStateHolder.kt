@@ -58,6 +58,11 @@ data class SharedTimerState(
     val calibrationCompleted: Boolean = false,
     val sessionPhase: BoardSessionPhase = BoardSessionPhase.IDLE,
     val focusState: Int = 0,
+    val phoneSignal: Boolean = false,
+    val phoneUsageState: String = "unknown",
+    val phoneDistractionLevel: Int = -1,
+    val riskScore: Int = 0,
+    val commandLevel: Int = 0,
     val elapsedMs: Long = 0L,
     val precheck: BoardPrecheck? = null,
     val outputCapability: OutputCapability? = null,
@@ -89,6 +94,7 @@ class TimerStateHolder @Inject constructor(
         private const val BOARD_SYNC_INTERVAL = 2000L
         private const val CALIBRATION_THRESHOLD_MS = 5000L
         private const val MANUAL_STOP_REPORT_TIMEOUT_MS = 10_000L
+        private const val BOARD_COMPLETION_GRACE_MS = 5_000L
     }
 
     private val _state = MutableStateFlow(SharedTimerState())
@@ -97,6 +103,7 @@ class TimerStateHolder @Inject constructor(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var localCountdownJob: Job? = null
     private var boardSyncJob: Job? = null
+    private var boardCompletionFallbackJob: Job? = null
     @Volatile
     private var isControlPanelActive = false
 
@@ -182,6 +189,10 @@ class TimerStateHolder @Inject constructor(
             }
             override fun onPushStateSnapshot(state: BoardSessionState) {
                 if (_state.value.sessionMode != SessionMode.EDGEFOCUS) return
+                if (state.sessionPhase == BoardSessionPhase.IDLE && isEdgeFocusActiveLocally()) {
+                    handleBoardIdleWhileLocalActive("push_state_idle")
+                    return
+                }
                 if (state.sessionPhase != BoardSessionPhase.IDLE ||
                     state.hasRemainingMs ||
                     state.precheck != null
@@ -190,6 +201,7 @@ class TimerStateHolder @Inject constructor(
                 }
             }
             override fun onPushSessionEnd(summary: String) {
+                cancelBoardCompletionFallback()
                 appEventLog.log("PUSH_SESSION_END", summary)
                 try {
                     val json = JSONObject(summary)
@@ -200,6 +212,7 @@ class TimerStateHolder @Inject constructor(
                 }
             }
             override fun onPushTimerComplete(timerComplete: com.edgefocus.app.data.remote.TimerComplete) {
+                cancelBoardCompletionFallback()
                 appEventLog.log("PUSH_TIMER_COMPLETE", "distraction=${timerComplete.distractionCount}, reminder=${timerComplete.reminderCount}")
                 _state.update {
                     val completedSessions = if (it.timerState == TimerState.FINISHED) {
@@ -530,6 +543,7 @@ class TimerStateHolder @Inject constructor(
     }
 
     fun stopSession() {
+        cancelBoardCompletionFallback()
         localCountdownJob?.cancel()
         boardSyncJob?.cancel()
 
@@ -659,6 +673,7 @@ class TimerStateHolder @Inject constructor(
     }
 
     fun completeSession() {
+        cancelBoardCompletionFallback()
         boardSyncJob?.cancel()
         localCountdownJob?.cancel()
 
@@ -690,7 +705,107 @@ class TimerStateHolder @Inject constructor(
             }
     }
 
+    private fun isEdgeFocusActiveLocally(): Boolean {
+        val current = _state.value
+        return current.sessionMode == SessionMode.EDGEFOCUS &&
+            (current.timerState == TimerState.RUNNING ||
+                current.timerState == TimerState.PAUSED ||
+                current.timerState == TimerState.PRECHECK)
+    }
+
+    private fun reportDataFromResponse(bytes: ByteArray): JSONObject? {
+        val root = JSONObject(String(bytes, Charsets.UTF_8))
+        val data = root.optJSONObject("data") ?: root
+        return data.takeIf { isValidBoardReport(it) }
+    }
+
+    private fun isValidBoardReport(report: JSONObject?): Boolean {
+        if (report == null) return false
+        return report.has("total_duration") || report.has("focus_duration")
+    }
+
+    private fun scheduleBoardCompletionFallback(reason: String) {
+        if (_state.value.sessionMode != SessionMode.EDGEFOCUS ||
+            _state.value.timerState != TimerState.RUNNING
+        ) {
+            return
+        }
+        if (boardCompletionFallbackJob?.isActive == true) return
+        appEventLog.log("BOARD_COMPLETION_FALLBACK", "scheduled: $reason")
+        boardCompletionFallbackJob = scope.launch {
+            delay(BOARD_COMPLETION_GRACE_MS)
+            pollBoardCompletionOrFallback(reason)
+        }
+    }
+
+    private fun cancelBoardCompletionFallback() {
+        boardCompletionFallbackJob?.cancel()
+        boardCompletionFallbackJob = null
+    }
+
+    private suspend fun pollBoardCompletionOrFallback(reason: String) {
+        val current = _state.value
+        if (current.timerState == TimerState.FINISHED ||
+            current.sessionMode != SessionMode.EDGEFOCUS
+        ) {
+            return
+        }
+        if (!bleManager.isConnected()) {
+            appEventLog.log("BOARD_COMPLETION_FALLBACK", "disconnected: $reason")
+            completeSession()
+            return
+        }
+
+        val report = bleManager.getLastReport().getOrNull()?.let { reportDataFromResponse(it) }
+        if (isValidBoardReport(report)) {
+            appEventLog.log("BOARD_COMPLETION_FALLBACK", "finished by last_report: $reason")
+            finishFromBoardReport(report!!)
+            return
+        }
+
+        val stateBytes = bleManager.getCurrentState().getOrNull()
+        if (stateBytes == null) {
+            appEventLog.log("BOARD_COMPLETION_FALLBACK", "state unavailable: $reason")
+            completeSession()
+            return
+        }
+
+        val stateData = JSONObject(String(stateBytes, Charsets.UTF_8)).getJSONObject("data")
+        val boardState = BoardJsonParser.parseSessionState(stateData)
+        if (boardState.sessionPhase == BoardSessionPhase.IDLE || !boardState.active) {
+            appEventLog.log("BOARD_COMPLETION_FALLBACK", "board idle: $reason")
+            completeSession()
+        } else {
+            appEventLog.log("BOARD_COMPLETION_FALLBACK", "board still active: $reason")
+            applyBoardSessionState(boardState)
+        }
+    }
+
+    private fun handleBoardIdleWhileLocalActive(reason: String) {
+        if (!isEdgeFocusActiveLocally()) return
+        appEventLog.log("BOARD_IDLE", reason)
+        cancelBoardCompletionFallback()
+        localCountdownJob?.cancel()
+        stopBoardSync()
+        _state.update {
+            it.copy(
+                boardSessionActive = false,
+                boardSessionPaused = false,
+                isSyncingWithBoard = false
+            )
+        }
+        scope.launch {
+            val report = bleManager.getLastReport().getOrNull()?.let { reportDataFromResponse(it) }
+            if (isValidBoardReport(report)) {
+                finishFromBoardReport(report!!)
+            } else {
+                completeSession()
+            }
+        }
+    }
+
     private fun finishFromBoardReport(report: JSONObject) {
+        cancelBoardCompletionFallback()
         _state.update {
             val completedSessions = if (it.timerState == TimerState.FINISHED) {
                 it.completedSessions
@@ -758,6 +873,11 @@ class TimerStateHolder @Inject constructor(
                 phoneDistractionCount = boardState.phoneDistractionCount.takeIf { count -> count > 0 } ?: it.phoneDistractionCount,
                 sessionPhase = phase,
                 focusState = boardState.focusState,
+                phoneSignal = boardState.phoneSignal,
+                phoneUsageState = boardState.phoneUsageState,
+                phoneDistractionLevel = boardState.phoneDistractionLevel,
+                riskScore = boardState.riskScore,
+                commandLevel = boardState.commandLevel,
                 elapsedMs = boardState.elapsedMs.takeIf { elapsed -> elapsed > 0L }
                     ?: (targetMs - remainingMs).coerceAtLeast(0L),
                 precheck = boardState.precheck,
@@ -786,6 +906,7 @@ class TimerStateHolder @Inject constructor(
                 startBoardSync()
             }
             TimerState.IDLE, TimerState.FINISHED -> {
+                cancelBoardCompletionFallback()
                 localCountdownJob?.cancel()
                 stopBoardSync()
             }
@@ -803,6 +924,10 @@ class TimerStateHolder @Inject constructor(
                 val boardState = BoardJsonParser.parseSessionState(stateData)
                 if (boardState.sessionPhase != BoardSessionPhase.IDLE) {
                     applyBoardSessionState(boardState)
+                    return@onSuccess
+                }
+                if (isEdgeFocusActiveLocally()) {
+                    handleBoardIdleWhileLocalActive("poll_idle")
                     return@onSuccess
                 }
 
@@ -841,6 +966,11 @@ class TimerStateHolder @Inject constructor(
                             calibrationCompleted = boardState.calibrationCompleted,
                             sessionPhase = if (focusState == 6) BoardSessionPhase.PAUSED else BoardSessionPhase.FOCUSING,
                             focusState = focusState,
+                            phoneSignal = boardState.phoneSignal,
+                            phoneUsageState = boardState.phoneUsageState,
+                            phoneDistractionLevel = boardState.phoneDistractionLevel,
+                            riskScore = boardState.riskScore,
+                            commandLevel = boardState.commandLevel,
                             elapsedMs = effectiveElapsedMs,
                             outputCapability = boardState.outputCapability ?: it.outputCapability,
                             cameraPreview = boardState.cameraPreview ?: it.cameraPreview,
@@ -882,8 +1012,9 @@ class TimerStateHolder @Inject constructor(
                 if (_state.value.sessionMode == SessionMode.LOCAL || !bleManager.isConnected()) {
                     completeSession()
                 } else {
-                    appEventLog.log("TIMER_ZERO", "EdgeFocus mode waits for board completion push")
+                    appEventLog.log("TIMER_ZERO", "EdgeFocus mode waits briefly for board completion push")
                     _state.update { it.copy(timeRemaining = 0L) }
+                    scheduleBoardCompletionFallback("timer_zero")
                 }
             }
         }
@@ -952,6 +1083,11 @@ class TimerStateHolder @Inject constructor(
                     boardSessionPaused = boardState.paused,
                     calibrationCompleted = boardState.calibrationCompleted,
                     focusState = boardState.focusState,
+                    phoneSignal = boardState.phoneSignal,
+                    phoneUsageState = boardState.phoneUsageState,
+                    phoneDistractionLevel = boardState.phoneDistractionLevel,
+                    riskScore = boardState.riskScore,
+                    commandLevel = boardState.commandLevel,
                     elapsedMs = boardState.elapsedMs.takeIf { elapsed -> elapsed > 0L }
                         ?: (boardTargetDurationMs - boardRemainingMs).coerceAtLeast(0L),
                     outputCapability = boardState.outputCapability ?: it.outputCapability,
@@ -965,13 +1101,14 @@ class TimerStateHolder @Inject constructor(
 
             if (boardTargetDurationMs > 0) {
                 if (boardRemainingMs <= 0) {
-                    appEventLog.log("BOARD_TIME_ZERO", "Waiting for board report push")
+                    appEventLog.log("BOARD_TIME_ZERO", "Waiting briefly for board report push")
                     _state.update {
                         it.copy(
                             timeRemaining = 0L,
                             totalTime = boardTargetDurationMs
                         )
                     }
+                    scheduleBoardCompletionFallback("board_remaining_zero")
                     return
                 }
 
