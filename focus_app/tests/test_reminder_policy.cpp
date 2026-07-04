@@ -19,11 +19,12 @@ void makeFocusedSession(SystemStateStore& store) {
     store.updateSession(session);
 }
 
-void setContext(SystemStateStore& store, int level, int risk = 20) {
+void setContext(SystemStateStore& store, int level, int risk = 20, bool phone_signal = true) {
     BehaviorContext ctx;
-    ctx.phone_signal = true;
+    ctx.phone_signal = phone_signal;
     ctx.vision_signal = false;
-    ctx.phone_distraction_level = level;
+    ctx.phone_distraction_level = phone_signal ? level : -1;
+    ctx.phone_usage_state = phone_signal ? static_cast<int>(PhoneUsageState::IN_USE) : -1;
     ctx.risk_score = risk;
     ctx.reason = "test";
     store.updateBehaviorContext(ctx);
@@ -132,28 +133,77 @@ void test_run_once_uses_configured_preference_channels() {
     assert(dev_mgr.lastBandAlertLevel() == static_cast<uint8_t>(CommandLevel::LEVEL_1));
 }
 
-void test_phone_learning_participates_in_policy() {
+void test_phone_learning_does_not_issue_reminder() {
     SystemStateStore store;
     makeFocusedSession(store);
-    SQLiteStore sqlite_store;
+    SQLiteStore sqlite_store(":memory:");
     DeviceManager dev_mgr(store);
     ReminderPolicy policy(store, sqlite_store, dev_mgr);
+    AppContext ctx;
+    assert(sqlite_store.init(ctx));
+    policy.init(ctx);
 
     auto cmd = policy.processState(FocusState::PHONE_IN_LEARNING, 1000);
-    assert(cmd.has_value());
-    assert(cmd->level == CommandLevel::LEVEL_1);
+    assert(!cmd.has_value());
+    assert(store.snapshot().session.reminder_count == 0);
+    assert(store.snapshot().reminder.level == CommandLevel::NONE);
+
+    for (int i = 0; i < 4; ++i) {
+        sqlite_store.runOnce(ctx);
+    }
+    const auto events = sqlite_store.queryEvents(store.snapshot().session.session_id);
+    for (const auto& event : events) {
+        assert(event.type != StorageEventType::ReminderIssued);
+    }
 }
 
-void test_looking_away_is_level1() {
+void test_visual_state_uses_risk_score_for_command_level() {
     SystemStateStore store;
     makeFocusedSession(store);
     SQLiteStore sqlite_store;
     DeviceManager dev_mgr(store);
     ReminderPolicy policy(store, sqlite_store, dev_mgr);
 
-    auto cmd = policy.processState(FocusState::LOOKING_AWAY, 1000);
+    setContext(store, 0, 20);
+    auto low_cmd = policy.processState(FocusState::LOOKING_AWAY, 1000);
+    assert(low_cmd.has_value());
+    assert(low_cmd->level == CommandLevel::LEVEL_1);
+
+    SystemStateStore medium_store;
+    makeFocusedSession(medium_store);
+    SQLiteStore medium_sqlite_store;
+    DeviceManager medium_dev_mgr(medium_store);
+    ReminderPolicy medium_policy(medium_store, medium_sqlite_store, medium_dev_mgr);
+
+    setContext(medium_store, 1, 60);
+    auto medium_cmd = medium_policy.processState(FocusState::LOOKING_AWAY, 1000);
+    assert(medium_cmd.has_value());
+    assert(medium_cmd->level == CommandLevel::LEVEL_2);
+
+    SystemStateStore high_store;
+    makeFocusedSession(high_store);
+    SQLiteStore high_sqlite_store;
+    DeviceManager high_dev_mgr(high_store);
+    ReminderPolicy high_policy(high_store, high_sqlite_store, high_dev_mgr);
+
+    setContext(high_store, 2, 80);
+    auto high_cmd = high_policy.processState(FocusState::LOOKING_AWAY, 1000);
+    assert(high_cmd.has_value());
+    assert(high_cmd->level == CommandLevel::LEVEL_3);
+}
+
+void test_sleepy_state_uses_standard_command_level() {
+    SystemStateStore store;
+    makeFocusedSession(store);
+    SQLiteStore sqlite_store;
+    DeviceManager dev_mgr(store);
+    ReminderPolicy policy(store, sqlite_store, dev_mgr);
+
+    setContext(store, 0, 80, false);
+    auto cmd = policy.processState(FocusState::SLEEPY_OR_SLUMPED, 1000);
     assert(cmd.has_value());
-    assert(cmd->level == CommandLevel::LEVEL_1);
+    assert(cmd->level == CommandLevel::LEVEL_3);
+    assert(cmd->message == "Take a short break and sit upright");
 }
 
 void test_user_ack_increases_cooldown() {
@@ -343,8 +393,9 @@ int main() {
     test_use_state_can_escalate_to_level3();
     test_silent_does_not_change_level_for_same_context();
     test_run_once_uses_configured_preference_channels();
-    test_phone_learning_participates_in_policy();
-    test_looking_away_is_level1();
+    test_phone_learning_does_not_issue_reminder();
+    test_visual_state_uses_risk_score_for_command_level();
+    test_sleepy_state_uses_standard_command_level();
     test_user_ack_increases_cooldown();
     test_risk_and_distraction_context_in_command();
     test_phone_output_routes_do_not_execute_board_screen_or_sound();

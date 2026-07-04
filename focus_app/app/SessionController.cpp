@@ -10,6 +10,8 @@ namespace edgefocus {
 
 namespace {
 constexpr int kDefaultTargetDurationMin = 25;
+constexpr int kMinTargetDurationMin = 5;
+constexpr int kMaxTargetDurationMin = 120;
 
 int64_t monotonicMs() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -19,6 +21,10 @@ int64_t monotonicMs() {
 int64_t wallClockMs() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
         std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
+int clampTargetDurationMin(int value) {
+    return std::clamp(value, kMinTargetDurationMin, kMaxTargetDurationMin);
 }
 } // namespace
 
@@ -47,10 +53,14 @@ SessionController::StartResult SessionController::startSession(int target_durati
     s.precheck_owner = (source == "app") ? "app" : "board";
     s.session_id = "session_" + std::to_string(start_wall_ms);
     s.start_ms = monotonicMs();
-    const int effective_target_min = target_duration_min > 0 ? target_duration_min : kDefaultTargetDurationMin;
-    s.target_duration_ms = static_cast<int64_t>(effective_target_min) * 60000;
+    const int fallback_min = snap.preferences.default_focus_duration_min > 0
+        ? snap.preferences.default_focus_duration_min
+        : kDefaultTargetDurationMin;
+    const int effective_target_min = clampTargetDurationMin(
+        target_duration_min > 0 ? target_duration_min : fallback_min);
+    s.target_duration_ms = static_cast<int64_t>(effective_target_min) * 60000LL;
     s.remaining_ms = s.target_duration_ms;
-    s.away_timeout_ms = snap.preferences.away_timeout_min * 60000;
+    s.away_timeout_ms = static_cast<int64_t>(snap.preferences.away_timeout_min) * 60000LL;
 
     store_.updateSession(s);
     store_.updateFocusState(FocusState::CALIBRATING, monotonicMs(), "Session precheck started");

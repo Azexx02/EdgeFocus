@@ -54,7 +54,7 @@ void setBehaviorContext(SystemStateStore& store, int level, int risk = 70, bool 
     ctx.vision_signal = false;
     if (phone_signal) {
         ctx.phone_distraction_level = level;
-        ctx.phone_usage_state = 1;
+        ctx.phone_usage_state = static_cast<int>(PhoneUsageState::IN_USE);
     } else {
         ctx.phone_distraction_level = -1;
         ctx.phone_usage_state = -1;
@@ -114,13 +114,14 @@ void test_behavior_to_policy_contract() {
     auto cmd = policy.processState(snap.focus_state, 2000);
     CHECK(!cmd.has_value(), "FOCUSED → no intervention from policy");
 
-    // LOOKING_AWAY → LEVEL_1
+    setBehaviorContext(store, 0, 20);
+    // LOOKING_AWAY uses BehaviorContext.risk_score to choose CommandLevel level.
     store.updateFocusState(FocusState::LOOKING_AWAY, 3000, "test");
     snap = store.snapshot();
     CHECK(snap.focus_state == FocusState::LOOKING_AWAY, "Store reads LOOKING_AWAY correctly");
     cmd = policy.processState(snap.focus_state, 4000);
-    CHECK(cmd.has_value(), "LOOKING_AWAY → policy generates command");
-    CHECK(cmd->level == CommandLevel::LEVEL_1, "LOOKING_AWAY → LEVEL_1");
+    CHECK(cmd.has_value(), "LOOKING_AWAY policy generates command");
+    CHECK(cmd->level == CommandLevel::LEVEL_1, "LOOKING_AWAY low risk_score produces LEVEL_1");
 
     setBehaviorContext(store, 2, 70);
     // PHONE_IN_USE is a behavior-layer state and maps via behavior context.
@@ -146,21 +147,20 @@ void test_behavior_to_policy_contract() {
     CHECK(cmd.has_value(), "PHONE_IN_USE high-risk can escalate");
     CHECK(cmd->level == CommandLevel::LEVEL_3, "PHONE_IN_USE high-risk can be LEVEL_3");
 
-    // PHONE_IN_LEARNING is still a phone input state; policy decides level
-    // from risk context instead of hard-coding "no intervention".
     setBehaviorContext(store, 1, 20);
     store.updateFocusState(FocusState::PHONE_IN_LEARNING, 33000, "test");
     snap = store.snapshot();
     cmd = policy.processState(snap.focus_state, 34000);
-    CHECK(cmd.has_value(), "PHONE_IN_LEARNING → policy generates command");
-    CHECK(cmd->level == CommandLevel::LEVEL_1, "PHONE_IN_LEARNING can be LEVEL_1");
+    CHECK(!cmd.has_value(), "PHONE_IN_LEARNING does not generate command");
+    CHECK(store.snapshot().session.reminder_count == 4,
+          "PHONE_IN_LEARNING does not increment reminder_count");
 
-    // SLEEPY_OR_SLUMPED → REST_SUGGESTION
+    setBehaviorContext(store, 0, 80, false);
     store.updateFocusState(FocusState::SLEEPY_OR_SLUMPED, 39000, "test");
     snap = store.snapshot();
     cmd = policy.processState(snap.focus_state, 40000);
-    CHECK(cmd.has_value(), "SLEEPY → policy generates command");
-    CHECK(cmd->level == CommandLevel::REST_SUGGESTION, "SLEEPY → REST_SUGGESTION");
+    CHECK(cmd.has_value(), "SLEEPY policy generates command");
+    CHECK(cmd->level == CommandLevel::LEVEL_3, "SLEEPY risk_score 80 produces LEVEL_3");
 }
 
 // ============================================================================
@@ -186,7 +186,6 @@ void test_policy_to_device_contract() {
     CHECK(static_cast<int>(CommandLevel::LEVEL_1) == 1, "LEVEL_1=1");
     CHECK(static_cast<int>(CommandLevel::LEVEL_2) == 2, "LEVEL_2=2");
     CHECK(static_cast<int>(CommandLevel::LEVEL_3) == 3, "LEVEL_3=3");
-    CHECK(static_cast<int>(CommandLevel::REST_SUGGESTION) == 4, "REST_SUGGESTION=4");
 }
 
 // ============================================================================
@@ -429,7 +428,8 @@ void test_policy_skips_non_reminder_states_without_side_effects() {
 
     auto looking_away = policy.processState(FocusState::LOOKING_AWAY, 9000);
     CHECK(looking_away.has_value(), "AWAY does not block next real visual reminder");
-    CHECK(looking_away->level == CommandLevel::LEVEL_1, "Visual reminder level is preserved after AWAY");
+    CHECK(looking_away->level == CommandLevel::LEVEL_1,
+          "LOOKING_AWAY with risk_score 0 falls back to LEVEL_1 after AWAY");
 
     for (int i = 0; i < 6; ++i) {
         sqlite.runOnce(ctx);
@@ -1071,15 +1071,15 @@ void test_status_page_does_not_skip_app_owned_precheck() {
 }
 
 void test_status_page_alert_copy_mapping() {
-    std::cout << "\n[Test 12.6] StatusPage maps reminder copy by reminder semantics\n";
+    std::cout << "\n[Test 12.6] StatusPage maps reminder copy by CommandLevel level\n";
 
-    auto rest_copy = StatusPage::alertHeadlineForTest(CommandLevel::REST_SUGGESTION, "Take a short break");
-    CHECK(rest_copy.first == "REST", "REST_SUGGESTION primary title is REST");
-    CHECK(rest_copy.second == "NOW", "REST_SUGGESTION secondary title is NOW");
+    auto low_copy = StatusPage::alertHeadlineForTest(CommandLevel::LEVEL_1, "Need glance back to screen");
+    CHECK(low_copy.first == "BACK TO", "LEVEL_1 primary title uses focus copy");
+    CHECK(low_copy.second == "FOCUS", "LEVEL_1 secondary title uses focus copy");
 
     auto phone_copy = StatusPage::alertHeadlineForTest(CommandLevel::LEVEL_2, "Phone usage detected");
-    CHECK(phone_copy.first == "BACK TO", "Phone reminder primary title avoids REST copy");
-    CHECK(phone_copy.second == "FOCUS", "Phone reminder secondary title avoids REST copy");
+    CHECK(phone_copy.first == "BACK TO", "LEVEL_2 primary title uses focus copy");
+    CHECK(phone_copy.second == "FOCUS", "LEVEL_2 secondary title uses focus copy");
 
     auto high_copy = StatusPage::alertHeadlineForTest(CommandLevel::LEVEL_3, "High phone distraction detected");
     CHECK(high_copy.first == "STAY", "High-severity focus reminder uses focus copy");
@@ -1792,6 +1792,141 @@ void test_behavior_pause_freezes_elapsed_and_counter_updates() {
     CHECK(!vision_queue.tryPop().has_value(), "Paused session drops queued vision results");
 }
 
+void test_session_controller_clamps_target_duration() {
+    std::cout << "\n[Test 13.5] SessionController clamps target duration\n";
+
+    SystemStateStore store;
+    SQLiteStore sqlite(":memory:");
+    AppContext ctx;
+    sqlite.init(ctx);
+    SessionController controller(store, sqlite);
+
+    auto too_short = controller.startSession(1, "test_short_duration");
+    CHECK(too_short.success, "Too-short session still starts");
+    CHECK(store.snapshot().session.target_duration_ms == 5 * 60000,
+          "Too-short session target clamps to 5 minutes");
+    controller.endSession("cleanup_short_duration");
+
+    auto too_long = controller.startSession(9999, "test_long_duration");
+    CHECK(too_long.success, "Too-long session still starts");
+    CHECK(store.snapshot().session.target_duration_ms == 120 * 60000,
+          "Too-long session target clamps to 120 minutes");
+    controller.endSession("cleanup_long_duration");
+}
+
+void test_learning_phone_does_not_override_visual_distraction() {
+    std::cout << "\n[Test 14.2] learning phone signal does not mask visual distraction\n";
+
+    SystemStateStore store;
+    SQLiteStore sqlite(":memory:");
+    AppContext ctx;
+    sqlite.init(ctx);
+
+    BoundedQueue<VisionResult> vision_queue(2, false);
+    BehaviorEngine behavior(vision_queue, store, sqlite);
+    behavior.init(ctx);
+
+    auto initial = store.snapshot();
+    SessionInfo s;
+    s.active = true;
+    s.session_id = "learning_visual_session";
+    s.start_ms = initial.snapshot_ms;
+    s.target_duration_ms = 25 * 60000;
+    s.remaining_ms = s.target_duration_ms;
+    s.calibrating = false;
+    s.calibration_completed = true;
+    store.updateSession(s);
+    store.updateFocusState(FocusState::LOOKING_AWAY, initial.snapshot_ms, "vision looking away");
+
+    PhoneUsageSignal sig;
+    sig.active = true;
+    sig.distraction_level = 0;
+    sig.usage_state = PhoneUsageState::LEARNING;
+    sig.timestamp_ms = initial.snapshot_ms + 1000;
+    store.setPhoneSignal(sig);
+
+    behavior.runOnce(ctx);
+
+    auto snap = store.snapshot();
+    CHECK(snap.focus_state == FocusState::LOOKING_AWAY,
+          "Learning phone context does not replace visual LOOKING_AWAY state");
+    CHECK(snap.session.phone_distraction_count == 0,
+          "Learning level 0 phone context does not increment phone count");
+    CHECK(snap.session.distraction_count == 0,
+          "Learning level 0 phone context does not create a phone distraction episode");
+    CHECK(snap.behavior_context.phone_distraction_level == 0,
+          "Learning level 0 phone context preserves level 0");
+}
+
+void test_phone_usage_state_modulates_direct_phone_report_risk() {
+    std::cout << "\n[Test 14.3] phone usage state modulates direct phone report risk\n";
+
+    SystemStateStore store;
+    SQLiteStore sqlite(":memory:");
+    AppContext ctx;
+    sqlite.init(ctx);
+
+    BoundedQueue<VisionResult> vision_queue(2, false);
+    BehaviorEngine behavior(vision_queue, store, sqlite);
+    behavior.init(ctx);
+
+    auto initial = store.snapshot();
+    SessionInfo s;
+    s.active = true;
+    s.session_id = "phone_risk_context_session";
+    s.start_ms = initial.snapshot_ms;
+    s.target_duration_ms = 25 * 60000;
+    s.remaining_ms = s.target_duration_ms;
+    s.calibrating = false;
+    s.calibration_completed = true;
+    store.updateSession(s);
+    store.updateFocusState(FocusState::FOCUSED, initial.snapshot_ms, "test focused");
+
+    PhoneUsageSignal learning;
+    learning.active = true;
+    learning.distraction_level = 0;
+    learning.usage_state = PhoneUsageState::LEARNING;
+    learning.timestamp_ms = initial.snapshot_ms + 1000;
+    store.setPhoneSignal(learning);
+    behavior.runOnce(ctx);
+
+    auto learning_snap = store.snapshot();
+    CHECK(learning_snap.behavior_context.risk_score > 0,
+          "Learning phone context remains visible in behavior risk");
+    CHECK(learning_snap.behavior_context.risk_score < 25,
+          "Learning phone context applies a lower multiplier");
+    CHECK(learning_snap.behavior_context.risk_score == 13,
+          "Learning phone context uses the 0.5 risk multiplier on phone base risk");
+    CHECK(learning_snap.behavior_context.phone_distraction_level == 0,
+          "Learning level 0 phone-only context preserves phone level 0");
+    CHECK(learning_snap.session.phone_distraction_count == 0,
+          "Learning level 0 phone-only context does not increment phone count");
+
+    PhoneUsageSignal in_use;
+    in_use.active = true;
+    in_use.distraction_level = 1;
+    in_use.usage_state = PhoneUsageState::IN_USE;
+    in_use.timestamp_ms = initial.snapshot_ms + 2000;
+    store.setPhoneSignal(in_use);
+    behavior.runOnce(ctx);
+    const int in_use_risk = store.snapshot().behavior_context.risk_score;
+    CHECK(in_use_risk > learning_snap.behavior_context.risk_score,
+          "Generic phone use has a higher multiplier than learning");
+    CHECK(in_use_risk == 38,
+          "Generic phone use applies the 1.5 risk multiplier on phone base risk");
+
+    PhoneUsageSignal playing = in_use;
+    playing.usage_state = PhoneUsageState::PLAYING;
+    playing.timestamp_ms = initial.snapshot_ms + 3000;
+    store.setPhoneSignal(playing);
+    behavior.runOnce(ctx);
+    const int playing_risk = store.snapshot().behavior_context.risk_score;
+    CHECK(playing_risk > in_use_risk,
+          "Playing phone usage raises risk more than generic phone use at the same phone level");
+    CHECK(playing_risk == 50,
+          "Playing phone usage applies the 2.0 risk multiplier on phone base risk");
+}
+
 int main() {
     std::cout << "=== Module Integration Tests ===\n";
 
@@ -1824,8 +1959,11 @@ int main() {
     test_session_controller_end_is_idempotent_under_concurrency();
     test_stale_session_update_cannot_resurrect_ended_session();
     test_session_controller_precheck_does_not_count_as_focus_time();
+    test_session_controller_clamps_target_duration();
     test_phone_signal_updates_focus_state_immediately();
     test_inactive_phone_sync_clears_stale_pressure();
+    test_learning_phone_does_not_override_visual_distraction();
+    test_phone_usage_state_modulates_direct_phone_report_risk();
     test_distraction_count_is_episode_based();
     test_behavior_updates_frame_quality_snapshot();
     test_session_start_clears_stale_phone_signal();

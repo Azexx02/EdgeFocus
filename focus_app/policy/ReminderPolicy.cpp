@@ -28,19 +28,10 @@ std::string jsonEscape(const std::string& value) {
     return escaped;
 }
 
-CommandLevel phoneContextLevel(const BehaviorContext& ctx) {
+CommandLevel commandLevelFromRiskScore(const BehaviorContext& ctx) {
     const int risk_score = std::clamp(ctx.risk_score, 0, 100);
-    const int distraction_level = std::clamp(ctx.phone_distraction_level, 0, 3);
-
-    if (!ctx.phone_signal) {
-        if (risk_score >= 95) return CommandLevel::LEVEL_3;
-        if (risk_score >= 80) return CommandLevel::LEVEL_2;
-        return CommandLevel::LEVEL_1;
-    }
-
-    if (distraction_level >= 3 && risk_score >= 80) return CommandLevel::LEVEL_3;
-    if (distraction_level >= 3 && risk_score >= 45) return CommandLevel::LEVEL_2;
-    if (distraction_level == 2 && risk_score >= 65) return CommandLevel::LEVEL_2;
+    if (risk_score >= 80) return CommandLevel::LEVEL_3;
+    if (risk_score >= 45) return CommandLevel::LEVEL_2;
     return CommandLevel::LEVEL_1;
 }
 
@@ -172,8 +163,9 @@ std::optional<InterventionCommand> ReminderPolicy::processState(FocusState state
     }
 
     if (state == FocusState::FOCUSED || state == FocusState::PAUSED ||
-        state == FocusState::CALIBRATING) {
+        state == FocusState::CALIBRATING || state == FocusState::PHONE_IN_LEARNING) {
         last_level_ = CommandLevel::NONE;
+        store_.clearReminder();
         return std::nullopt;
     }
 
@@ -192,22 +184,15 @@ std::optional<InterventionCommand> ReminderPolicy::processState(FocusState state
     cmd.risk_score = behavior_context.risk_score;
     cmd.phone_distraction_level = behavior_context.phone_distraction_level;
     cmd.reason = behavior_context.reason;
-    CommandLevel target_level = CommandLevel::LEVEL_1; // default
+    CommandLevel target_level = commandLevelFromRiskScore(behavior_context);
 
     if (state == FocusState::LOOKING_AWAY) {
-        target_level = CommandLevel::LEVEL_1;
         cmd.message = "Need glance back to screen";
     } else if (state == FocusState::SLEEPY_OR_SLUMPED) {
-        target_level = CommandLevel::REST_SUGGESTION;
         cmd.message = "Take a short break and sit upright";
     } else if (state == FocusState::PHONE_IN_USE) {
-        target_level = phoneContextLevel(behavior_context);
         cmd.message = "Phone usage detected";
-    } else if (state == FocusState::PHONE_IN_LEARNING) {
-        target_level = phoneContextLevel(behavior_context);
-        cmd.message = "Learning app usage detected";
     } else if (state == FocusState::PHONE_IN_PLAYING) {
-        target_level = phoneContextLevel(behavior_context);
         cmd.message = "High phone distraction detected";
     } else {
         return std::nullopt;

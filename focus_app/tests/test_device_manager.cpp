@@ -93,33 +93,6 @@ void test_action_queue_issue_band_updates_device_status() {
     dev_mgr.shutdown(ctx);
 }
 
-void test_rest_suggestion_is_clamped_for_band_alert() {
-    AppContext ctx;
-    SystemStateStore store;
-    DeviceManager dev_mgr(store);
-    dev_mgr.init(ctx);
-
-    DeviceStatus initial = store.snapshot().device;
-    initial.ble_enabled = true;
-    store.updateDeviceStatus(initial);
-
-    DeviceAction action{NotificationChannel::BAND, CommandLevel::REST_SUGGESTION};
-    assert(dev_mgr.issueAction(action) == true);
-    dev_mgr.runOnce(ctx);
-
-    assert(dev_mgr.executedCommandCount() == 1);
-    assert(dev_mgr.lastExecutedLevel() == CommandLevel::REST_SUGGESTION);
-    auto snap = store.snapshot().device;
-    assert(snap.band_last_alert_level == 3);
-    assert(snap.band_last_alert_pattern == 0x03);
-    auto frame = dev_mgr.lastBandAlertFrame();
-    assert(frame[2] == 0x03);
-    assert(frame[1] == 0x03);
-    assert(frame[0] == 0x01);
-
-    dev_mgr.shutdown(ctx);
-}
-
 void test_sound_action_uses_sound_channel() {
     SoundController::setPlaybackEnabledForTests(false);
     AppContext ctx;
@@ -192,7 +165,6 @@ int main() {
     test_device_manager_queue();
     test_level2_uses_medium_band_alert();
     test_action_queue_issue_band_updates_device_status();
-    test_rest_suggestion_is_clamped_for_band_alert();
     test_sound_controller_disabled_is_fast_and_unavailable();
     test_sound_action_uses_sound_channel();
     test_sound_controller_generates_short_tone_wav();

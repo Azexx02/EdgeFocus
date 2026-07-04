@@ -28,9 +28,6 @@ int64_t wallClockMs() {
 }
 
 std::pair<std::string, std::string> alertHeadlineCopy(CommandLevel level) {
-    if (level == CommandLevel::REST_SUGGESTION) {
-        return {"REST", "NOW"};
-    }
     if (level == CommandLevel::LEVEL_3) {
         return {"STAY", "FOCUSED"};
     }

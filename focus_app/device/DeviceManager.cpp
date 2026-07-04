@@ -91,7 +91,7 @@ void DeviceManager::executeCommand(const InterventionCommand& cmd) {
 
     // Legacy behavior: command-level routing maps ALERT levels directly to default
     // legacy channels. New channel routing is expected to pass through issueAction().
-    if (cmd.level == CommandLevel::LEVEL_1 || cmd.level == CommandLevel::REST_SUGGESTION) {
+    if (cmd.level == CommandLevel::LEVEL_1) {
         executeAction({NotificationChannel::SCREEN, cmd.level});
     } else if (cmd.level == CommandLevel::LEVEL_2 || cmd.level == CommandLevel::LEVEL_3) {
         executeAction({NotificationChannel::SCREEN, cmd.level});

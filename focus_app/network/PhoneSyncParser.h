@@ -30,18 +30,31 @@ inline int normalizePhoneDistractionLevel(int level) {
     return level;
 }
 
-inline PhoneUsageState parsePhoneUsageState(const nlohmann::json& data, int distraction_level = 1) {
-    std::string raw;
+inline PhoneUsageState phoneUsageStateFromPhoneDistractionLevel(int phone_distraction_level) {
+    const int normalized = normalizePhoneDistractionLevel(phone_distraction_level);
+    if (normalized == 0) return PhoneUsageState::LEARNING;
+    if (normalized == 2) return PhoneUsageState::PLAYING;
+    return PhoneUsageState::IN_USE;
+}
+
+inline bool extractPhoneUsageStateText(const nlohmann::json& data, std::string& raw) {
     if (data.contains("phone_state")) {
         raw = data.value("phone_state", "");
+    } else if (data.contains("phone_usage_state")) {
+        raw = data.value("phone_usage_state", "");
     } else if (data.contains("usage_state")) {
         raw = data.value("usage_state", "");
     } else if (data.contains("state")) {
         raw = data.value("state", "");
     } else if (data.contains("app_category")) {
         raw = data.value("app_category", "");
+    } else {
+        return false;
     }
+    return !raw.empty();
+}
 
+inline PhoneUsageState parsePhoneUsageStateText(std::string raw) {
     raw = lowerAsciiCopy(raw);
     if (raw == "learning" || raw == "study" || raw == "education" ||
         raw == "phone_in_learning") {
@@ -52,12 +65,21 @@ inline PhoneUsageState parsePhoneUsageState(const nlohmann::json& data, int dist
         raw == "entertainment" || raw == "phone_in_playing") {
         return PhoneUsageState::PLAYING;
     }
-
-    if (raw.empty() && distraction_level == 0) {
-        return PhoneUsageState::LEARNING;
+    if (raw == "using" || raw == "in_use" || raw == "use" ||
+        raw == "social" || raw == "other" || raw == "phone_in_use") {
+        return PhoneUsageState::IN_USE;
     }
 
     return PhoneUsageState::IN_USE;
+}
+
+inline PhoneUsageState parsePhoneUsageState(const nlohmann::json& data,
+                                            int phone_distraction_level = 1) {
+    std::string raw;
+    if (extractPhoneUsageStateText(data, raw)) {
+        return parsePhoneUsageStateText(raw);
+    }
+    return phoneUsageStateFromPhoneDistractionLevel(phone_distraction_level);
 }
 
 inline ParsedPhoneSync parsePhoneSyncPayload(const nlohmann::json& data,
