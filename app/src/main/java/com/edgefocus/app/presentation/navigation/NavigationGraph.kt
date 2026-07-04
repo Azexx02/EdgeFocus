@@ -10,6 +10,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.edgefocus.app.ControlPanelActivity
+import com.edgefocus.app.BuildConfig
 import com.edgefocus.app.presentation.ui.components.BottomNavigationBar
 import com.edgefocus.app.presentation.ui.dashboard.DashboardScreen
 import com.edgefocus.app.presentation.ui.home.HomeScreen
@@ -17,6 +18,7 @@ import com.edgefocus.app.presentation.ui.settings.BleConnectScreen
 import com.edgefocus.app.presentation.ui.settings.DistractionAppsScreen
 import com.edgefocus.app.presentation.ui.settings.SettingsScreen
 import com.edgefocus.app.presentation.ui.settings.TestScreen
+import com.edgefocus.app.presentation.viewmodel.DebugFeaturePolicy
 
 sealed class Screen(val route: String) {
     data object Home : Screen("home")
@@ -62,7 +64,9 @@ fun NavigationGraph() {
                         navController.navigate(Screen.BleConnect.route)
                     },
                     onNavigateToTest = {
-                        navController.navigate(Screen.Test.route)
+                        if (DebugFeaturePolicy.canNavigateToTest(BuildConfig.DEBUG)) {
+                            navController.navigate(Screen.Test.route)
+                        }
                     }
                 )
             }
@@ -76,10 +80,12 @@ fun NavigationGraph() {
                     onBack = { navController.popBackStack() }
                 )
             }
-            composable(Screen.Test.route) {
-                TestScreen(
-                    onBack = { navController.popBackStack() }
-                )
+            if (DebugFeaturePolicy.shouldRegisterTestRoute(BuildConfig.DEBUG)) {
+                composable(Screen.Test.route) {
+                    TestScreen(
+                        onBack = { navController.popBackStack() }
+                    )
+                }
             }
         }
     }

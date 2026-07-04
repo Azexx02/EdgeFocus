@@ -176,13 +176,20 @@ class HomeViewModel @Inject constructor(
     }
 
     fun stopTimer() {
-        val isLocalMode = _uiState.value.sessionMode == SessionMode.LOCAL
+        val ui = _uiState.value
 
         // 本地模式手动停止时直接保存；EdgeFocus 模式等待板端 push_session_end
-        if (isLocalMode && _uiState.value.timerState == TimerState.RUNNING && sessionStartTime > 0) {
+        if (HomeSessionCompletionPolicy.shouldSaveLocalOnStop(
+                sessionMode = ui.sessionMode,
+                timerState = ui.timerState,
+                sessionStartTime = sessionStartTime,
+                currentSessionId = currentSessionId,
+                hasSavedCurrentSession = hasSavedCurrentSession
+            )
+        ) {
             handleSessionFinished()
-            stopAppMonitor()
-        } else if (!isLocalMode) {
+        }
+        if (HomeSessionCompletionPolicy.shouldStopAppMonitorOnStop(ui.timerState)) {
             stopAppMonitor()
         }
 
@@ -199,16 +206,17 @@ class HomeViewModel @Inject constructor(
 
         // Local mode saves immediately; EdgeFocus waits until the board report marks the session finished.
         if (!isEdgeFocus || ui.timerState == TimerState.FINISHED) {
-            val elapsedSeconds = if (isEdgeFocus && timerStateHolder.getBoardTotalDuration() > 0) {
-                timerStateHolder.getBoardTotalDuration()
-            } else {
-                ((ui.totalTime - ui.timeRemaining) / 1000).toInt()
-            }
-            val focusSeconds = if (isEdgeFocus && timerStateHolder.getBoardFocusDuration() > 0) {
-                timerStateHolder.getBoardFocusDuration()
-            } else {
-                elapsedSeconds
-            }
+            val elapsedSeconds = HomeSessionCompletionPolicy.elapsedSeconds(
+                isEdgeFocus = isEdgeFocus,
+                boardTotalDuration = timerStateHolder.getBoardTotalDuration(),
+                totalTimeMs = ui.totalTime,
+                timeRemainingMs = ui.timeRemaining
+            )
+            val focusSeconds = HomeSessionCompletionPolicy.focusSeconds(
+                isEdgeFocus = isEdgeFocus,
+                boardFocusDuration = timerStateHolder.getBoardFocusDuration(),
+                elapsedSeconds = elapsedSeconds
+            )
             val startTime = if (sessionStartTime > 0) sessionStartTime else System.currentTimeMillis()
             val endTime = System.currentTimeMillis()
             val session = Session(
@@ -217,14 +225,19 @@ class HomeViewModel @Inject constructor(
                 endTime = endTime,
                 duration = elapsedSeconds,
                 focusDuration = focusSeconds,
-                distractionCount = if (isEdgeFocus) timerStateHolder.getBoardSessionDistractionCount() else 0,
+                distractionCount = HomeSessionCompletionPolicy.distractionCountForSession(
+                    isEdgeFocus = isEdgeFocus,
+                    boardDistractionCount = timerStateHolder.getBoardSessionDistractionCount(),
+                    localDistractionCount = ui.distractionCount,
+                    phoneDistractionCount = ui.phoneDistractionCount
+                ),
                 reminderCount = if (isEdgeFocus) timerStateHolder.getBoardSessionReminderCount() else 0,
-                phoneDistractionCount = if (isEdgeFocus) {
-                    timerStateHolder.getBoardSessionPhoneDistractionCount()
-                } else {
-                    ui.phoneDistractionCount
-                },
-                feedback = "just_right",
+                phoneDistractionCount = HomeSessionCompletionPolicy.phoneDistractionCountForSession(
+                    isEdgeFocus = isEdgeFocus,
+                    boardPhoneDistractionCount = timerStateHolder.getBoardSessionPhoneDistractionCount(),
+                    localPhoneDistractionCount = ui.phoneDistractionCount
+                ),
+                feedback = HomeSessionCompletionPolicy.defaultFeedback(),
                 boardSessionId = if (isEdgeFocus) sessionId else null,
                 source = if (isEdgeFocus) "EDGEFOCUS" else "LOCAL",
                 synced = isEdgeFocus && hasBoardReport

@@ -3,6 +3,11 @@ package com.edgefocus.app.di
 import android.content.Context
 import androidx.room.Room
 import com.edgefocus.app.data.local.AppDatabase
+import com.edgefocus.app.data.local.MIGRATION_2_3
+import com.edgefocus.app.data.local.MIGRATION_3_4
+import com.edgefocus.app.data.local.MIGRATION_4_5
+import com.edgefocus.app.data.local.MIGRATION_5_6
+import com.edgefocus.app.data.local.MIGRATION_6_7
 import com.edgefocus.app.data.local.dao.AppUsageDao
 import com.edgefocus.app.data.local.dao.SessionDao
 import com.edgefocus.app.data.local.dao.SettingsDao
@@ -23,8 +28,15 @@ object DatabaseModule {
             context,
             AppDatabase::class.java,
             "edgefocus_db"
-        ).fallbackToDestructiveMigration()
-         .build()
+        )
+            .addMigrations(
+                MIGRATION_2_3,
+                MIGRATION_3_4,
+                MIGRATION_4_5,
+                MIGRATION_5_6,
+                MIGRATION_6_7
+            )
+            .build()
     }
 
     @Provides

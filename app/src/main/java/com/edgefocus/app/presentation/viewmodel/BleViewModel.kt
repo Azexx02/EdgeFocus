@@ -4,8 +4,10 @@ import android.app.Application
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.edgefocus.app.BuildConfig
 import com.edgefocus.app.data.remote.BleManager
 import com.edgefocus.app.data.remote.BleScanStartPolicy
+import com.edgefocus.app.data.remote.BleSimulationPolicy
 import com.edgefocus.app.data.remote.ConnectionState
 import com.edgefocus.app.data.remote.PhoneUsage
 import com.edgefocus.app.data.remote.PushEventHandler
@@ -68,8 +70,14 @@ class BleViewModel @Inject constructor(
     }
 
     init {
+        val simulateBle = BleSimulationPolicy.isSimulationEnabled(
+            isDebug = BuildConfig.DEBUG,
+            preferenceEnabled = prefs.getBoolean("simulate_ble", false)
+        )
+        if (!BuildConfig.DEBUG) {
+            prefs.edit().remove("simulate_ble").apply()
+        }
         // 恢复模拟状态
-        val simulateBle = prefs.getBoolean("simulate_ble", false)
         if (simulateBle) {
             _simulatedConnectionState.value = ConnectionState.CONNECTED
         }
@@ -96,15 +104,19 @@ class BleViewModel @Inject constructor(
     }
 
     fun isSimulatingBle(): Boolean {
-        return prefs.getBoolean("simulate_ble", false)
+        return BleSimulationPolicy.isSimulationEnabled(
+            isDebug = BuildConfig.DEBUG,
+            preferenceEnabled = prefs.getBoolean("simulate_ble", false)
+        )
     }
 
     fun getEffectiveConnectionState(): ConnectionState {
-        return if (isSimulatingBle()) {
-            _simulatedConnectionState.value
-        } else {
-            connectionState.value
-        }
+        return BleSimulationPolicy.effectiveConnectionState(
+            isDebug = BuildConfig.DEBUG,
+            preferenceEnabled = prefs.getBoolean("simulate_ble", false),
+            simulatedConnected = _simulatedConnectionState.value == ConnectionState.CONNECTED,
+            actualState = connectionState.value
+        )
     }
 
     fun startScan() {

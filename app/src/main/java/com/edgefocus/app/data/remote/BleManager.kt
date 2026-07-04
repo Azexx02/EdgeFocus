@@ -15,6 +15,7 @@ import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.os.Build
 import android.util.Log
+import com.edgefocus.app.BuildConfig
 import com.edgefocus.app.domain.model.DeviceStatus
 import com.edgefocus.app.domain.model.FocusState
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -67,6 +68,8 @@ class BleManager @Inject constructor(
     private var writeCharacteristic: BluetoothGattCharacteristic? = null
     @Volatile
     private var notifyCharacteristic: BluetoothGattCharacteristic? = null
+    @Volatile
+    private var negotiatedMtu: Int = 23
 
     private val writeLock = Any()
     private val commandMutex = Mutex()
@@ -108,16 +111,34 @@ class BleManager @Inject constructor(
 
     init {
         val prefs = context.getSharedPreferences("test_prefs", 0)
-        simulatedConnected = prefs.getBoolean("simulate_ble", false)
-        simulateDeviceResponse = prefs.getBoolean("simulate_device_response", false)
-        simulateAutoCountdown = prefs.getBoolean("simulate_auto_countdown", false)
-        simulateBoardInSession = prefs.getBoolean("simulate_board_in_session", false)
+        if (BuildConfig.DEBUG) {
+            simulatedConnected = prefs.getBoolean("simulate_ble", false)
+            simulateDeviceResponse = prefs.getBoolean("simulate_device_response", false)
+            simulateAutoCountdown = prefs.getBoolean("simulate_auto_countdown", false)
+            simulateBoardInSession = prefs.getBoolean("simulate_board_in_session", false)
+        } else {
+            prefs.edit()
+                .remove("simulate_ble")
+                .remove("simulate_device_response")
+                .remove("simulate_auto_countdown")
+                .remove("simulate_board_in_session")
+                .apply()
+            simulatedConnected = false
+            simulateDeviceResponse = false
+            simulateAutoCountdown = false
+            simulateBoardInSession = false
+        }
         simSessionActive = simulateBoardInSession
-        simDurationMs = prefs.getInt("simulate_duration", 25) * 60 * 1000L
+        simDurationMs = if (BuildConfig.DEBUG) prefs.getInt("simulate_duration", 25) * 60 * 1000L else 25 * 60 * 1000L
         targetMacAddress = ""
     }
 
     fun setSimulatedConnected(value: Boolean) {
+        if (!BuildConfig.DEBUG) {
+            simulatedConnected = false
+            _connectionState.value = ConnectionState.DISCONNECTED
+            return
+        }
         simulatedConnected = value
         if (value) {
             _connectionState.value = ConnectionState.CONNECTED
@@ -133,16 +154,16 @@ class BleManager @Inject constructor(
     }
 
     fun setSimulateDeviceResponse(value: Boolean) {
-        simulateDeviceResponse = value
+        simulateDeviceResponse = BuildConfig.DEBUG && value
     }
 
     fun setSimulateAutoCountdown(value: Boolean) {
-        simulateAutoCountdown = value
+        simulateAutoCountdown = BuildConfig.DEBUG && value
     }
 
     fun setSimulateBoardInSession(value: Boolean) {
-        simulateBoardInSession = value
-        simSessionActive = value
+        simulateBoardInSession = BuildConfig.DEBUG && value
+        simSessionActive = simulateBoardInSession
         if (value) {
             simStartTime = 0L
         }
@@ -273,6 +294,9 @@ class BleManager @Inject constructor(
         override fun onMtuChanged(gatt: BluetoothGatt, mtu: Int, status: Int) {
             if (!isCurrentGatt(gatt)) return
             Log.d(TAG, "MTU changed: mtu=$mtu, status=$status")
+            if (status == BLUETOOTH_STATUS_SUCCESS && mtu > 0) {
+                negotiatedMtu = mtu
+            }
             discoverServices(gatt)
         }
 
@@ -547,14 +571,14 @@ class BleManager @Inject constructor(
     }
 
     fun isConnected(): Boolean {
-        if (simulatedConnected) return true
+        if (BuildConfig.DEBUG && simulatedConnected) return true
         if (_connectionState.value != ConnectionState.CONNECTED) return false
         if (targetMacAddress.isEmpty()) return bluetoothGatt != null
         return bluetoothGatt?.device?.address == targetMacAddress
     }
 
     fun isSimulating(): Boolean {
-        return simulatedConnected
+        return BuildConfig.DEBUG && simulatedConnected
     }
 
     suspend fun sendData(data: ByteArray): Result<ByteArray> {
@@ -595,6 +619,10 @@ class BleManager @Inject constructor(
 
         val requestId = org.json.JSONObject(String(requestBytes, Charsets.UTF_8)).optInt("id")
         logBle("SEND", String(requestBytes, Charsets.UTF_8))
+        BleWritePolicy.validateRequestSize(requestBytes.size, negotiatedMtu)?.let { error ->
+            logBle("ERROR", error)
+            return Result.failure(IllegalArgumentException(error))
+        }
 
         return try {
             val gatt: BluetoothGatt
@@ -651,6 +679,10 @@ class BleManager @Inject constructor(
 
     @SuppressLint("MissingPermission")
     private suspend fun writeDataOnly(data: ByteArray): Result<ByteArray> {
+        BleWritePolicy.validateRequestSize(data.size, negotiatedMtu)?.let { error ->
+            logBle("ERROR", error)
+            return Result.failure(IllegalArgumentException(error))
+        }
         return try {
             val gatt: BluetoothGatt
             val characteristic: BluetoothGattCharacteristic

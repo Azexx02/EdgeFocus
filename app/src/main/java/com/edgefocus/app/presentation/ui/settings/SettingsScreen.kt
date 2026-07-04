@@ -46,6 +46,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import com.edgefocus.app.BuildConfig
+import com.edgefocus.app.presentation.viewmodel.DebugFeaturePolicy
 import com.edgefocus.app.presentation.viewmodel.SettingsViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -138,7 +140,7 @@ fun SettingsScreen(
         )
 
         // Developer Tools - hidden, only show after 7 taps on version
-        if (showDevTools >= 7) {
+        if (DebugFeaturePolicy.canShowDeveloperTools(BuildConfig.DEBUG, showDevTools)) {
             Spacer(modifier = Modifier.height(16.dp))
 
             NavigationCard(
@@ -156,9 +158,11 @@ fun SettingsScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .clickable {
-                    versionTapCount++
-                    if (versionTapCount >= 7) {
-                        showDevTools = 7
+                    if (BuildConfig.DEBUG) {
+                        versionTapCount++
+                        if (versionTapCount >= 7) {
+                            showDevTools = 7
+                        }
                     }
                 },
             horizontalAlignment = Alignment.CenterHorizontally
