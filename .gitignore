@@ -10,3 +10,30 @@
 .cxx
 local.properties
 *.apk
+
+# Local agent/workspace files
+AGENTS.md
+.agents/
+.codex/
+task_plan.md
+findings.md
+progress.md
+
+# Backups, temporary copies, review archives
+*.zip
+*.rar
+*.7z
+*.tar
+*.tar.gz
+*.bak
+*.backup
+*.old
+*.orig
+*.tmp
+*.temp
+*~
+backup*/
+backups*/
+archive*/
+tmp*/
+temp*/
