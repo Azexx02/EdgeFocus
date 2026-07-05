@@ -138,7 +138,6 @@ data class PushAlert(
     val message: String = "",
     val phoneActions: List<String> = emptyList(),
     val soundVolume: Float? = null,
-    val focusState: Int? = null,
     val reminderCount: Int? = null,
     val riskScore: Double? = null,
     val phoneDistractionLevel: Int? = null,
@@ -154,9 +153,6 @@ data class BoardPreferences(
     val powerProfile: PowerProfile = PowerProfile.GO,
     val awayTimeoutMin: Int = 15,
     val defaultFocusDurationMin: Int = 25,
-    val vibrationStrength: Float = 0.5f,
-    val ledBrightness: Int = 75,
-    val reminderSensitivity: Float = 0.5f,
     val soundVolume: Float = 0.7f,
     val normalChannels: Set<String> = setOf("screen", "band", "sound"),
     val silentChannels: Set<String> = setOf("screen", "band"),
@@ -330,7 +326,6 @@ object BoardJsonParser {
             message = data.optString("message", ""),
             phoneActions = data.optStringList("phone_actions"),
             soundVolume = data.optDoubleOrNull("sound_volume")?.toFloat(),
-            focusState = data.optIntOrNull("focus_state"),
             reminderCount = data.optIntOrNull("reminder_count"),
             riskScore = data.optDoubleOrNull("risk_score"),
             phoneDistractionLevel = data.optIntOrNull("phone_distraction_level"),
@@ -391,13 +386,6 @@ object BoardJsonParser {
                 "default_focus_duration_min",
                 defaults.defaultFocusDurationMin
             ),
-            vibrationStrength = data.optDouble("vibration_strength", defaults.vibrationStrength.toDouble())
-                .toFloat(),
-            ledBrightness = data.optInt("led_brightness", defaults.ledBrightness),
-            reminderSensitivity = data.optDouble(
-                "reminder_sensitivity",
-                defaults.reminderSensitivity.toDouble()
-            ).toFloat(),
             soundVolume = data.optDouble("sound_volume", defaults.soundVolume.toDouble()).toFloat(),
             normalChannels = data.optJSONArray("normal_channels")?.let { parseChannelNames(it) }
                 ?: maskToChannels(data.optInt("normal_channels_mask", channelMask(defaults.normalChannels)), true),

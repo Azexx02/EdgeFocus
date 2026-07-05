@@ -244,7 +244,6 @@ class TimerStateHolder @Inject constructor(
                 _state.update {
                     it.copy(
                         lastAlert = alert,
-                        focusState = alert.focusState ?: it.focusState,
                         outputCapability = alert.outputCapability ?: it.outputCapability,
                         reminderCount = alert.reminderCount ?: it.reminderCount
                     )
@@ -821,7 +820,8 @@ class TimerStateHolder @Inject constructor(
                 boardFocusDuration = report.optInt("focus_duration", 0),
                 boardSessionDistractionCount = report.optInt("distraction_count", 0),
                 boardSessionReminderCount = report.optInt("reminder_count", 0),
-                boardSessionPhoneDistractionCount = report.optInt("phone_distraction_count", it.phoneDistractionCount)
+                boardSessionPhoneDistractionCount = report.optInt("phone_distraction_count", 0),
+                phoneDistractionCount = report.optInt("phone_distraction_count", 0)
             )
         }
     }
@@ -870,7 +870,7 @@ class TimerStateHolder @Inject constructor(
                 calibrationCompleted = boardState.calibrationCompleted,
                 distractionCount = boardState.distractionCount,
                 reminderCount = boardState.reminderCount,
-                phoneDistractionCount = boardState.phoneDistractionCount.takeIf { count -> count > 0 } ?: it.phoneDistractionCount,
+                phoneDistractionCount = boardState.phoneDistractionCount,
                 sessionPhase = phase,
                 focusState = boardState.focusState,
                 phoneSignal = boardState.phoneSignal,
@@ -1147,8 +1147,7 @@ class TimerStateHolder @Inject constructor(
     fun getBoardFocusDuration(): Int = _state.value.boardFocusDuration ?: 0
     fun getBoardSessionDistractionCount(): Int = _state.value.boardSessionDistractionCount ?: 0
     fun getBoardSessionReminderCount(): Int = _state.value.boardSessionReminderCount ?: 0
-    fun getBoardSessionPhoneDistractionCount(): Int = _state.value.boardSessionPhoneDistractionCount
-        ?: _state.value.phoneDistractionCount
+    fun getBoardSessionPhoneDistractionCount(): Int = _state.value.boardSessionPhoneDistractionCount ?: 0
     fun hasBoardSessionReport(): Boolean = _state.value.boardTotalDuration != null
     fun isActiveEdgeFocusSession(): Boolean =
         _state.value.sessionMode == SessionMode.EDGEFOCUS &&
@@ -1156,6 +1155,16 @@ class TimerStateHolder @Inject constructor(
             isBoardConnected()
 
     fun incrementPhoneDistraction() {
-        _state.update { it.copy(phoneDistractionCount = it.phoneDistractionCount + 1) }
+        _state.update {
+            if (TimerPhoneDistractionPolicy.shouldIncrementLocalPhoneDistraction(
+                    sessionMode = it.sessionMode,
+                    timerState = it.timerState
+                )
+            ) {
+                it.copy(phoneDistractionCount = it.phoneDistractionCount + 1)
+            } else {
+                it
+            }
+        }
     }
 }

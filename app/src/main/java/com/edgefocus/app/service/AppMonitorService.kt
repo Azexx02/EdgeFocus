@@ -227,11 +227,12 @@ class AppMonitorService : Service() {
         // 1. EdgeFocus 自己在前台：BLE 上报 learning，不通知
         if (foregroundPackage == packageName) {
             closeCurrentAppUsage()
+            val report = AppMonitorBleUsagePolicy.selfForeground(packageName)
             reportBleIfChanged(
-                packageName = packageName,
-                category = "learning",
-                level = 0,
-                isInUse = false
+                packageName = report.packageName,
+                category = report.category,
+                level = report.level,
+                isInUse = report.isInUse
             )
             return
         }
@@ -239,11 +240,12 @@ class AppMonitorService : Service() {
         // 2. null：复用原通知逻辑，按后台/桌面/other 处理
         if (foregroundPackage == null) {
             closeCurrentAppUsage()
+            val report = AppMonitorBleUsagePolicy.unknownForeground(DESKTOP_OR_BACKGROUND)
             reportBleIfChanged(
-                packageName = DESKTOP_OR_BACKGROUND,
-                category = "other",
-                level = 3,
-                isInUse = false
+                packageName = report.packageName,
+                category = report.category,
+                level = report.level,
+                isInUse = report.isInUse
             )
 
             if (now - lastBackgroundAlert >= BACKGROUND_INTERVAL) {

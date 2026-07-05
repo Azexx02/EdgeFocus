@@ -842,7 +842,7 @@ class BleManager @Inject constructor(
     override suspend fun getPreferences(): Result<ByteArray> {
         if (simulatedConnected) {
             return Result.success(
-                """{"status":"success","data":{"system_mode":0,"away_timeout_min":15,"default_focus_duration_min":25,"vibration_strength":0.5,"sound_volume":0.7,"led_brightness":75,"reminder_sensitivity":0.5,"normal_channels":["screen","band","sound"],"silent_channels":["screen","band"],"screen_output_route":"board","sound_output_route":"board","gimbal_enabled":true}}"""
+                """{"status":"success","data":{"system_mode":0,"notification_mode":"normal","power_profile":"go","away_timeout_min":15,"default_focus_duration_min":25,"sound_volume":0.7,"normal_channels":["screen","band","sound"],"silent_channels":["screen","band"],"screen_output_route":"board","sound_output_route":"board","gimbal_enabled":true}}"""
                     .toByteArray(Charsets.UTF_8)
             )
         }
@@ -911,9 +911,9 @@ class BleManager @Inject constructor(
     @SuppressLint("MissingPermission")
     override suspend fun updatePreferences(key: String, value: String): Result<ByteArray> {
         val typedValue: Any = when (key) {
-            "system_mode", "away_timeout_min", "led_brightness", "default_focus_duration_min" ->
+            "system_mode", "away_timeout_min", "default_focus_duration_min" ->
                 value.toIntOrNull() ?: value
-            "vibration_strength", "reminder_sensitivity", "sound_volume" ->
+            "sound_volume" ->
                 value.toFloatOrNull() ?: value
             "gimbal_enabled" -> value.toBooleanStrictOrNull() ?: value
             else -> value

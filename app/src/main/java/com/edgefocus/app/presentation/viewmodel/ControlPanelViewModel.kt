@@ -14,6 +14,7 @@ import com.edgefocus.app.data.remote.BoardPrecheck
 import com.edgefocus.app.data.remote.BoardSessionPhase
 import com.edgefocus.app.data.remote.CameraPreviewImage
 import com.edgefocus.app.data.remote.GimbalStatus
+import com.edgefocus.app.data.remote.NotificationMode
 import com.edgefocus.app.data.remote.OutputCapability
 import com.edgefocus.app.data.remote.PushAlert
 import com.edgefocus.app.domain.model.TimerState
@@ -44,13 +45,10 @@ data class ControlPanelUiState(
     val totalTime: Long = TimeUtils.minutesToMillis(25),
     val systemMode: SystemMode = SystemMode.NORMAL,
     val awayTimeout: Int = 15,
-    val reminderSensitivity: Float = 0.5f,
     val nfcStatus: NfcStatus = NfcStatus.CHECKING,
     val distractionCount: Int = 0,
     val reminderCount: Int = 0,
     val phoneDistractionCount: Int = 0,
-    val vibrationStrength: Float = 0.5f,
-    val ledBrightness: Int = 75,
     val isBoardConnected: Boolean = false,
     val isSyncingWithBoard: Boolean = false,
     val arePreferencesLoaded: Boolean = false,
@@ -199,25 +197,7 @@ class ControlPanelViewModel @Inject constructor(
             else -> SystemMode.NORMAL
         }
         _uiState.update { it.copy(systemMode = newMode) }
-        sendPreferences("system_mode", mode.toString())
-    }
-
-    fun setVibrationStrength(value: Float, persist: Boolean = true) {
-        val clamped = value.coerceIn(0f, 1f)
-        _uiState.update { it.copy(vibrationStrength = clamped) }
-        if (persist) sendPreferences("vibration_strength", clamped.toString())
-    }
-
-    fun setLedBrightness(value: Int, persist: Boolean = true) {
-        val clamped = value.coerceIn(0, 100)
-        _uiState.update { it.copy(ledBrightness = clamped) }
-        if (persist) sendPreferences("led_brightness", clamped.toString())
-    }
-
-    fun setReminderSensitivity(value: Float, persist: Boolean = true) {
-        val clamped = value.coerceIn(0f, 1f)
-        _uiState.update { it.copy(reminderSensitivity = clamped) }
-        if (persist) sendPreferences("reminder_sensitivity", clamped.toString())
+        sendPreferences("notification_mode", if (newMode == SystemMode.SILENT) "silent" else "normal")
     }
 
     fun setAwayTimeout(minutes: Int, persist: Boolean = true) {
@@ -269,20 +249,8 @@ class ControlPanelViewModel @Inject constructor(
         }
     }
 
-    fun commitReminderSensitivity() {
-        sendPreferences("reminder_sensitivity", _uiState.value.reminderSensitivity.toString())
-    }
-
     fun commitAwayTimeout() {
         sendPreferences("away_timeout_min", _uiState.value.awayTimeout.toString())
-    }
-
-    fun commitVibrationStrength() {
-        sendPreferences("vibration_strength", _uiState.value.vibrationStrength.toString())
-    }
-
-    fun commitLedBrightness() {
-        sendPreferences("led_brightness", _uiState.value.ledBrightness.toString())
     }
 
     fun commitSoundVolume() {
@@ -310,23 +278,26 @@ class ControlPanelViewModel @Inject constructor(
                 data,
                 BoardPreferences(
                     systemMode = if (it.systemMode == SystemMode.SILENT) 1 else 0,
+                    notificationMode = if (it.systemMode == SystemMode.SILENT) {
+                        NotificationMode.SILENT
+                    } else {
+                        NotificationMode.NORMAL
+                    },
                     awayTimeoutMin = it.awayTimeout,
                     defaultFocusDurationMin = it.defaultFocusDurationMin,
-                    vibrationStrength = it.vibrationStrength,
-                    ledBrightness = it.ledBrightness,
-                    reminderSensitivity = it.reminderSensitivity,
                     soundVolume = it.soundVolume,
                     normalChannels = it.normalChannels,
                     silentChannels = it.silentChannels
                 )
             )
             it.copy(
-                systemMode = if (prefs.systemMode == 1) SystemMode.SILENT else SystemMode.NORMAL,
+                systemMode = if (prefs.notificationMode == NotificationMode.SILENT) {
+                    SystemMode.SILENT
+                } else {
+                    SystemMode.NORMAL
+                },
                 awayTimeout = prefs.awayTimeoutMin.coerceIn(5, 60),
                 defaultFocusDurationMin = prefs.defaultFocusDurationMin.coerceIn(5, 120),
-                vibrationStrength = prefs.vibrationStrength.coerceIn(0f, 1f),
-                ledBrightness = prefs.ledBrightness.coerceIn(0, 100),
-                reminderSensitivity = prefs.reminderSensitivity.coerceIn(0f, 1f),
                 soundVolume = prefs.soundVolume.coerceIn(0f, 1f),
                 normalChannels = prefs.normalChannels,
                 silentChannels = prefs.silentChannels,

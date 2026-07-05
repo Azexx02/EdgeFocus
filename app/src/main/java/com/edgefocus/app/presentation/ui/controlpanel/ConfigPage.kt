@@ -85,30 +85,6 @@ fun ConfigPage(
             modifier = Modifier.fillMaxWidth()
         )
 
-        Spacer(modifier = Modifier.height(24.dp))
-
-        Text(
-            text = "提醒灵敏度",
-            style = MaterialTheme.typography.titleMedium,
-            color = MaterialTheme.colorScheme.primary
-        )
-
-        Spacer(modifier = Modifier.height(8.dp))
-
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Text(text = "温和", style = MaterialTheme.typography.bodyMedium)
-            Text(text = "严格", style = MaterialTheme.typography.bodyMedium)
-        }
-
-        Slider(
-            value = uiState.reminderSensitivity,
-                    onValueChange = { viewModel.setReminderSensitivity(it) },
-            valueRange = 0f..1f,
-            modifier = Modifier.fillMaxWidth()
-        )
     }
 }
 

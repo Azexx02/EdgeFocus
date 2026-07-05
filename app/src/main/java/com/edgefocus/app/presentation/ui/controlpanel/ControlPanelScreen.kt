@@ -594,10 +594,9 @@ private fun StatsPage(
                         StatRow("等级", "L${lastAlert.level}")
                         StatRow("消息", lastAlert.message.ifBlank { "主机未提供消息" })
                         StatRow("手机动作", lastAlert.phoneActions.joinToString("、") { channelLabel(it) })
-                        lastAlert.riskScore?.let { StatRow("风险分", "%.2f".format(it)) }
-                        lastAlert.reason?.let { StatRow("原因", compactJsonText(it)) }
-                        lastAlert.focusState?.let { StatRow("提醒状态", focusStateLabel(it)) }
-                        lastAlert.soundVolume?.let { StatRow("声音音量", "${(it * 100).toInt()}%") }
+           lastAlert.riskScore?.let { StatRow("风险分", "%.2f".format(it)) }
+           lastAlert.reason?.let { StatRow("原因", compactJsonText(it)) }
+           lastAlert.soundVolume?.let { StatRow("声音音量", "${(it * 100).toInt()}%") }
                     }
                 }
             }
@@ -685,32 +684,11 @@ private fun SettingsPage(
             }
         }
 
-        // Row 2: Reminder sensitivity + Away timeout
+        // Row 2: Away timeout
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // Reminder sensitivity
-            Card(
-                modifier = Modifier.weight(1f),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surface
-                )
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text("提醒灵敏度", style = MaterialTheme.typography.titleMedium)
-                    Spacer(modifier = Modifier.height(8.dp))
-                    HardwareSlider(
-                        "灵敏度",
-                        uiState.reminderSensitivity,
-                        uiState.isBoardConnected && uiState.arePreferencesLoaded,
-                        onValueChangeFinished = viewModel::commitReminderSensitivity
-                    ) {
-                        viewModel.setReminderSensitivity(it, persist = false)
-                    }
-                }
-            }
-
             // Away timeout
             Card(
                 modifier = Modifier.weight(1f),
@@ -733,29 +711,6 @@ private fun SettingsPage(
             }
         }
 
-        // Row 3: Vibration strength
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Card(
-                modifier = Modifier.weight(1f),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    Text("振动强度", style = MaterialTheme.typography.titleMedium)
-                    Spacer(modifier = Modifier.height(8.dp))
-                    HardwareSlider(
-                        "强度",
-                        uiState.vibrationStrength,
-                        uiState.isBoardConnected && uiState.arePreferencesLoaded,
-                        onValueChangeFinished = viewModel::commitVibrationStrength
-                    ) {
-                        viewModel.setVibrationStrength(it, persist = false)
-                    }
-                }
-            }
-        }
 
         Row(
             modifier = Modifier.fillMaxWidth(),

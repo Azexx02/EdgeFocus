@@ -63,9 +63,6 @@ class BoardJsonParserTest {
                   "power_profile":"go",
                   "away_timeout_min":12,
                   "default_focus_duration_min":45,
-                  "vibration_strength":0.25,
-                  "led_brightness":62,
-                  "reminder_sensitivity":0.8,
                   "sound_volume":0.35,
                   "normal_channels":["SCREEN","BAND","SOUND"],
                   "silent_channels":["SCREEN","BAND"],
@@ -83,9 +80,6 @@ class BoardJsonParserTest {
         assertEquals(PowerProfile.GO, prefs.powerProfile)
         assertEquals(12, prefs.awayTimeoutMin)
         assertEquals(45, prefs.defaultFocusDurationMin)
-        assertEquals(0.25f, prefs.vibrationStrength, 0.001f)
-        assertEquals(62, prefs.ledBrightness)
-        assertEquals(0.8f, prefs.reminderSensitivity, 0.001f)
         assertEquals(0.35f, prefs.soundVolume, 0.001f)
         assertEquals(setOf("screen", "band", "sound"), prefs.normalChannels)
         assertEquals(setOf("screen", "band"), prefs.silentChannels)
