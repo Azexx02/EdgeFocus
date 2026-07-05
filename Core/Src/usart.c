@@ -105,6 +105,9 @@ void HAL_UART_MspInit(UART_HandleTypeDef* uartHandle)
     GPIO_InitStruct.Alternate = GPIO_AF5_UART4;
     HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
+    HAL_NVIC_SetPriority(UART4_IRQn, 5, 0);
+    HAL_NVIC_EnableIRQ(UART4_IRQn);
+
   /* USER CODE BEGIN UART4_MspInit 1 */
 
   /* USER CODE END UART4_MspInit 1 */
@@ -127,6 +130,7 @@ void HAL_UART_MspDeInit(UART_HandleTypeDef* uartHandle)
     PC11     ------> UART4_RX
     */
     HAL_GPIO_DeInit(GPIOC, GPIO_PIN_10|GPIO_PIN_11);
+    HAL_NVIC_DisableIRQ(UART4_IRQn);
 
   /* USER CODE BEGIN UART4_MspDeInit 1 */
 

@@ -42,7 +42,6 @@
 /*#define HAL_CRC_MODULE_ENABLED   */
 /*#define HAL_CRYP_MODULE_ENABLED   */
 #define HAL_DAC_MODULE_ENABLED
-/*#define HAL_FDCAN_MODULE_ENABLED   */
 /*#define HAL_FMAC_MODULE_ENABLED   */
 /*#define HAL_HRTIM_MODULE_ENABLED   */
 /*#define HAL_IRDA_MODULE_ENABLED   */
@@ -84,7 +83,6 @@
 #define USE_HAL_CRYP_REGISTER_CALLBACKS       0U
 #define USE_HAL_DAC_REGISTER_CALLBACKS        0U
 #define USE_HAL_EXTI_REGISTER_CALLBACKS       0U
-#define USE_HAL_FDCAN_REGISTER_CALLBACKS      0U
 #define USE_HAL_FMAC_REGISTER_CALLBACKS       0U
 #define USE_HAL_HRTIM_REGISTER_CALLBACKS      0U
 #define USE_HAL_I2C_REGISTER_CALLBACKS        0U
@@ -251,10 +249,6 @@ The real value may vary depending on the variations in voltage and temperature.*
 #ifdef HAL_EXTI_MODULE_ENABLED
 #include "stm32g4xx_hal_exti.h"
 #endif /* HAL_EXTI_MODULE_ENABLED */
-
-#ifdef HAL_FDCAN_MODULE_ENABLED
-#include "stm32g4xx_hal_fdcan.h"
-#endif /* HAL_FDCAN_MODULE_ENABLED */
 
 #ifdef HAL_FLASH_MODULE_ENABLED
 #include "stm32g4xx_hal_flash.h"

@@ -1,5 +1,6 @@
 #include "board_config.h"
 #include "dac.h"
+#include "gimbal_config.h"
 #include "main.h"
 
 static bool boost_enabled;
@@ -13,7 +14,7 @@ void board_config_init(void)
   HAL_GPIO_WritePin(GIMBAL_Y_STBY_GPIO_Port, GIMBAL_Y_STBY_Pin, GPIO_PIN_RESET);
   board_set_boost(false);
   board_set_fault(false);
-  board_set_dac_mv(300U, 300U);
+  board_set_dac_mv(GIMBAL_IDLE_DAC_MV, GIMBAL_IDLE_DAC_MV);
 }
 
 void board_set_boost(bool enabled)

@@ -51,6 +51,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/motor_pwm.c
     Core/Src/current_sample.c
     Core/Src/uart_protocol.c
+    Core/Src/gimbal_storage.c
 )
 
 # Add include paths

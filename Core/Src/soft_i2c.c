@@ -6,9 +6,15 @@
 
 static void delay_us(uint32_t us)
 {
+  if ((DWT->CTRL & DWT_CTRL_CYCCNTENA_Msk) == 0U) {
+    CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    DWT->CYCCNT = 0U;
+    DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
+  }
   const uint32_t start = DWT->CYCCNT;
   const uint32_t ticks = (SystemCoreClock / 1000000U) * us;
-  while ((uint32_t)(DWT->CYCCNT - start) < ticks) { }
+  uint32_t guard = ticks * 2U + 32U;
+  while ((uint32_t)(DWT->CYCCNT - start) < ticks && guard-- != 0U) { }
 }
 
 static void scl_release(void)
