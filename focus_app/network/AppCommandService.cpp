@@ -375,10 +375,7 @@ int clampedDefaultFocusDurationMin(const Preferences& prefs) {
 Preferences sanitizePreferences(Preferences prefs) {
     prefs.away_timeout_min = clampMinutes(prefs.away_timeout_min, kMinAwayTimeoutMin, kMaxAwayTimeoutMin);
     prefs.default_focus_duration_min = clampFocusDurationMin(prefs.default_focus_duration_min);
-    prefs.vibration_strength = clampFloat(prefs.vibration_strength, 0.0f, 1.0f);
     prefs.sound_volume = clampFloat(prefs.sound_volume, 0.0f, 1.0f);
-    prefs.led_brightness = clampInt(prefs.led_brightness, 0, 100);
-    prefs.reminder_sensitivity = clampFloat(prefs.reminder_sensitivity, 0.0f, 1.0f);
     return prefs;
 }
 
@@ -590,16 +587,10 @@ void AppCommandService::loadPreferences() {
                                                       std::to_string(prefs.default_focus_duration_min)),
                           prefs.default_focus_duration_min),
         5, 120);
-    prefs.vibration_strength = parseFloatOrDefault(sqlite_store_.getPreference("vibration_strength", std::to_string(prefs.vibration_strength)),
-                                                   prefs.vibration_strength);
     prefs.sound_volume = clampFloat(
         parseFloatOrDefault(sqlite_store_.getPreference("sound_volume", std::to_string(prefs.sound_volume)),
                             prefs.sound_volume),
         0.0f, 1.0f);
-    prefs.led_brightness = parseIntOrDefault(sqlite_store_.getPreference("led_brightness", std::to_string(prefs.led_brightness)),
-                                             prefs.led_brightness);
-    prefs.reminder_sensitivity = parseFloatOrDefault(sqlite_store_.getPreference("reminder_sensitivity", std::to_string(prefs.reminder_sensitivity)),
-                                                     prefs.reminder_sensitivity);
     prefs.normal_channels_mask = sanitizeNotificationChannelMask(
         parseNotificationMaskOrDefault(
             sqlite_store_.getPreference("normal_channels_mask", std::to_string(prefs.normal_channels_mask)),
@@ -920,17 +911,8 @@ std::string AppCommandService::handleUpdatePreferences(const json& data, int req
     if (data.contains("default_focus_duration_min")) {
         prefs.default_focus_duration_min = clampFocusDurationMin(data["default_focus_duration_min"].get<int>());
     }
-    if (data.contains("vibration_strength")) {
-        prefs.vibration_strength = clampFloat(data["vibration_strength"].get<float>(), 0.0f, 1.0f);
-    }
     if (data.contains("sound_volume")) {
         prefs.sound_volume = clampFloat(data["sound_volume"].get<float>(), 0.0f, 1.0f);
-    }
-    if (data.contains("led_brightness")) {
-        prefs.led_brightness = clampInt(data["led_brightness"].get<int>(), 0, 100);
-    }
-    if (data.contains("reminder_sensitivity")) {
-        prefs.reminder_sensitivity = clampFloat(data["reminder_sensitivity"].get<float>(), 0.0f, 1.0f);
     }
     if (data.contains("normal_channels_mask")) {
         prefs.normal_channels_mask = parseChannelMaskFromValue(data["normal_channels_mask"], true);
@@ -962,10 +944,7 @@ std::string AppCommandService::handleUpdatePreferences(const json& data, int req
     sqlite_store_.savePreference("power_profile", powerProfileToString(prefs.power_profile));
     sqlite_store_.savePreference("away_timeout_min", std::to_string(prefs.away_timeout_min));
     sqlite_store_.savePreference("default_focus_duration_min", std::to_string(prefs.default_focus_duration_min));
-    sqlite_store_.savePreference("vibration_strength", std::to_string(prefs.vibration_strength));
     sqlite_store_.savePreference("sound_volume", std::to_string(prefs.sound_volume));
-    sqlite_store_.savePreference("led_brightness", std::to_string(prefs.led_brightness));
-    sqlite_store_.savePreference("reminder_sensitivity", std::to_string(prefs.reminder_sensitivity));
     sqlite_store_.savePreference("normal_channels_mask", std::to_string(prefs.normal_channels_mask));
     sqlite_store_.savePreference("silent_channels_mask", std::to_string(prefs.silent_channels_mask));
     sqlite_store_.savePreference("screen_output_route", prefs.screen_output_route);
@@ -978,10 +957,7 @@ std::string AppCommandService::handleUpdatePreferences(const json& data, int req
         {"power_profile", powerProfileToString(prefs.power_profile)},
         {"away_timeout_min", prefs.away_timeout_min},
         {"default_focus_duration_min", prefs.default_focus_duration_min},
-        {"vibration_strength", prefs.vibration_strength},
         {"sound_volume", prefs.sound_volume},
-        {"led_brightness", prefs.led_brightness},
-        {"reminder_sensitivity", prefs.reminder_sensitivity},
         {"normal_channels_mask", prefs.normal_channels_mask},
         {"silent_channels_mask", prefs.silent_channels_mask},
         {"normal_channels", notificationMaskToNames(prefs.normal_channels_mask)},
@@ -1218,10 +1194,7 @@ std::string AppCommandService::handleGetPreferences(int req_id) {
         {"power_profile", powerProfileToString(snap.preferences.power_profile)},
         {"away_timeout_min", snap.preferences.away_timeout_min},
         {"default_focus_duration_min", snap.preferences.default_focus_duration_min},
-        {"vibration_strength", snap.preferences.vibration_strength},
         {"sound_volume", snap.preferences.sound_volume},
-        {"led_brightness", snap.preferences.led_brightness},
-        {"reminder_sensitivity", snap.preferences.reminder_sensitivity},
         {"normal_channels_mask", snap.preferences.normal_channels_mask},
         {"silent_channels_mask", snap.preferences.silent_channels_mask},
         {"normal_channels", notificationMaskToNames(snap.preferences.normal_channels_mask)},

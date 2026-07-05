@@ -6,6 +6,7 @@
 #include <vector>
 #include <map>
 #include <mutex>
+#include <optional>
 
 namespace edgefocus {
 
@@ -51,6 +52,7 @@ public:
         bool has_more = false;
     };
     SessionHistoryPage querySessionHistory(const std::string& cursor, int limit);
+    std::optional<SessionRecord> querySessionById(const std::string& session_id);
     SessionRecord queryLastCompletedSession();
     int closeOpenSessions(int64_t end_time_ms, const std::string& end_reason);
 

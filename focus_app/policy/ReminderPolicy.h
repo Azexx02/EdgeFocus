@@ -1,6 +1,5 @@
 #pragma once
 #include "app/Module.h"
-#include "behavior/FocusState.h"
 #include "policy/NotificationRouter.h"
 #include "InterventionCommand.h"
 #include "ModeManager.h"
@@ -15,7 +14,7 @@ class AppContext;
 class SystemStateStore;
 class DeviceManager;
 
-/// Reminder policy module. Generates InterventionCommands based on FocusState.
+/// Reminder policy module. Generates InterventionCommands from fused behavior context.
 class ReminderPolicy : public Module {
 public:
     ReminderPolicy(SystemStateStore& store, SQLiteStore& sqlite_store, DeviceManager& device_mgr);
@@ -23,7 +22,7 @@ public:
     void runOnce(AppContext& ctx) override;
     void shutdown(AppContext& ctx) override;
 
-    std::optional<InterventionCommand> processState(FocusState state, int64_t now_ms);
+    std::optional<InterventionCommand> processCurrentContext(int64_t now_ms);
     void onUserAck(int64_t now_ms);
 
     ModeManager& getModeManager() { return mode_manager_; }

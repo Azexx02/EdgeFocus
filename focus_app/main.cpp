@@ -106,7 +106,7 @@ int main(int argc, char* argv[]) {
 
     // Inter-module queues (W03: vision -> behavior data contract)
     BoundedQueue<CameraFrame> camera_frame_queue(3, true);
-    BoundedQueue<VisionResult> vision_result_queue(5, false);
+    BoundedQueue<VisionResult> vision_result_queue(5, true);
 
     AppContext ctx;
 

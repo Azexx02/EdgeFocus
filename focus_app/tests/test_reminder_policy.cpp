@@ -19,12 +19,17 @@ void makeFocusedSession(SystemStateStore& store) {
     store.updateSession(session);
 }
 
-void setContext(SystemStateStore& store, int level, int risk = 20, bool phone_signal = true) {
+void setContext(SystemStateStore& store,
+                int phone_level,
+                int risk = 20,
+                bool phone_signal = true,
+                bool vision_signal = false,
+                PhoneUsageState usage_state = PhoneUsageState::IN_USE) {
     BehaviorContext ctx;
     ctx.phone_signal = phone_signal;
-    ctx.vision_signal = false;
-    ctx.phone_distraction_level = phone_signal ? level : -1;
-    ctx.phone_usage_state = phone_signal ? static_cast<int>(PhoneUsageState::IN_USE) : -1;
+    ctx.vision_signal = vision_signal;
+    ctx.phone_distraction_level = phone_signal ? phone_level : -1;
+    ctx.phone_usage_state = phone_signal ? static_cast<int>(usage_state) : -1;
     ctx.risk_score = risk;
     ctx.reason = "test";
     store.updateBehaviorContext(ctx);
@@ -41,8 +46,8 @@ void test_playing_state_not_fixed_to_level3() {
     AppContext ctx;
     policy.init(ctx);
 
-    setContext(store, 1);
-    auto cmd = policy.processState(FocusState::PHONE_IN_PLAYING, 1000);
+    setContext(store, 1, 20, true, false, PhoneUsageState::PLAYING);
+    auto cmd = policy.processCurrentContext(1000);
     assert(cmd.has_value());
     assert(cmd->level == CommandLevel::LEVEL_1);
 }
@@ -57,7 +62,7 @@ void test_use_state_can_escalate_to_level3() {
     policy.init(ctx);
 
     setContext(store, 3, 95);
-    auto cmd = policy.processState(FocusState::PHONE_IN_USE, 1000);
+    auto cmd = policy.processCurrentContext(1000);
     assert(cmd.has_value());
     assert(cmd->level == CommandLevel::LEVEL_3);
 }
@@ -71,8 +76,8 @@ void test_playing_state_can_be_low_when_risk_is_low() {
     AppContext ctx;
     policy.init(ctx);
 
-    setContext(store, 3, 20);
-    auto cmd = policy.processState(FocusState::PHONE_IN_PLAYING, 1000);
+    setContext(store, 3, 20, true, false, PhoneUsageState::PLAYING);
+    auto cmd = policy.processCurrentContext(1000);
     assert(cmd.has_value());
     assert(cmd->level == CommandLevel::LEVEL_1);
 }
@@ -98,8 +103,8 @@ void test_silent_does_not_change_level_for_same_context() {
     setContext(normal_store, 2, 70);
     setContext(silent_store, 2, 70);
 
-    auto normal_cmd = normal_policy.processState(FocusState::PHONE_IN_USE, 1000);
-    auto silent_cmd = silent_policy.processState(FocusState::PHONE_IN_USE, 1000);
+    auto normal_cmd = normal_policy.processCurrentContext(1000);
+    auto silent_cmd = silent_policy.processCurrentContext(1000);
 
     assert(normal_cmd.has_value());
     assert(silent_cmd.has_value());
@@ -123,7 +128,7 @@ void test_run_once_uses_configured_preference_channels() {
     auto session = store.snapshot().session;
     session.calibration_completed = true;
     store.updateSession(session);
-    setContext(store, 1);
+    setContext(store, -1, 20, false, true);
     store.updateFocusState(FocusState::LOOKING_AWAY, 1000, "focused");
 
     policy.runOnce(ctx);
@@ -143,7 +148,8 @@ void test_phone_learning_does_not_issue_reminder() {
     assert(sqlite_store.init(ctx));
     policy.init(ctx);
 
-    auto cmd = policy.processState(FocusState::PHONE_IN_LEARNING, 1000);
+    setContext(store, 0, 13, true, false, PhoneUsageState::LEARNING);
+    auto cmd = policy.processCurrentContext(1000);
     assert(!cmd.has_value());
     assert(store.snapshot().session.reminder_count == 0);
     assert(store.snapshot().reminder.level == CommandLevel::NONE);
@@ -164,8 +170,8 @@ void test_visual_state_uses_risk_score_for_command_level() {
     DeviceManager dev_mgr(store);
     ReminderPolicy policy(store, sqlite_store, dev_mgr);
 
-    setContext(store, 0, 20);
-    auto low_cmd = policy.processState(FocusState::LOOKING_AWAY, 1000);
+    setContext(store, -1, 20, false, true);
+    auto low_cmd = policy.processCurrentContext(1000);
     assert(low_cmd.has_value());
     assert(low_cmd->level == CommandLevel::LEVEL_1);
 
@@ -175,8 +181,8 @@ void test_visual_state_uses_risk_score_for_command_level() {
     DeviceManager medium_dev_mgr(medium_store);
     ReminderPolicy medium_policy(medium_store, medium_sqlite_store, medium_dev_mgr);
 
-    setContext(medium_store, 1, 60);
-    auto medium_cmd = medium_policy.processState(FocusState::LOOKING_AWAY, 1000);
+    setContext(medium_store, -1, 60, false, true);
+    auto medium_cmd = medium_policy.processCurrentContext(1000);
     assert(medium_cmd.has_value());
     assert(medium_cmd->level == CommandLevel::LEVEL_2);
 
@@ -186,8 +192,8 @@ void test_visual_state_uses_risk_score_for_command_level() {
     DeviceManager high_dev_mgr(high_store);
     ReminderPolicy high_policy(high_store, high_sqlite_store, high_dev_mgr);
 
-    setContext(high_store, 2, 80);
-    auto high_cmd = high_policy.processState(FocusState::LOOKING_AWAY, 1000);
+    setContext(high_store, -1, 80, false, true);
+    auto high_cmd = high_policy.processCurrentContext(1000);
     assert(high_cmd.has_value());
     assert(high_cmd->level == CommandLevel::LEVEL_3);
 }
@@ -199,11 +205,11 @@ void test_sleepy_state_uses_standard_command_level() {
     DeviceManager dev_mgr(store);
     ReminderPolicy policy(store, sqlite_store, dev_mgr);
 
-    setContext(store, 0, 80, false);
-    auto cmd = policy.processState(FocusState::SLEEPY_OR_SLUMPED, 1000);
+    setContext(store, -1, 80, false, true);
+    auto cmd = policy.processCurrentContext(1000);
     assert(cmd.has_value());
     assert(cmd->level == CommandLevel::LEVEL_3);
-    assert(cmd->message == "Take a short break and sit upright");
+    assert(cmd->message == "Strong focus reminder");
 }
 
 void test_user_ack_increases_cooldown() {
@@ -213,12 +219,13 @@ void test_user_ack_increases_cooldown() {
     DeviceManager dev_mgr(store);
     ReminderPolicy policy(store, sqlite_store, dev_mgr);
 
-    auto cmd1 = policy.processState(FocusState::LOOKING_AWAY, 1000);
+    setContext(store, -1, 20, false, true);
+    auto cmd1 = policy.processCurrentContext(1000);
     assert(cmd1.has_value());
 
     policy.onUserAck(2000);
-    assert(!policy.processState(FocusState::LOOKING_AWAY, 7000).has_value());
-    assert(policy.processState(FocusState::LOOKING_AWAY, 18000).has_value());
+    assert(!policy.processCurrentContext(7000).has_value());
+    assert(policy.processCurrentContext(18000).has_value());
 }
 
 void test_risk_and_distraction_context_in_command() {
@@ -229,7 +236,7 @@ void test_risk_and_distraction_context_in_command() {
     ReminderPolicy policy(store, sqlite_store, dev_mgr);
 
     setContext(store, 3, 92);
-    auto cmd = policy.processState(FocusState::PHONE_IN_PLAYING, 1000);
+    auto cmd = policy.processCurrentContext(1000);
     assert(cmd.has_value());
     assert(cmd->risk_score == 92);
     assert(cmd->phone_distraction_level == 3);
@@ -256,7 +263,7 @@ void test_phone_output_routes_do_not_execute_board_screen_or_sound() {
         push = event_json;
     });
 
-    setContext(store, 1);
+    setContext(store, -1, 20, false, true);
     store.updateFocusState(FocusState::LOOKING_AWAY, 1000, "focused");
 
     policy.runOnce(ctx);
@@ -271,6 +278,7 @@ void test_phone_output_routes_do_not_execute_board_screen_or_sound() {
            (kNotificationChannelScreenMask | kNotificationChannelSoundMask));
     assert(push.find("\"phone_actions\":[\"SCREEN\",\"SOUND\"]") != std::string::npos);
     assert(push.find("\"sound_volume\":0.42") != std::string::npos);
+    assert(push.find("\"focus_state\"") == std::string::npos);
 }
 
 void test_low_confidence_does_not_create_reminder_side_effects() {
@@ -284,7 +292,8 @@ void test_low_confidence_does_not_create_reminder_side_effects() {
     policy.init(ctx);
 
     setContext(store, 3, 95);
-    auto no_cmd = policy.processState(FocusState::LOW_CONFIDENCE, 1000);
+    setContext(store, -1, 0, false, false);
+    auto no_cmd = policy.processCurrentContext(1000);
     assert(!no_cmd.has_value());
 
     auto after_low_conf = store.snapshot();
@@ -292,7 +301,8 @@ void test_low_confidence_does_not_create_reminder_side_effects() {
     assert(after_low_conf.reminder.level == CommandLevel::NONE);
     assert(after_low_conf.reminder.message.empty());
 
-    auto real_cmd = policy.processState(FocusState::PHONE_IN_USE, 2000);
+    setContext(store, 3, 95, true, false, PhoneUsageState::IN_USE);
+    auto real_cmd = policy.processCurrentContext(2000);
     assert(real_cmd.has_value());
     assert(real_cmd->level == CommandLevel::LEVEL_3);
 
@@ -320,7 +330,8 @@ void test_away_does_not_create_reminder_side_effects() {
     assert(sqlite_store.init(ctx));
     policy.init(ctx);
 
-    auto no_cmd = policy.processState(FocusState::AWAY, 1000);
+    setContext(store, -1, 0, false, false);
+    auto no_cmd = policy.processCurrentContext(1000);
     assert(!no_cmd.has_value());
 
     auto after_away = store.snapshot();
@@ -328,7 +339,8 @@ void test_away_does_not_create_reminder_side_effects() {
     assert(after_away.reminder.level == CommandLevel::NONE);
     assert(after_away.reminder.message.empty());
 
-    auto real_cmd = policy.processState(FocusState::LOOKING_AWAY, 2000);
+    setContext(store, -1, 20, false, true);
+    auto real_cmd = policy.processCurrentContext(2000);
     assert(real_cmd.has_value());
     assert(real_cmd->level == CommandLevel::LEVEL_1);
 
@@ -357,11 +369,12 @@ void test_non_reminder_state_clears_stale_active_reminder() {
     policy.init(ctx);
 
     setContext(store, 3, 95);
-    auto phone = policy.processState(FocusState::PHONE_IN_USE, 1000);
+    auto phone = policy.processCurrentContext(1000);
     assert(phone.has_value());
     assert(store.snapshot().reminder.level == CommandLevel::LEVEL_3);
 
-    auto no_cmd = policy.processState(FocusState::LOW_CONFIDENCE, 7000);
+    setContext(store, -1, 0, false, false);
+    auto no_cmd = policy.processCurrentContext(7000);
     assert(!no_cmd.has_value());
     assert(store.snapshot().session.reminder_count == 1);
     assert(store.snapshot().reminder.level == CommandLevel::NONE);
@@ -376,14 +389,15 @@ void test_home_mode_does_not_shorten_cooldown() {
     ReminderPolicy policy(store, sqlite_store, dev_mgr);
     policy.getModeManager().setMode(SystemMode::HOME);
 
-    auto first = policy.processState(FocusState::LOOKING_AWAY, 1000);
+    setContext(store, -1, 20, false, true);
+    auto first = policy.processCurrentContext(1000);
     assert(first.has_value());
     assert(first->level == CommandLevel::LEVEL_1);
 
-    auto during_cooldown = policy.processState(FocusState::LOOKING_AWAY, 4000);
+    auto during_cooldown = policy.processCurrentContext(4000);
     assert(!during_cooldown.has_value());
 
-    auto after_cooldown = policy.processState(FocusState::LOOKING_AWAY, 7000);
+    auto after_cooldown = policy.processCurrentContext(7000);
     assert(after_cooldown.has_value());
 }
 

@@ -48,13 +48,18 @@ int tests_failed = 0;
     } \
 } while(0)
 
-void setBehaviorContext(SystemStateStore& store, int level, int risk = 70, bool phone_signal = true) {
+void setBehaviorContext(SystemStateStore& store,
+                        int phone_level,
+                        int risk = 70,
+                        bool phone_signal = true,
+                        bool vision_signal = false,
+                        PhoneUsageState usage_state = PhoneUsageState::IN_USE) {
     BehaviorContext ctx;
     ctx.phone_signal = phone_signal;
-    ctx.vision_signal = false;
+    ctx.vision_signal = vision_signal;
     if (phone_signal) {
-        ctx.phone_distraction_level = level;
-        ctx.phone_usage_state = static_cast<int>(PhoneUsageState::IN_USE);
+        ctx.phone_distraction_level = phone_level;
+        ctx.phone_usage_state = static_cast<int>(usage_state);
     } else {
         ctx.phone_distraction_level = -1;
         ctx.phone_usage_state = -1;
@@ -111,15 +116,16 @@ void test_behavior_to_policy_contract() {
     store.updateFocusState(FocusState::FOCUSED, 1000, "test");
     auto snap = store.snapshot();
     CHECK(snap.focus_state == FocusState::FOCUSED, "Store reads FOCUSED correctly");
-    auto cmd = policy.processState(snap.focus_state, 2000);
+    setBehaviorContext(store, -1, 0, false, false);
+    auto cmd = policy.processCurrentContext(2000);
     CHECK(!cmd.has_value(), "FOCUSED → no intervention from policy");
 
-    setBehaviorContext(store, 0, 20);
+    setBehaviorContext(store, -1, 20, false, true);
     // LOOKING_AWAY uses BehaviorContext.risk_score to choose CommandLevel level.
     store.updateFocusState(FocusState::LOOKING_AWAY, 3000, "test");
     snap = store.snapshot();
     CHECK(snap.focus_state == FocusState::LOOKING_AWAY, "Store reads LOOKING_AWAY correctly");
-    cmd = policy.processState(snap.focus_state, 4000);
+    cmd = policy.processCurrentContext(4000);
     CHECK(cmd.has_value(), "LOOKING_AWAY policy generates command");
     CHECK(cmd->level == CommandLevel::LEVEL_1, "LOOKING_AWAY low risk_score produces LEVEL_1");
 
@@ -127,15 +133,15 @@ void test_behavior_to_policy_contract() {
     // PHONE_IN_USE is a behavior-layer state and maps via behavior context.
     store.updateFocusState(FocusState::PHONE_IN_USE, 5000, "test");
     snap = store.snapshot();
-    cmd = policy.processState(snap.focus_state, 12000);
+    cmd = policy.processCurrentContext(12000);
     CHECK(cmd.has_value(), "PHONE_IN_USE → policy generates command");
     CHECK(cmd->level == CommandLevel::LEVEL_2, "PHONE_IN_USE can produce LEVEL_2");
 
-    setBehaviorContext(store, 1, 20);
+    setBehaviorContext(store, 1, 20, true, false, PhoneUsageState::PLAYING);
     // Low-risk PHONE_IN_PLAYING should stay lower than LEVEL_3.
     store.updateFocusState(FocusState::PHONE_IN_PLAYING, 17000, "test");
     snap = store.snapshot();
-    cmd = policy.processState(snap.focus_state, 22000);
+    cmd = policy.processCurrentContext(22000);
     CHECK(cmd.has_value(), "PHONE_IN_PLAYING low-risk generates command");
     CHECK(cmd->level == CommandLevel::LEVEL_1, "PHONE_IN_PLAYING low-risk is LEVEL_1");
 
@@ -143,22 +149,22 @@ void test_behavior_to_policy_contract() {
     // High-risk PHONE_IN_USE can escalate to LEVEL_3.
     store.updateFocusState(FocusState::PHONE_IN_USE, 25000, "test");
     snap = store.snapshot();
-    cmd = policy.processState(snap.focus_state, 28000);
+    cmd = policy.processCurrentContext(28000);
     CHECK(cmd.has_value(), "PHONE_IN_USE high-risk can escalate");
     CHECK(cmd->level == CommandLevel::LEVEL_3, "PHONE_IN_USE high-risk can be LEVEL_3");
 
-    setBehaviorContext(store, 1, 20);
+    setBehaviorContext(store, 0, 13, true, false, PhoneUsageState::LEARNING);
     store.updateFocusState(FocusState::PHONE_IN_LEARNING, 33000, "test");
     snap = store.snapshot();
-    cmd = policy.processState(snap.focus_state, 34000);
+    cmd = policy.processCurrentContext(34000);
     CHECK(!cmd.has_value(), "PHONE_IN_LEARNING does not generate command");
     CHECK(store.snapshot().session.reminder_count == 4,
           "PHONE_IN_LEARNING does not increment reminder_count");
 
-    setBehaviorContext(store, 0, 80, false);
+    setBehaviorContext(store, -1, 80, false, true);
     store.updateFocusState(FocusState::SLEEPY_OR_SLUMPED, 39000, "test");
     snap = store.snapshot();
-    cmd = policy.processState(snap.focus_state, 40000);
+    cmd = policy.processCurrentContext(40000);
     CHECK(cmd.has_value(), "SLEEPY policy generates command");
     CHECK(cmd->level == CommandLevel::LEVEL_3, "SLEEPY risk_score 80 produces LEVEL_3");
 }
@@ -358,20 +364,21 @@ void test_mode_sync_contract() {
     // SILENT changes the reminder medium marker, not the policy severity.
     setBehaviorContext(store, 2, 70);
     store.updateFocusState(FocusState::PHONE_IN_USE, 1000, "test");
-    auto silent_cmd = policy.processState(FocusState::PHONE_IN_USE, 8000);
+    auto silent_cmd = policy.processCurrentContext(8000);
     CHECK(silent_cmd.has_value(), "PHONE_IN_USE generates command");
-    CHECK(silent_cmd->message == "Phone usage detected", "SILENT keeps policy message unchanged");
+    CHECK(silent_cmd->message == "Phone distraction detected", "SILENT keeps policy message unchanged");
 
     mm.setMode(SystemMode::NORMAL);
-    auto normal_cmd = policy.processState(FocusState::PHONE_IN_USE, 16000);
+    auto normal_cmd = policy.processCurrentContext(16000);
     CHECK(normal_cmd.has_value(), "PHONE_IN_USE generates command");
     CHECK(normal_cmd->level == silent_cmd->level, "NORMAL and SILENT keep the same policy level");
     CHECK(normal_cmd->message == silent_cmd->message, "NORMAL and SILENT keep the same policy message");
 
     mm.setMode(SystemMode::HOME);
-    auto home_first = policy.processState(FocusState::LOOKING_AWAY, 24000);
+    setBehaviorContext(store, -1, 20, false, true);
+    auto home_first = policy.processCurrentContext(24000);
     CHECK(home_first.has_value(), "HOME mode first reminder still works");
-    auto home_during_cooldown = policy.processState(FocusState::LOOKING_AWAY, 27000);
+    auto home_during_cooldown = policy.processCurrentContext(27000);
     CHECK(!home_during_cooldown.has_value(), "HOME mode does not shorten cooldown");
 
     // Also verify store is updated (for UI display)
@@ -400,36 +407,30 @@ void test_policy_skips_non_reminder_states_without_side_effects() {
     ReminderPolicy policy(store, sqlite, dev_mgr);
     policy.init(ctx);
 
-    BehaviorContext high_risk_phone;
-    high_risk_phone.phone_signal = true;
-    high_risk_phone.phone_distraction_level = 3;
-    high_risk_phone.risk_score = 95;
-    high_risk_phone.reason = "phone";
-    store.updateBehaviorContext(high_risk_phone);
-
-    auto low_conf = policy.processState(FocusState::LOW_CONFIDENCE, 1000);
+    setBehaviorContext(store, -1, 0, false, false);
+    auto low_conf = policy.processCurrentContext(1000);
     CHECK(!low_conf.has_value(), "LOW_CONFIDENCE produces no reminder command");
     auto after_low_conf = store.snapshot();
     CHECK(after_low_conf.session.reminder_count == 0, "LOW_CONFIDENCE does not increment reminder_count");
     CHECK(after_low_conf.reminder.level == CommandLevel::NONE, "LOW_CONFIDENCE does not update active reminder");
 
-    auto phone_after_low_conf = policy.processState(FocusState::PHONE_IN_USE, 2000);
+    setBehaviorContext(store, 3, 95, true, false);
+    auto phone_after_low_conf = policy.processCurrentContext(2000);
     CHECK(phone_after_low_conf.has_value(), "LOW_CONFIDENCE does not block next real phone reminder");
     CHECK(phone_after_low_conf->level == CommandLevel::LEVEL_3, "High-risk phone reminder still escalates");
 
-    BehaviorContext neutral_ctx;
-    neutral_ctx.reason = "away";
-    store.updateBehaviorContext(neutral_ctx);
-    auto away = policy.processState(FocusState::AWAY, 8000);
+    setBehaviorContext(store, -1, 0, false, false);
+    auto away = policy.processCurrentContext(8000);
     CHECK(!away.has_value(), "AWAY produces no reminder command");
     auto after_away = store.snapshot();
     CHECK(after_away.session.reminder_count == 1, "AWAY does not add a fake reminder");
     CHECK(after_away.reminder.level == CommandLevel::NONE, "AWAY clears stale active reminder");
 
-    auto looking_away = policy.processState(FocusState::LOOKING_AWAY, 9000);
+    setBehaviorContext(store, -1, 20, false, true);
+    auto looking_away = policy.processCurrentContext(9000);
     CHECK(looking_away.has_value(), "AWAY does not block next real visual reminder");
     CHECK(looking_away->level == CommandLevel::LEVEL_1,
-          "LOOKING_AWAY with risk_score 0 falls back to LEVEL_1 after AWAY");
+          "LOOKING_AWAY with positive visual risk produces LEVEL_1");
 
     for (int i = 0; i < 6; ++i) {
         sqlite.runOnce(ctx);
@@ -455,7 +456,11 @@ void test_report_contract() {
     AppContext ctx;
     sqlite.init(ctx);
 
-    // Simulate a session with events
+    // SessionController/SQLite session row is the reporting authority.
+    sqlite.saveSession("report_test", 1000, 60000);
+    sqlite.updateSessionEnd("report_test", 30000, 29, 24, 4, 2, 1, "test_end");
+
+    // Event logs are retained as diagnostics only; ReportGenerator must not infer counts from them.
     sqlite.logEvent({StorageEventType::SessionStart, "report_test", 1000, ""});
     sqlite.logEvent({StorageEventType::StateChange, "report_test", 5000, "Changed to 0"}); // FOCUSED
     sqlite.logEvent({StorageEventType::StateChange, "report_test", 15000, "Changed to 3"}); // PHONE
@@ -471,11 +476,12 @@ void test_report_contract() {
 
     // Verify report fields
     CHECK(report.session_id == "report_test", "session_id matches");
-    CHECK(report.total_duration == 29, "total_duration=29s (30000-1000)/1000");
-    CHECK(report.distraction_count >= 1, "distraction_count >= 1");
-    CHECK(report.reminder_count == 1, "reminder_count=1");
-    CHECK(report.focus_duration >= 0, "focus_duration >= 0");
-    CHECK(report.longest_focus_streak_ms >= 0, "longest_focus_streak_ms >= 0");
+    CHECK(report.total_duration == 29, "total_duration comes from session row");
+    CHECK(report.focus_duration == 24, "focus_duration comes from session row");
+    CHECK(report.distraction_count == 4, "distraction_count comes from session row");
+    CHECK(report.reminder_count == 2, "reminder_count comes from session row");
+    CHECK(report.phone_distraction_count == 1, "phone_distraction_count comes from session row");
+    CHECK(report.longest_focus_streak_ms == 0, "longest_focus_streak is not inferred from event text");
 
     // Store report
     store.updateLastReport(report);
@@ -484,7 +490,7 @@ void test_report_contract() {
     auto snap = store.snapshot();
     CHECK(snap.last_report.session_id == "report_test", "ReviewPage reads session_id");
     CHECK(snap.last_report.total_duration == 29, "ReviewPage reads total_duration");
-    CHECK(snap.last_report.reminder_count == 1, "ReviewPage reads reminder_count");
+    CHECK(snap.last_report.reminder_count == 2, "ReviewPage reads reminder_count");
 
     // Verify score calculation (what ReviewPage does)
     int score = 0;
@@ -1578,7 +1584,7 @@ void test_inactive_phone_sync_clears_stale_pressure() {
     CHECK(after.behavior_context.phone_usage_state == -1, "Inactive phone_sync clears phone usage state");
     CHECK(after.session.current_phone_distraction_level == 0, "Inactive phone_sync clears current phone level");
 
-    auto cmd = policy.processState(after.focus_state, after.snapshot_ms + 10);
+    auto cmd = policy.processCurrentContext(after.snapshot_ms + 10);
     CHECK(!cmd.has_value(), "FOCUSED state after inactive phone_sync emits no reminder");
 }
 

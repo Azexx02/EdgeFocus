@@ -53,19 +53,10 @@ FocusEvent EventDetector::detect(const SlidingWindow& win, const BehaviorConfig&
     
     auto items = win.getItems();
     if (items.empty()) return event;
-    int64_t current_ts = items.back().timestamp_ms;
-    
     // Low confidence: ratio > low_confidence_ratio
     event.is_low_confidence = win.getRatioCondition([](const VisionResult& r) { 
         return r.isLowConfidence(); 
     }) > config.low_confidence_ratio;
-
-    const VisionResult& latest = items.back();
-    event.visual_phone_detected = latest.isPhoneDetected();
-    event.visual_phone_confidence = latest.phone.valid ? latest.phone.confidence : 0.0f;
-    event.hand_holding_phone = latest.hands.valid &&
-                               latest.hands.value == HandState::HOLDING_PHONE &&
-                               latest.hands.confidence >= 0.6f;
 
     // Keep explicit phone_sync signal until it is explicitly cleared.
     if (last_phone_sig_.active) {
@@ -75,13 +66,6 @@ FocusEvent EventDetector::detect(const SlidingWindow& win, const BehaviorConfig&
         event.phone_usage_state = last_phone_sig_.usage_state;
         event.phone_usage_state_raw = static_cast<int>(last_phone_sig_.usage_state);
         appendReason(event.reason, "phone_signal");
-    } else if (event.visual_phone_detected && event.hand_holding_phone) {
-        event.is_phone_in_use = true;
-        event.phone_signal = true;
-        event.phone_distraction_level = 1;
-        event.phone_usage_state = PhoneUsageState::IN_USE;
-        event.phone_usage_state_raw = static_cast<int>(PhoneUsageState::IN_USE);
-        appendReason(event.reason, "visual_phone_holding");
     } else {
         event.phone_signal = false;
         event.phone_distraction_level = -1;

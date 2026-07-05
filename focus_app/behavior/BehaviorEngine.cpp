@@ -537,7 +537,7 @@ void BehaviorEngine::runOnce(AppContext& /*ctx*/) {
 #endif
 
     // --- ACTIVE: process vision results ---
-    auto result_opt = vision_queue_.tryPop();
+    auto result_opt = vision_queue_.popLatest();
     if (!result_opt.has_value()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
         return;

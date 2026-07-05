@@ -428,7 +428,6 @@ DemoHttpServer::json DemoHttpServer::triggerReminder(const json& data) {
             {"reason", "demo_trigger"},
             {"phone_actions", phone_actions},
             {"sound_volume", prefs.sound_volume},
-            {"focus_state", static_cast<int>(store_.snapshot().focus_state)},
             {"reminder_count", store_.snapshot().session.reminder_count}
         }}
     };

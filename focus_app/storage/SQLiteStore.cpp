@@ -447,6 +447,46 @@ SQLiteStore::SessionHistoryPage SQLiteStore::querySessionHistory(const std::stri
     return page;
 }
 
+std::optional<SQLiteStore::SessionRecord> SQLiteStore::querySessionById(const std::string& session_id) {
+    std::lock_guard<std::recursive_mutex> lock(db_mutex_);
+    if (!db_ || session_id.empty()) return std::nullopt;
+
+    sqlite3* db = dbHandle(db_);
+    StatementGuard statement;
+    constexpr const char* kSql =
+        "SELECT rowid, id, start_time, end_time, actual_duration, focus_duration, "
+        "distraction_count, reminder_count, phone_distraction_count, feedback "
+        "FROM session WHERE id = ? LIMIT 1;";
+    if (!prepareStatement(db, kSql, statement, "querySessionById") ||
+        !bindText(db, statement.stmt, 1, session_id, "querySessionById id")) {
+        return std::nullopt;
+    }
+
+    const int rc = sqlite3_step(statement.stmt);
+    if (rc == SQLITE_DONE) {
+        return std::nullopt;
+    }
+    if (rc != SQLITE_ROW) {
+        LOGE("SQLiteStore", "querySessionById step error: %s", sqlite3_errmsg(db));
+        return std::nullopt;
+    }
+
+    SessionRecord rec;
+    rec.rowid = sqlite3_column_int64(statement.stmt, 0);
+    const unsigned char* stored_id = sqlite3_column_text(statement.stmt, 1);
+    const unsigned char* feedback = sqlite3_column_text(statement.stmt, 9);
+    rec.session_id = stored_id ? reinterpret_cast<const char*>(stored_id) : "";
+    rec.start_time_ms = sqlite3_column_int64(statement.stmt, 2);
+    rec.end_time_ms = sqlite3_column_int64(statement.stmt, 3);
+    rec.total_duration = sqlite3_column_int64(statement.stmt, 4);
+    rec.focus_duration = sqlite3_column_int64(statement.stmt, 5);
+    rec.distraction_count = sqlite3_column_int(statement.stmt, 6);
+    rec.reminder_count = sqlite3_column_int(statement.stmt, 7);
+    rec.phone_distraction_count = sqlite3_column_int(statement.stmt, 8);
+    rec.feedback = feedback ? reinterpret_cast<const char*>(feedback) : "just_right";
+    return rec;
+}
+
 SQLiteStore::SessionRecord SQLiteStore::queryLastCompletedSession() {
     std::lock_guard<std::recursive_mutex> lock(db_mutex_);
     SessionRecord rec;

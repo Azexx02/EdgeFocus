@@ -438,7 +438,7 @@ void test_phone_signal_clear_does_not_force_focus_state() {
     std::cout << "test_phone_signal_clear_does_not_force_focus_state passed\n";
 }
 
-void test_visual_phone_and_hand_holding_phone_sets_phone_event() {
+void test_visual_phone_fields_do_not_create_phone_event_without_phone_sync() {
     FocusStateMachine fsm;
     for (int i = 0; i < 20; ++i) fsm.processFrame(createFrame(i * 100));
 
@@ -448,10 +448,10 @@ void test_visual_phone_and_hand_holding_phone_sets_phone_event() {
     fsm.processFrame(frame);
 
     FocusEvent event = fsm.getLastEvent();
-    assert(event.phone_signal);
-    assert(event.is_phone_in_use);
-    assert(event.risk_score > 0);
-    std::cout << "test_visual_phone_and_hand_holding_phone_sets_phone_event passed\n";
+    assert(!event.phone_signal);
+    assert(!event.is_phone_in_use);
+    assert(event.phone_distraction_level == -1);
+    std::cout << "test_visual_phone_fields_do_not_create_phone_event_without_phone_sync passed\n";
 }
 
 int main() {
@@ -473,7 +473,7 @@ int main() {
     test_event_detector_reset_clears_phone_signal();
     test_phone_signal_does_not_expire_by_ttl();
     test_phone_signal_clear_does_not_force_focus_state();
-    test_visual_phone_and_hand_holding_phone_sets_phone_event();
+    test_visual_phone_fields_do_not_create_phone_event_without_phone_sync();
     std::cout << "All behavior FSM tests passed!\n";
     return 0;
 }

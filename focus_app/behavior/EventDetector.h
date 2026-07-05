@@ -28,9 +28,6 @@ struct FocusEvent {
     bool is_low_confidence = false;
     bool vision_signal = false;
     bool phone_signal = false;
-    bool visual_phone_detected = false;
-    float visual_phone_confidence = 0.0f;
-    bool hand_holding_phone = false;
     int phone_distraction_level = -1; // Behavior-layer copy of the phone-side code, not CommandLevel.
     PhoneUsageState phone_usage_state = PhoneUsageState::IN_USE;
     int phone_usage_state_raw = -1;

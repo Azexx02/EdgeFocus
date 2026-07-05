@@ -710,17 +710,14 @@ int main() {
     // Test 11g: update_preferences clamps out-of-range client values.
     {
         json resp = parseResponse(server.handleCommand(
-            R"({"cmd":"update_preferences","id":116,"data":{"away_timeout_min":999,"default_focus_duration_min":999,"vibration_strength":-0.5,"sound_volume":2.0,"led_brightness":250,"reminder_sensitivity":2.5}})"));
+            R"({"cmd":"update_preferences","id":116,"data":{"away_timeout_min":999,"default_focus_duration_min":999,"sound_volume":2.0}})"));
         assertSuccess(resp, 116);
         assert(resp["data"]["away_timeout_min"] == 180);
         assert(resp["data"]["default_focus_duration_min"] == 120);
-        assert(resp["data"]["vibration_strength"] == 0.0);
         assert(resp["data"]["sound_volume"] == 1.0);
-        assert(resp["data"]["led_brightness"] == 100);
-        assert(resp["data"]["reminder_sensitivity"] == 1.0);
 
         json reset = parseResponse(server.handleCommand(
-            R"({"cmd":"update_preferences","id":117,"data":{"away_timeout_min":7,"default_focus_duration_min":35,"vibration_strength":0.5,"sound_volume":0.7,"led_brightness":80,"reminder_sensitivity":0.5}})"));
+            R"({"cmd":"update_preferences","id":117,"data":{"away_timeout_min":7,"default_focus_duration_min":35,"sound_volume":0.7}})"));
         assertSuccess(reset, 117);
         std::cout << "  update_preferences clamps values: OK\n";
     }
@@ -735,10 +732,7 @@ int main() {
         assert(resp["data"].contains("power_profile"));
         assert(resp["data"]["notification_mode"] == "silent");
         assert(resp["data"]["power_profile"] == "go");
-        assert(resp["data"].contains("vibration_strength"));
         assert(resp["data"].contains("sound_volume"));
-        assert(resp["data"].contains("led_brightness"));
-        assert(resp["data"].contains("reminder_sensitivity"));
         assert(resp["data"].contains("away_timeout_min"));
         assert(resp["data"].contains("default_focus_duration_min"));
         assert(resp["data"]["default_focus_duration_min"] == 35);
