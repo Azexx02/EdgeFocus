@@ -1,0 +1,6 @@
+build*/
+Testing/
+*.db
+
+# Local code workspace; do not track generated builds, deployment scratch, or notes.
+_workspace/
