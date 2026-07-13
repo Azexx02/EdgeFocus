@@ -253,6 +253,18 @@ ST 官方模型工具链提供 Face Detection、Face Landmarks、Pose Estimation
     "duration_ms": 8200,
     "end_reason": null
   },
+  "evidence_episodes": {
+    "PRONE": null,
+    "HEAD_AWAY": {
+      "id": "head-away-7",
+      "kind": "HEAD_AWAY",
+      "status": "OPEN",
+      "started_at_ms": 115256,
+      "ended_at_ms": null,
+      "active_duration_ms": 8200,
+      "end_reason": null
+    }
+  },
   "presence_episode": null,
   "evidence": {
     "presence": 0.98,
@@ -272,6 +284,8 @@ ST 官方模型工具链提供 Face Detection、Face Landmarks、Pose Estimation
 ```
 
 `reasons` 的稳定业务枚举为 `PRONE`、`HEAD_AWAY`、`GAZE_AWAY`、`PHONE_LEARNING`、`PHONE_ENTERTAINMENT`、`PHONE_GENERAL`；证据不足原因放入 `health.invalid_reasons`，不伪装为分神原因。没有 episode 时对应字段为 `null`。episode `status` 为 `OPEN/CLOSED`；关闭后必须包含 `ended_at_ms` 和 `end_reason`。离位使用独立 `presence_episode`，其类型固定为 `NOT_PRESENT`，不得复用分神 episode。
+
+`distraction_episode` 是等级 1～3 的总体业务区间；`evidence_episodes` 是用于解释和评测的类型化区间，固定键为 `PRONE`、`HEAD_AWAY`，未来可选加入 `GAZE_AWAY`。不同类型可以重叠，同时存在时仍只打开一个总体分神 episode。评测器必须直接读取 `evidence_episodes` 与 `presence_episode` 的关闭记录，禁止从 `reasons` 或逐帧分数重新推导 episode。
 
 ## 7. 时序融合和三级等级
 
@@ -294,6 +308,15 @@ ST 官方模型工具链提供 Face Detection、Face Landmarks、Pose Estimation
 - `UNKNOWN` 始终输出 `distraction_level=null`；历史等级只出现在 `continuity`，内部 episode 空洞最多跨越 1,000 ms 且不累计时长；
 - `NOT_PRESENT` 结束当前分神 episode，但独立记录离位上下文；
 - episode 内允许升级和降级，不因每次等级变化创建新 episode。
+
+类型化 episode 开闭规则固定如下，所有时长使用媒体时间：
+
+- `PRONE`：融合后的 PRONE 命题连续确认 3,000 ms 时打开，`started_at_ms` 回填为确认区间起点；连续恢复为非趴下 1,500 ms 后关闭，结束点记为恢复区间起点；
+- `HEAD_AWAY`：按第 5.3 节的普通/强证据进入条件打开，回到中立区间连续 1,000 ms 后关闭，开始和结束时间均回填到确认区间起点；
+- `NOT_PRESENT`：可信缺席连续 1,500 ms 时打开 `presence_episode`，可信在位连续 500 ms 后关闭；
+- 每个类型化 episode 最多跨越 1,000 ms 的对应专家无效空洞，空洞不计入 `active_duration_ms`；超过后在最后有效证据处以 `EVIDENCE_GAP` 关闭；
+- 总体 `distraction_episode` 在任一分神证据令等级首次达到 1 时打开，在等级连续恢复为 0 达 3,000 ms、进入 `NOT_PRESENT` 或证据空洞超限时关闭；
+- 同一类型 episode 关闭后，后续再次确认必须创建新 id，不得复用旧 id。
 
 第一版阈值必须在配置文件中，并在离线数据上调优；任何初值都标记为 baseline，不宣称是已标定值。
 
@@ -348,7 +371,7 @@ ST 官方模型工具链提供 Face Detection、Face Landmarks、Pose Estimation
 
 最高优先级是降低误提醒，允许用适度确认延迟换稳定性。由于提醒策略不属于本项目，定义可计算代理事件 `would_remind`：当一个分神 episode 首次进入 `level >= 2` 时计一次，直到连续恢复到 level 0 达 3 秒或 episode 结束前不重复计数。在负样本标签区间出现的 `would_remind` 计为误提醒。
 
-事件标签最短时长：`PRONE=3,000 ms`、持续 `HEAD_AWAY=2,000 ms`、`NOT_PRESENT=2,000 ms`；不足 1,000 ms 的转头作为短暂转头负样本。预测与真值类型相同、时间区间交并比 IoU ≥0.3 时进行一对一匹配。检测延迟为真值开始到首次进入对应稳定状态的时间；未检出按漏报处理。
+事件标签最短时长：`PRONE=3,000 ms`、持续 `HEAD_AWAY=2,000 ms`、`NOT_PRESENT=2,000 ms`；不足 1,000 ms 的转头作为短暂转头负样本。预测直接取关闭后的 `evidence_episodes[kind]` 或 `presence_episode`；与真值类型相同且时间区间交并比 IoU ≥0.3 时按 IoU 从高到低进行一对一匹配。仍处于打开状态的末尾事件，以视频结束时间临时闭合后参与离线评测。检测延迟为真值开始到首次进入对应稳定状态的时间；未检出按漏报处理。
 
 调参顺序固定为：先满足误提醒硬上限，再在召回下限之上优化检测延迟和召回，不能为了提高召回突破误提醒上限。核心指标：
 
