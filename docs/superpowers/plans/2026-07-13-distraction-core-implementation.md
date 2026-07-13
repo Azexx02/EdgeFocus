@@ -145,7 +145,7 @@ Work:
 ## Verification commands
 
 ```powershell
-python -m pytest -q
+python -m unittest discover -s tests -v
 python -m distraction_core replay --input <video> --config configs/default.yaml --output outputs/run.jsonl
 python tools/evaluate.py --predictions outputs/run.jsonl --labels <labels.json>
 ```
@@ -156,4 +156,3 @@ python tools/evaluate.py --predictions outputs/run.jsonl --labels <labels.json>
 - Missing optional models degrade only their own coverage.
 - No real adapter may silently become a heuristic adapter.
 - Do not start hardware or old-product integration before the host acceptance report exists.
-
