@@ -27,6 +27,23 @@ target_include_directories(sqlite3_lib PUBLIC ${sqlite3_SOURCE_DIR})
 FetchContent_Declare(json URL https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
 FetchContent_MakeAvailable(json)
 
+# Validated Presence/Prone/Fusion core migrated from the standalone board demo.
+# It remains a separate static library so host logic tests do not pull in the
+# camera, session, BLE, UI, or legacy behavior layers.
+add_library(edgefocus_distraction_core STATIC
+    core/distraction/src/vision.cpp
+    core/distraction/src/temporal.cpp
+    core/distraction/src/fusion.cpp
+    core/distraction/src/portable_model_json.cpp)
+target_include_directories(edgefocus_distraction_core PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/core/distraction/include)
+target_link_libraries(edgefocus_distraction_core PUBLIC nlohmann_json::nlohmann_json)
+if(MSVC)
+    target_compile_options(edgefocus_distraction_core PRIVATE /W4)
+else()
+    target_compile_options(edgefocus_distraction_core PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 # All sources from app/, camera/, vision/, behavior/, policy/, device/, storage/, ui/
 set(APP_SOURCES
     main.cpp
@@ -34,6 +51,9 @@ set(APP_SOURCES
     app/AppContext.cpp
     app/SystemStateStore.cpp
     app/SessionController.cpp
+    session/SessionSnapshotPublisher.cpp
+    session/SessionRuntime.cpp
+    session/SessionOrchestrator.cpp
     camera/CameraPipeline.cpp
     vision/FrameQuality.cpp
     vision/ModelRegistry.cpp
@@ -42,6 +62,8 @@ set(APP_SOURCES
     vision/InferenceScheduler.cpp
     vision/VisionEngine.cpp
     behavior/BehaviorEngine.cpp
+    behavior/PhoneFactBuffer.cpp
+    behavior/DistractionAssessmentEngine.cpp
     behavior/FocusStateMachine.cpp
     behavior/SlidingWindow.cpp
     behavior/EventDetector.cpp
@@ -70,7 +92,10 @@ set(APP_SOURCES
 
 add_executable(focus_app ${APP_SOURCES})
 target_include_directories(focus_app PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(focus_app PRIVATE sqlite3_lib nlohmann_json::nlohmann_json)
+target_link_libraries(focus_app PRIVATE
+    sqlite3_lib
+    nlohmann_json::nlohmann_json
+    edgefocus_distraction_core)
 
 # Video-only demo console. Default builds exclude the HTTP entry and its
 # SystemStateStore/BehaviorEngine override path through EDGEFOCUS_WITH_DEMO_HTTP.
@@ -96,6 +121,11 @@ if(EDGEFOCUS_WITH_STAI_MPU)
         message(FATAL_ERROR "EDGEFOCUS_WITH_STAI_MPU=ON but stai_mpu_network.h was not found")
     endif()
     target_compile_definitions(focus_app PRIVATE EDGEFOCUS_WITH_STAI_MPU)
+    target_sources(edgefocus_distraction_core PRIVATE
+        core/distraction/src/stai_pose_runtime.cpp)
+    target_compile_definitions(edgefocus_distraction_core PUBLIC DISTRACTION_WITH_STAI_MPU)
+    target_include_directories(edgefocus_distraction_core PRIVATE ${STAI_MPU_INCLUDE_DIR})
+    target_link_libraries(edgefocus_distraction_core PUBLIC stai_mpu)
     target_include_directories(focus_app PRIVATE
         ${STAI_MPU_INCLUDE_DIR})
     target_link_libraries(focus_app PRIVATE stai_mpu)

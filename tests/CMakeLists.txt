@@ -3,6 +3,44 @@
 # Deploy and test one at a time on the board.
 
 # ===========================================================================
+# 0. Session Runtime Test (new session-centered lifecycle)
+#    Tests: prepare rollback, optional degradation, phase transitions,
+#           idempotency, and cross-session snapshot isolation.
+# ===========================================================================
+add_executable(test_session_runtime
+    test_session_runtime.cpp
+    ../session/SessionSnapshotPublisher.cpp
+    ../session/SessionRuntime.cpp
+    ../session/SessionOrchestrator.cpp)
+target_include_directories(test_session_runtime PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(test_session_runtime PRIVATE Threads::Threads)
+add_test(NAME test_session_runtime COMMAND test_session_runtime)
+
+# ===========================================================================
+# 0b. Validated Distraction Core Tests
+#     Exact pure-logic tests migrated with the standalone C++ core.
+# ===========================================================================
+add_executable(test_distraction_vision test_distraction_vision.cpp)
+target_link_libraries(test_distraction_vision PRIVATE edgefocus_distraction_core)
+add_test(NAME test_distraction_vision COMMAND test_distraction_vision)
+
+add_executable(test_distraction_temporal test_distraction_temporal.cpp)
+target_link_libraries(test_distraction_temporal PRIVATE edgefocus_distraction_core)
+add_test(NAME test_distraction_temporal COMMAND test_distraction_temporal)
+
+add_executable(test_distraction_fusion test_distraction_fusion.cpp)
+target_link_libraries(test_distraction_fusion PRIVATE edgefocus_distraction_core)
+add_test(NAME test_distraction_fusion COMMAND test_distraction_fusion)
+
+add_executable(test_distraction_adapter
+    test_distraction_adapter.cpp
+    ../behavior/PhoneFactBuffer.cpp
+    ../behavior/DistractionAssessmentEngine.cpp)
+target_include_directories(test_distraction_adapter PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(test_distraction_adapter PRIVATE edgefocus_distraction_core Threads::Threads)
+add_test(NAME test_distraction_adapter COMMAND test_distraction_adapter)
+
+# ===========================================================================
 # 1. Storage Layer Test (SQLiteStore + ReportGenerator)
 #    Tests: logEvent, queryEvents, generateReport, extended fields
 #    Deps: SQLite3 only
