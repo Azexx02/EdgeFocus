@@ -17,12 +17,20 @@
 namespace edgefocus {
 
 class GimbalMonitor;
+class PhoneFactBuffer;
+namespace session {
+class SessionOrchestrator;
+class SessionSnapshotPublisher;
+}
 
 class AppCommandService {
 public:
     AppCommandService(SystemStateStore& store, SQLiteStore& sqlite_store,
                       ReminderPolicy& reminder_policy, ModeManager& mode_mgr,
-                      GimbalMonitor* gimbal_monitor = nullptr);
+                      GimbalMonitor* gimbal_monitor = nullptr,
+                      session::SessionOrchestrator* session_orchestrator = nullptr,
+                      PhoneFactBuffer* phone_facts = nullptr,
+                      session::SessionSnapshotPublisher* session_snapshots = nullptr);
     ~AppCommandService();
 
     void loadPreferences();
@@ -40,12 +48,17 @@ private:
     ReminderPolicy& reminder_policy_;
     ModeManager& mode_mgr_;
     GimbalMonitor* gimbal_monitor_;
+    session::SessionOrchestrator* session_orchestrator_;
+    PhoneFactBuffer* phone_facts_;
+    session::SessionSnapshotPublisher* session_snapshots_;
+    std::atomic<uint64_t> phone_sequence_{0};
 
     std::string handleGetDeviceStatus(int req_id);
     std::string handleGetCurrentState(int req_id);
     std::string handleGetTodaySummary(int req_id);
     std::string handleGetLastReport(int req_id);
     std::string handleSessionControl(const json& data, int req_id);
+    std::string handleSessionControlV2(const json& data, int req_id);
     std::string handleUpdatePreferences(const json& data, int req_id);
     std::string handleReminderAck(const json& data, int req_id);
     std::string handlePhoneSync(const json& data, int req_id);

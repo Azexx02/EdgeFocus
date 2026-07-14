@@ -96,14 +96,25 @@ void test_orchestrator_lifecycle_and_snapshot_isolation() {
     auto first = orchestrator.start({60000, SourceMode::LiveCamera});
     assert(first.success && first.context->session_id == "session-1000");
     assert(orchestrator.phase() == Phase::Precheck);
+    monotonic = 150;
     assert(orchestrator.confirmReady().success);
+    snapshots.updateVisual({}, 200);
+    assert(snapshots.read().elapsed_ms == 50);
+    monotonic = 250;
     assert(orchestrator.pause().success);
+    snapshots.updateVisual({}, 1000);
+    assert(snapshots.read().elapsed_ms == 100);
     assert(orchestrator.pause().success);  // idempotent
+    monotonic = 1100;
     assert(orchestrator.resume().success);
+    snapshots.updateVisual({}, 1150);
+    assert(snapshots.read().elapsed_ms == 150);
     assert(orchestrator.end().success);
     assert(!orchestrator.active());
     auto idle = snapshots.read();
     assert(idle.phase == Phase::Idle && !idle.runtime_active);
+    assert(idle.context.session_id.empty());
+    assert(idle.elapsed_ms == 0 && idle.remaining_ms == 0);
 
     monotonic = 200;
     wall = 2000;

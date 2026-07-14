@@ -147,11 +147,15 @@ GVariant* buildAdvertisementProperties() {
 
 BleGattServer::BleGattServer(SystemStateStore& store, SQLiteStore& sqlite_store,
                              ReminderPolicy& reminder_policy, ModeManager& mode_mgr,
-                             GimbalMonitor* gimbal_monitor)
+                             GimbalMonitor* gimbal_monitor,
+                             session::SessionOrchestrator* session_orchestrator,
+                             PhoneFactBuffer* phone_facts,
+                             session::SessionSnapshotPublisher* session_snapshots)
     : Module("BleGattServer")
     , store_(store)
     , sqlite_store_(sqlite_store)
-    , app_commands_(store, sqlite_store, reminder_policy, mode_mgr, gimbal_monitor) {}
+    , app_commands_(store, sqlite_store, reminder_policy, mode_mgr, gimbal_monitor,
+                    session_orchestrator, phone_facts, session_snapshots) {}
 
 BleGattServer::~BleGattServer() = default;
 

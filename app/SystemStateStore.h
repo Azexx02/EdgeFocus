@@ -143,8 +143,10 @@ struct Preferences {
     // channel option.
     int         normal_channels_mask = 7;
     int         silent_channels_mask = 3;
-    std::string screen_output_route = "board";
-    std::string sound_output_route = "board";
+    // Board-local screen/audio were removed from the product. These legacy
+    // fields remain on the wire during App migration, but are fixed to phone.
+    std::string screen_output_route = "phone";
+    std::string sound_output_route = "phone";
     bool        gimbal_enabled = true;
 };
 

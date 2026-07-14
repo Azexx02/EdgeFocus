@@ -1,5 +1,6 @@
 #include "CameraPipeline.h"
 #include "app/AppContext.h"
+#include "camera/PreviewFrameStore.h"
 
 #include <algorithm>
 #include <chrono>
@@ -141,8 +142,15 @@ struct CameraPipeline::Impl {
     int active_index = -1;
 };
 
-CameraPipeline::CameraPipeline(Queue& output_queue, SystemStateStore& store)
-    : Module("CameraPipeline"), impl_(new Impl()), output_queue_(output_queue), store_(store) {}
+CameraPipeline::CameraPipeline(
+    Queue& output_queue,
+    SystemStateStore& store,
+    PreviewFrameStore* preview_store)
+    : Module("CameraPipeline"),
+      impl_(new Impl()),
+      output_queue_(output_queue),
+      store_(store),
+      preview_store_(preview_store) {}
 
 CameraPipeline::~CameraPipeline() = default;
 
@@ -150,6 +158,7 @@ bool CameraPipeline::init(AppContext& /*ctx*/) {
     captured_frames_ = 0;
     dropped_frames_ = 0;
     last_preview_ms_ = 0;
+    last_paused_capture_ms_ = 0;
     preview_sequence_ = 0;
     next_open_attempt_ms_ = 0;
     // Camera opens on-demand when session starts
@@ -232,6 +241,10 @@ void CameraPipeline::runOnce(AppContext& ctx) {
         if (camera_opened_) {
             closeCamera();
             camera_opened_ = false;
+            if (preview_store_) preview_store_->clear();
+            DeviceStatus status = snap.device;
+            status.camera_ok = false;
+            store_.updateDeviceStatus(status);
             LOGI("CameraPipeline", "Session ended, camera released");
         }
         // Block until session becomes active (with timeout for shutdown check)
@@ -255,11 +268,13 @@ void CameraPipeline::runOnce(AppContext& ctx) {
         return;
     }
 
-    // --- ACTIVE but paused: freeze capture without cycling the OpenCV backend.
-    // Some board GStreamer/V4L2 pipelines are fragile when repeatedly released
-    // and reopened; pausing only needs to stop frame production.
-    if (snap.session.paused) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    // PAUSED keeps the camera open and publishes at approximately 1 FPS. The
+    // inference feature consumes those frames only for presence/quick resume;
+    // they never enter the formal distraction episode.
+    const bool paused = snap.session.paused;
+    const int64_t capture_now_ms = nowMs();
+    if (paused && capture_now_ms - last_paused_capture_ms_ < 1000) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
         return;
     }
 
@@ -290,6 +305,11 @@ void CameraPipeline::runOnce(AppContext& ctx) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         return;
     }
+    if (paused) last_paused_capture_ms_ = frame.timestamp_ms;
+    // The demo preview is deliberately decoupled from inference. Publishing
+    // every other camera frame keeps the browser fluid without claiming a
+    // higher NPU rate or opening a second VideoCapture.
+    if (preview_store_ && (captured_frames_ % 2 == 0)) preview_store_->publish(frame);
     if (frame.timestamp_ms - last_preview_ms_ >= kPreviewIntervalMs) {
         last_preview_ms_ = frame.timestamp_ms;
         store_.updateCameraPreviewImage(makePreviewImage(frame, ++preview_sequence_));
@@ -315,6 +335,7 @@ void CameraPipeline::closeCamera() {
 
 void CameraPipeline::shutdown(AppContext& /*ctx*/) {
     closeCamera();
+    if (preview_store_) preview_store_->clear();
     LOGI("CameraPipeline", "Shutdown captured=%lld dropped_old_frames=%lld",
          (long long)captured_frames_, (long long)dropped_frames_);
 }

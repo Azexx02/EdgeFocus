@@ -124,6 +124,7 @@ add_test(NAME test_device_manager COMMAND test_device_manager)
 add_executable(test_vision_result
     test_vision_result.cpp
     ../camera/CameraPipeline.cpp
+    ../camera/PreviewFrameStore.cpp
     ../vision/FrameQuality.cpp
     ../vision/ModelRegistry.cpp
     ../vision/PoseModelAdapter.cpp
@@ -200,6 +201,10 @@ add_executable(test_ble_gatt
     test_ble_gatt.cpp
     ../network/AppCommandService.cpp
     ../network/BleGattServer.cpp
+    ../session/SessionSnapshotPublisher.cpp
+    ../session/SessionRuntime.cpp
+    ../session/SessionOrchestrator.cpp
+    ../behavior/PhoneFactBuffer.cpp
     ../policy/ReminderPolicy.cpp
     ../policy/NotificationRouter.cpp
     ../policy/ModeManager.cpp
@@ -223,7 +228,8 @@ add_executable(test_ble_gatt
     ../app/SessionController.cpp
     ../app/Logger.cpp)
 target_include_directories(test_ble_gatt PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
-target_link_libraries(test_ble_gatt PRIVATE Threads::Threads sqlite3_lib nlohmann_json::nlohmann_json)
+target_link_libraries(test_ble_gatt PRIVATE
+    Threads::Threads sqlite3_lib nlohmann_json::nlohmann_json edgefocus_distraction_core)
 add_test(NAME test_ble_gatt COMMAND test_ble_gatt)
 
 # ===========================================================================
@@ -236,6 +242,10 @@ add_executable(test_integration
     test_integration.cpp
     ../network/AppCommandService.cpp
     ../network/BleGattServer.cpp
+    ../session/SessionSnapshotPublisher.cpp
+    ../session/SessionRuntime.cpp
+    ../session/SessionOrchestrator.cpp
+    ../behavior/PhoneFactBuffer.cpp
     ../policy/ReminderPolicy.cpp
     ../policy/NotificationRouter.cpp
     ../policy/ModeManager.cpp
@@ -270,7 +280,8 @@ add_executable(test_integration
     ../app/SessionController.cpp
     ../app/Logger.cpp)
 target_include_directories(test_integration PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
-target_link_libraries(test_integration PRIVATE Threads::Threads sqlite3_lib nlohmann_json::nlohmann_json)
+target_link_libraries(test_integration PRIVATE
+    Threads::Threads sqlite3_lib nlohmann_json::nlohmann_json edgefocus_distraction_core)
 add_test(NAME test_integration COMMAND test_integration)
 
 if(EDGEFOCUS_WITH_OPENCV AND EDGEFOCUS_WITH_STAI_MPU)

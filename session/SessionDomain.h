@@ -92,6 +92,8 @@ struct VisualSnapshot {
     std::optional<double> prone;
     std::int64_t evidence_timestamp_ms{};
     std::uint64_t frame_id{};
+    double inference_fps{};
+    double inference_latency_ms{};
 };
 
 struct PhoneSnapshot {

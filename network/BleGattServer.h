@@ -17,12 +17,20 @@ namespace edgefocus {
 
 class AppContext;
 class GimbalMonitor;
+class PhoneFactBuffer;
+namespace session {
+class SessionOrchestrator;
+class SessionSnapshotPublisher;
+}
 
 class BleGattServer : public Module {
 public:
     BleGattServer(SystemStateStore& store, SQLiteStore& sqlite_store,
                   ReminderPolicy& reminder_policy, ModeManager& mode_mgr,
-                  GimbalMonitor* gimbal_monitor = nullptr);
+                  GimbalMonitor* gimbal_monitor = nullptr,
+                  session::SessionOrchestrator* session_orchestrator = nullptr,
+                  PhoneFactBuffer* phone_facts = nullptr,
+                  session::SessionSnapshotPublisher* session_snapshots = nullptr);
     ~BleGattServer() override;
 
     bool init(AppContext& ctx) override;

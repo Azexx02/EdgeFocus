@@ -11,6 +11,7 @@
 namespace edgefocus {
 
 class AppContext;
+class PreviewFrameStore;
 
 /// Camera capture module. Acquires frames and publishes them to a bounded queue.
 /// Session-aware: camera only opens when session.active is true.
@@ -18,7 +19,8 @@ class CameraPipeline : public Module {
 public:
     using Queue = BoundedQueue<CameraFrame>;
 
-    CameraPipeline(Queue& output_queue, SystemStateStore& store);
+    CameraPipeline(Queue& output_queue, SystemStateStore& store,
+                   PreviewFrameStore* preview_store = nullptr);
     ~CameraPipeline() override;
 
     bool init(AppContext& ctx) override;
@@ -39,11 +41,13 @@ private:
     std::unique_ptr<Impl> impl_;
     Queue& output_queue_;
     SystemStateStore& store_;
+    PreviewFrameStore* preview_store_{};
     bool camera_opened_ = false;
     int64_t next_open_attempt_ms_ = 0;
     int64_t captured_frames_ = 0;
     int64_t dropped_frames_ = 0;
     int64_t last_preview_ms_ = 0;
+    int64_t last_paused_capture_ms_ = 0;
     int64_t preview_sequence_ = 0;
 };
 

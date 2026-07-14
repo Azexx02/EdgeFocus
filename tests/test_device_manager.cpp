@@ -28,7 +28,7 @@ void test_device_manager_queue() {
     dev_mgr.runOnce(ctx);
     assert(dev_mgr.executedCommandCount() == 2);
     assert(dev_mgr.lastExecutedLevel() == CommandLevel::LEVEL_3);
-    assert(dev_mgr.screenFlashCount() == 1);
+    assert(dev_mgr.screenFlashCount() == 0);
     assert(dev_mgr.lastBandAlertPattern() == 0x03);
     assert(dev_mgr.lastBandAlertLevel() == 3);
     assert(dev_mgr.lastBandAlertFrame()[0] == 0x01);
@@ -53,7 +53,7 @@ void test_level2_uses_medium_band_alert() {
 
     assert(dev_mgr.executedCommandCount() == 2);
     assert(dev_mgr.lastExecutedLevel() == CommandLevel::LEVEL_2);
-    assert(dev_mgr.screenFlashCount() == 1);
+    assert(dev_mgr.screenFlashCount() == 0);
     assert(dev_mgr.lastBandAlertPattern() == 0x02);
     assert(dev_mgr.lastBandAlertLevel() == 2);
     assert(dev_mgr.lastBandAlertFrame()[0] == 0x01);
@@ -93,7 +93,7 @@ void test_action_queue_issue_band_updates_device_status() {
     dev_mgr.shutdown(ctx);
 }
 
-void test_sound_action_uses_sound_channel() {
+void test_board_sound_action_is_disabled() {
     SoundController::setPlaybackEnabledForTests(false);
     AppContext ctx;
     SystemStateStore store;
@@ -111,7 +111,7 @@ void test_sound_action_uses_sound_channel() {
 
     assert(dev_mgr.executedCommandCount() == 1);
     assert(dev_mgr.lastExecutedLevel() == CommandLevel::LEVEL_1);
-    assert(dev_mgr.soundPlayCount() == initial_sound_count + 1);
+    assert(dev_mgr.soundPlayCount() == initial_sound_count);
     assert(dev_mgr.screenFlashCount() == initial_flashes);
     assert(dev_mgr.lastBandAlertLevel() == initial_band_level);
     assert(dev_mgr.lastBandAlertPattern() == initial_band_pattern);
@@ -203,7 +203,7 @@ int main() {
     test_level2_uses_medium_band_alert();
     test_action_queue_issue_band_updates_device_status();
     test_sound_controller_disabled_is_fast_and_unavailable();
-    test_sound_action_uses_sound_channel();
+    test_board_sound_action_is_disabled();
     test_sound_controller_generates_short_tone_wav();
     test_power_profile_follows_charging_state();
     std::cout << "All DeviceManager tests passed!\n";

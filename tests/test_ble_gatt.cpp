@@ -149,7 +149,7 @@ int main() {
         assert(resp["data"]["power_profile"] == "go");
         assert(std::fabs(resp["data"]["sound_volume"].get<double>() - 0.33) < 0.001);
         assert(resp["data"]["screen_output_route"] == "phone");
-        assert(resp["data"]["sound_output_route"] == "board");
+        assert(resp["data"]["sound_output_route"] == "phone");
         assert(resp["data"]["gimbal_enabled"] == false);
         assert(resp["data"]["normal_channels_mask"] == 3);
         assert(resp["data"]["silent_channels_mask"] == 2);
@@ -556,6 +556,7 @@ int main() {
         auto push = json::parse(last_push);
         assert(push["cmd"] == "push_state");
         assert(push["data"]["session_phase"] == "paused");
+        store.setPushCallback({});
         std::cout << "  session_control pause: OK\n";
     }
 
@@ -580,6 +581,7 @@ int main() {
         auto push = json::parse(last_push);
         assert(push["cmd"] == "push_state");
         assert(push["data"]["session_phase"] == "focusing");
+        store.setPushCallback({});
         std::cout << "  session_control resume: OK\n";
     }
 
@@ -623,8 +625,8 @@ int main() {
         assert(resp["data"]["normal_channels_mask"] == 7);
         assert(resp["data"]["silent_channels_mask"] == 3);
         assert(resp["data"]["sound_volume"] == 0.7f);
-        assert(resp["data"]["screen_output_route"] == "board");
-        assert(resp["data"]["sound_output_route"] == "board");
+        assert(resp["data"]["screen_output_route"] == "phone");
+        assert(resp["data"]["sound_output_route"] == "phone");
         assert(resp["data"]["gimbal_enabled"] == true);
         assert(resp["data"]["normal_channels"] == json::array({"SCREEN", "BAND", "SOUND"}));
         assert(resp["data"]["silent_channels"] == json::array({"SCREEN", "BAND"}));
@@ -711,7 +713,7 @@ int main() {
             R"({"cmd":"update_preferences","id":115,"data":{"screen_output_route":"phone","sound_output_route":"board","gimbal_enabled":false}})"));
         assertSuccess(resp, 115);
         assert(resp["data"]["screen_output_route"] == "phone");
-        assert(resp["data"]["sound_output_route"] == "board");
+        assert(resp["data"]["sound_output_route"] == "phone");
         assert(resp["data"]["gimbal_enabled"] == false);
     }
 
@@ -749,7 +751,7 @@ int main() {
         assert(resp["data"].contains("normal_channels"));
         assert(resp["data"].contains("silent_channels"));
         assert(resp["data"]["screen_output_route"] == "phone");
-        assert(resp["data"]["sound_output_route"] == "board");
+        assert(resp["data"]["sound_output_route"] == "phone");
         assert(resp["data"]["gimbal_enabled"] == false);
         std::cout << "  get_preferences: OK\n";
     }

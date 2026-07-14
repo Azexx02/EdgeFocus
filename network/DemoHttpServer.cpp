@@ -2,8 +2,12 @@
 
 #include "app/AppContext.h"
 #include "app/Logger.h"
+#include "behavior/PhoneFactBuffer.h"
+#include "camera/PreviewFrameStore.h"
 #include "network/PhoneSyncParser.h"
 #include "policy/NotificationRouter.h"
+#include "session/SessionOrchestrator.h"
+#include "session/SessionSnapshotPublisher.h"
 
 #include <algorithm>
 #include <chrono>
@@ -11,6 +15,11 @@
 #include <cmath>
 #include <cstring>
 #include <sstream>
+
+#ifdef EDGEFOCUS_WITH_OPENCV
+#include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
+#endif
 
 #ifdef __linux__
 #include <arpa/inet.h>
@@ -82,6 +91,7 @@ std::string httpResponse(int status, const std::string& body,
     case 404: status_text = "Not Found"; break;
     case 413: status_text = "Payload Too Large"; break;
     case 500: status_text = "Internal Server Error"; break;
+    case 503: status_text = "Service Unavailable"; break;
     default: break;
     }
 
@@ -177,16 +187,63 @@ snapshot()
 </body>
 </html>)HTML";
 }
+
+std::string runtimeDemoPageHtml() {
+    return R"HTML(<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EdgeFocus 会话推理链</title><style>
+:root{--bg:#071018;--panel:#0b1621;--line:#203343;--ink:#e7f3f4;--muted:#78909d;--cyan:#49d6ff;--green:#5ee6a8;--amber:#ffca61;--red:#ff625f}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 15% 0,#102737 0,transparent 38%),var(--bg);color:var(--ink);font-family:"Microsoft YaHei UI",sans-serif;min-height:100vh}
+body:before{content:"";position:fixed;inset:0;pointer-events:none;opacity:.18;background-image:linear-gradient(#5f82920d 1px,transparent 1px),linear-gradient(90deg,#5f82920d 1px,transparent 1px);background-size:24px 24px}
+header{height:68px;padding:0 22px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;background:#071018dc;backdrop-filter:blur(10px)}
+.brand{display:flex;gap:13px;align-items:center}.mark{width:27px;height:34px;display:flex;align-items:end;gap:3px}.mark i{display:block;width:7px;background:var(--cyan)}.mark i:nth-child(1){height:15px}.mark i:nth-child(2){height:30px}.mark i:nth-child(3){height:22px}.eyebrow,.label{font:700 9px/1.2 "Consolas",monospace;letter-spacing:2px;color:var(--cyan);text-transform:uppercase}.brand h1{font:600 22px/1 "Bahnschrift Condensed","Microsoft YaHei UI",sans-serif;margin:4px 0 0}.brand h1 span{font-weight:300;color:#91a5ae}
+.metrics{display:flex;align-items:center;gap:24px}.metric{border-left:1px solid var(--line);padding-left:16px}.metric small{display:block;font:9px Consolas;color:var(--muted)}.metric b{font:700 13px Consolas;color:var(--ink)}.badge{padding:7px 11px;border:1px solid #285c48;color:var(--green);font:700 10px Consolas}.badge.warn{border-color:#694d26;color:var(--amber)}
+main{position:relative;display:grid;grid-template-columns:minmax(0,1.8fr) minmax(330px,.8fr);gap:10px;padding:10px;min-height:calc(100vh - 68px)}.panel{background:#0a141eb8;border:1px solid var(--line)}
+.stage{padding:10px}.panel-head{height:34px;display:flex;align-items:center;justify-content:space-between;font:700 10px Consolas;letter-spacing:1px;color:#9ab0bb}.index{color:var(--cyan);margin-right:10px}.source{color:var(--green)}
+.video{position:relative;min-height:520px;height:calc(100vh - 184px);background:#020609;display:grid;place-items:center;overflow:hidden;border:1px solid #263b49}.video img{width:100%;height:100%;object-fit:contain}.empty{position:absolute;color:#526977;font:12px Consolas;letter-spacing:1px}.scan{position:absolute;inset:0;background:linear-gradient(transparent 49.7%,#49d6ff22 50%,transparent 50.3%);background-size:100% 9px;pointer-events:none}.hud{position:absolute;left:14px;top:13px;font:700 12px Consolas;text-shadow:0 1px 4px #000}.hud b{color:var(--cyan)}.stamp{position:absolute;bottom:12px;left:12px;display:flex;gap:8px}.stamp span{background:#071018d9;border:1px solid var(--line);padding:5px 8px;font:9px Consolas;color:var(--green)}
+.sources{height:52px;display:flex;align-items:center;gap:8px;padding:8px 0 0}.source-btn{border:1px solid var(--line);background:#0b1822;color:#8197a2;padding:8px 10px;font:10px Consolas}.source-btn.active{color:var(--green);border-color:#2d7b59}.source-btn[disabled]{opacity:.45}.source-note{margin-left:auto;color:#5f7682;font:9px Consolas}
+aside{display:flex;flex-direction:column;gap:8px}.evidence{position:relative;min-height:122px;padding:17px 18px;border-top:2px solid var(--green)}.evidence.amber{border-color:var(--amber)}.evidence.red{border-color:var(--red);flex:1}.evidence .code{position:absolute;right:14px;top:12px;font:30px Georgia;color:#314755}.evidence p{margin:0 0 8px;font:9px Consolas;letter-spacing:1.5px;color:#78909d}.evidence h2{margin:0 0 7px;font:600 21px "Bahnschrift Condensed","Microsoft YaHei UI"}.evidence small{color:#718893}.score{position:absolute;right:17px;bottom:15px;font:700 16px Consolas;color:var(--green)}
+.phone-buttons,.session-buttons{display:flex;gap:5px;flex-wrap:wrap;margin-top:10px}button{cursor:pointer;border:1px solid #315063;background:#0b1721;color:#b5c7cd;padding:7px 10px;font:10px "Microsoft YaHei UI"}button:hover{border-color:var(--cyan);color:#fff}button.selected{border-color:var(--green);color:var(--green);background:#0c241c}.level{display:flex;gap:15px;align-items:center}.orb{width:55px;height:55px;border:1px solid #365064;display:grid;place-items:center;font:700 30px Consolas;color:var(--red)}.reason{font:10px Consolas;color:#9aaeb5;word-break:break-all}.footerline{font:9px Consolas;color:#5f7580;margin-top:auto;padding-top:10px;border-top:1px solid #1c303d}
+@media(max-width:920px){main{grid-template-columns:1fr}.video{height:52vh;min-height:320px}header{height:auto;padding:12px}.metrics{gap:8px}.metric{display:none}}
+</style></head><body>
+<header><div class="brand"><div class="mark"><i></i><i></i><i></i></div><div><div class="eyebrow">EDGE AI · SESSION RUNTIME</div><h1>EdgeFocus <span>视觉推理链</span></h1></div></div><div class="metrics"><div class="metric"><small>PREVIEW</small><b id="preview-fps">-- FPS</b></div><div class="metric"><small>NPU INFERENCE</small><b id="npu-metric">-- FPS · -- ms</b></div><div id="health" class="badge warn">IDLE</div></div></header>
+<main><section class="panel stage"><div class="panel-head"><span><b class="index">01</b>单一相机 · 真实推理输入</span><span id="source" class="source">LIVE CAMERA</span></div><div class="video"><div id="empty" class="empty">等待会话启动与服务端画面</div><img id="frame" alt="板端共享相机预览"><div class="scan"></div><div class="hud">SESSION <b id="session-id">--</b><br>FRAME <b id="frame-id">--</b></div><div class="stamp"><span id="phase">IDLE</span><span id="frame-age">NO EVIDENCE</span></div></div><div class="sources"><button class="source-btn active">现场摄像头 · REAL INFERENCE</button><button class="source-btn" disabled>预录视频 · 待放入</button><button class="source-btn" disabled>证据回放 · NPU故障备用</button><span class="source-note">回放状态永远不会伪装成 LIVE</span></div></section>
+<aside><section class="panel evidence"><span class="code">A</span><p>VISUAL EVIDENCE · PRESENCE</p><h2 id="presence">等待证据</h2><small id="presence-detail">会话外不运行 NPU</small><b id="presence-score" class="score">--</b></section>
+<section class="panel evidence amber"><span class="code">B</span><p>TEMPORAL MLP · PRONE</p><h2 id="prone">等待时序窗口</h2><small>单帧关键点不会直接触发趴下结论</small><b id="prone-score" class="score">--</b></section>
+<section class="panel evidence"><p>APP RAW FACT · PHONE</p><h2 id="phone">未使用</h2><div class="phone-buttons"><button data-phone="OFF">未使用</button><button data-phone="LEARNING">学习</button><button data-phone="ENTERTAINMENT">娱乐</button><button data-phone="GENERAL_OR_UNKNOWN">其他</button></div></section>
+<section class="panel evidence red"><p>FUSED DISTRACTION · SESSION OUTPUT</p><div class="level"><div id="level" class="orb">—</div><div><h2 id="level-title">当前无分神等级</h2><div id="reasons" class="reason">UNKNOWN</div></div></div><div class="session-buttons"><button data-action="start">开始会话</button><button data-action="confirm">通过预检</button><button data-action="pause">暂停</button><button data-action="resume">恢复</button><button data-action="end">结束</button></div><div id="gimbal" class="footerline">GIMBAL · IDLE</div></section></aside></main>
+<script>
+const $=id=>document.getElementById(id);let previewFrames=0,previewAt=performance.now(),lastSeq=-1;
+async function json(url,opt){const r=await fetch(url,opt);const x=await r.json();if(!r.ok)throw Error(x.error||r.status);return x}
+const pct=v=>v==null?'--':Math.round(v*100)+'%';
+function render(s){$('session-id').textContent=(s.session.id||'--').slice(-12);$('phase').textContent=s.session.phase;$('source').textContent=s.source.label;$('frame-id').textContent=s.visual.frame_id||'--';$('npu-metric').textContent=`${Number(s.health.inference_fps||0).toFixed(1)} FPS · ${Number(s.health.inference_latency_ms||0).toFixed(0)} ms`;$('health').textContent=s.health.status;$('health').className='badge '+(s.health.status==='RUNNING'?'':'warn');
+const p=s.visual.presence;$('presence').textContent=p==null?'证据不足':p>=.5?'人在':'人不在';$('presence-score').textContent=pct(p);$('presence-detail').textContent=s.assessment.applicability==='NOT_PRESENT'?'不输出分神等级':`证据帧新鲜度 ${s.health.frame_age_ms} ms`;
+const q=s.visual.prone;$('prone').textContent=q==null?'等待时序窗口':q>=.5?'已确认趴下':'未趴下';$('prone-score').textContent=pct(q);$('phone').textContent=s.phone.active?({LEARNING:'学习类使用',ENTERTAINMENT:'娱乐类使用',GENERAL_OR_UNKNOWN:'其他使用'}[s.phone.category]||'使用中'):'未使用';document.querySelectorAll('[data-phone]').forEach(b=>b.classList.toggle('selected',(s.phone.active?b.dataset.phone===s.phone.category:b.dataset.phone==='OFF')));
+const l=s.assessment.level;$('level').textContent=l==null?'—':l;$('level-title').textContent=l==null?(s.assessment.applicability==='NOT_PRESENT'?'人不在 · 等级不适用':'当前无分神等级'):["未分神","轻度分神","持续分神","严重 / 长时分神"][l];$('reasons').textContent=(s.assessment.reasons||[]).join(' + ')||s.assessment.applicability;$('gimbal').textContent=`GIMBAL · ${s.gimbal.state} · ${s.gimbal.health}`;
+if(s.preview.available&&s.preview.sequence!==lastSeq){lastSeq=s.preview.sequence;$('frame').src=`/api/demo/frame.jpg?sequence=${lastSeq}&t=${Date.now()}`;$('empty').style.display='none'}const now=Date.now();$('frame-age').textContent=s.health.frame_age_ms>=0?`EVIDENCE ${s.health.frame_age_ms} ms OLD`:'NO EVIDENCE'}
+$('frame').addEventListener('load',()=>{previewFrames++;const now=performance.now();if(now-previewAt>1000){$('preview-fps').textContent=(previewFrames*1000/(now-previewAt)).toFixed(1)+' FPS';previewFrames=0;previewAt=now}});
+document.querySelectorAll('[data-phone]').forEach(b=>b.onclick=()=>json('/api/demo/phone',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({category:b.dataset.phone})}));document.querySelectorAll('[data-action]').forEach(b=>b.onclick=()=>json('/api/demo/session',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({action:b.dataset.action,target_duration_min:25})}));
+async function poll(){try{render(await json('/api/demo/state'))}catch(e){$('health').textContent='OFFLINE';$('health').className='badge warn'}}poll();setInterval(poll,180);
+</script></body></html>)HTML";
+}
 } // namespace
 
 DemoHttpServer::DemoHttpServer(SystemStateStore& store, SQLiteStore& sqlite_store,
                                DeviceManager& device_mgr, GimbalMonitor& gimbal_monitor,
+                               session::SessionOrchestrator& sessions,
+                               session::SessionSnapshotPublisher& snapshots,
+                               PhoneFactBuffer& phone_facts,
+                               PreviewFrameStore& preview_frames,
                                int port)
     : Module("DemoHttpServer")
     , store_(store)
     , sqlite_store_(sqlite_store)
     , device_mgr_(device_mgr)
     , gimbal_monitor_(gimbal_monitor)
+    , sessions_(sessions)
+    , snapshots_(snapshots)
+    , phone_facts_(phone_facts)
+    , preview_frames_(preview_frames)
     , port_(port) {}
 
 bool DemoHttpServer::init(AppContext& /*ctx*/) {
@@ -316,19 +373,202 @@ std::string DemoHttpServer::handleRequest(const std::string& method, const std::
     try {
         if (method == "OPTIONS") return httpResponse(200, "{}");
         if (method == "GET" && (path == "/" || path == "/demo")) {
-            return httpResponse(200, demoPageHtml(), "text/html; charset=utf-8");
+            return httpResponse(200, runtimeDemoPageHtml(), "text/html; charset=utf-8");
         }
-        if (method == "GET" && path == "/demo/snapshot") {
-            return httpResponse(200, snapshotJson().dump());
+        if (method == "GET" && path == "/api/demo/state") {
+            return httpResponse(200, runtimeSnapshotJson().dump());
         }
-        if (method == "POST" && path == "/demo/command") {
-            json req = body.empty() ? json::object() : json::parse(body);
-            return httpResponse(200, handleCommand(req).dump());
+        if (method == "GET" && path.rfind("/api/demo/frame.jpg", 0) == 0) {
+            return previewFrameResponse();
         }
+        if (method == "POST" && path == "/api/demo/session") {
+            const json data = body.empty() ? json::object() : json::parse(body);
+            return httpResponse(200, handleRuntimeSession(data).dump());
+        }
+        if (method == "POST" && path == "/api/demo/phone") {
+            const json data = body.empty() ? json::object() : json::parse(body);
+            const auto response = handleRuntimePhone(data);
+            return httpResponse(response.value("accepted", false) ? 200 : 400, response.dump());
+        }
+        // Legacy mutation endpoints are intentionally no longer routed. Demo
+        // state can only come from SessionSnapshotPublisher.
         return httpResponse(404, json{{"status", "error"}, {"error", "unknown endpoint"}}.dump());
     } catch (const std::exception& e) {
         return httpResponse(400, json{{"status", "error"}, {"error", e.what()}}.dump());
     }
+}
+
+DemoHttpServer::json DemoHttpServer::runtimeSnapshotJson() const {
+    const auto runtime = snapshots_.read();
+    const auto legacy = store_.snapshot();
+    const auto preview = preview_frames_.read();
+    const auto now_ms = nowMs();
+
+    auto optionalNumber = [](const std::optional<double>& value) -> json {
+        return value ? json(*value) : json(nullptr);
+    };
+    auto category = [](const std::optional<session::PhoneCategory>& value) -> json {
+        if (!value) return nullptr;
+        switch (*value) {
+            case session::PhoneCategory::Learning: return "LEARNING";
+            case session::PhoneCategory::Entertainment: return "ENTERTAINMENT";
+            case session::PhoneCategory::GeneralOrUnknown: return "GENERAL_OR_UNKNOWN";
+        }
+        return nullptr;
+    };
+    auto applicability = [](session::Applicability value) {
+        if (value == session::Applicability::Active) return "ACTIVE";
+        if (value == session::Applicability::NotPresent) return "NOT_PRESENT";
+        return "UNKNOWN";
+    };
+    auto source = [](session::SourceMode value) {
+        if (value == session::SourceMode::RecordedInput) return "RECORDED INPUT · REAL INFERENCE";
+        if (value == session::SourceMode::EvidenceReplay) return "EVIDENCE REPLAY · NOT LIVE";
+        return "LIVE CAMERA · REAL INFERENCE";
+    };
+
+    const bool evidence_available = runtime.visual.evidence_timestamp_ms > 0;
+    const auto frame_age_ms = evidence_available
+                                  ? std::max<std::int64_t>(0, now_ms - runtime.visual.evidence_timestamp_ms)
+                                  : -1;
+    const bool running = runtime.runtime_active && legacy.device.camera_ok;
+    return {
+        {"session", {
+            {"id", runtime.context.session_id},
+            {"phase", session::phase_name(runtime.phase)},
+            {"active", runtime.runtime_active},
+            {"elapsed_ms", runtime.elapsed_ms},
+            {"remaining_ms", runtime.remaining_ms}
+        }},
+        {"source", {{"mode", static_cast<int>(runtime.context.source_mode)},
+                    {"label", source(runtime.context.source_mode)}}},
+        {"health", {
+            {"status", running ? "RUNNING" : (runtime.runtime_active ? "STARTING" : "IDLE")},
+            {"camera", legacy.device.camera_ok},
+            {"inference_fps", runtime.visual.inference_fps},
+            {"inference_latency_ms", runtime.visual.inference_latency_ms},
+            {"frame_age_ms", frame_age_ms}
+        }},
+        {"visual", {
+            {"presence", optionalNumber(runtime.visual.presence)},
+            {"prone", optionalNumber(runtime.visual.prone)},
+            {"frame_id", runtime.visual.frame_id}
+        }},
+        {"phone", {
+            {"fresh", runtime.phone.fresh},
+            {"active", runtime.phone.active},
+            {"category", category(runtime.phone.category)}
+        }},
+        {"assessment", {
+            {"applicability", applicability(runtime.assessment.applicability)},
+            {"level", runtime.assessment.level ? json(*runtime.assessment.level) : json(nullptr)},
+            {"reasons", runtime.assessment.reasons},
+            {"would_remind", runtime.assessment.would_remind}
+        }},
+        {"gimbal", {
+            {"state", runtime.gimbal.state},
+            {"health", runtime.gimbal.health.status},
+            {"tracking", runtime.gimbal.tracking}
+        }},
+        {"preview", {
+            {"available", preview.has_value()},
+            {"sequence", preview ? preview->sequence : 0}
+        }},
+        {"backup_sources", json::array({
+            {{"mode", "RECORDED_INPUT"}, {"ready", false}, {"label", "预录视频 · 待放入"}},
+            {{"mode", "EVIDENCE_REPLAY"}, {"ready", false}, {"label", "证据回放 · 待冻结"}}
+        })}
+    };
+}
+
+DemoHttpServer::json DemoHttpServer::handleRuntimeSession(const json& data) {
+    const std::string action = lowerCopy(data.value("action", ""));
+    session::SessionOrchestrator::Result result;
+    if (action == "start") {
+        const int minutes = clampInt(data.value("target_duration_min", 25), 5, 120);
+        result = sessions_.start({static_cast<std::int64_t>(minutes) * 60000,
+                                  session::SourceMode::LiveCamera});
+    } else if (action == "confirm") {
+        result = sessions_.confirmReady();
+    } else if (action == "pause") {
+        result = sessions_.pause();
+    } else if (action == "resume") {
+        result = sessions_.resume();
+    } else if (action == "end") {
+        result = sessions_.end(session::StopReason::Completed);
+    } else {
+        return {{"success", false}, {"error", "unknown session action"}};
+    }
+    return {{"success", result.success},
+            {"error", result.error},
+            {"phase", session::phase_name(sessions_.phase())}};
+}
+
+DemoHttpServer::json DemoHttpServer::handleRuntimePhone(const json& data) {
+    const auto runtime = snapshots_.read();
+    if (!runtime.runtime_active || runtime.context.session_id.empty()) {
+        return {{"accepted", false}, {"error", "start a session before publishing phone facts"}};
+    }
+    const std::string category_text = data.value("category", "OFF");
+    session::PhoneFact fact;
+    fact.session_id = runtime.context.session_id;
+    fact.sequence = ++phone_sequence_;
+    fact.received_monotonic_ms = nowMs();
+    fact.source_timestamp_ms = fact.received_monotonic_ms;
+    fact.fresh_for_ms = 2000;
+    fact.active = category_text != "OFF";
+    if (category_text == "LEARNING") {
+        fact.category = session::PhoneCategory::Learning;
+    } else if (category_text == "ENTERTAINMENT") {
+        fact.category = session::PhoneCategory::Entertainment;
+    } else if (category_text == "GENERAL_OR_UNKNOWN") {
+        fact.category = session::PhoneCategory::GeneralOrUnknown;
+    } else if (category_text != "OFF") {
+        return {{"accepted", false}, {"error", "invalid phone category"}};
+    }
+    std::string error;
+    const bool accepted = phone_facts_.publish(fact, &error);
+    return {{"accepted", accepted}, {"sequence", fact.sequence}, {"error", error}};
+}
+
+std::string DemoHttpServer::previewFrameResponse() const {
+    const auto preview = preview_frames_.read();
+    if (!preview) {
+        return httpResponse(503, json{{"error", "preview frame unavailable"}}.dump());
+    }
+#ifdef EDGEFOCUS_WITH_OPENCV
+    const auto& frame = preview->frame;
+    cv::Mat image;
+    if (frame.channels == 1 && frame.format == PixelFormat::GRAY8) {
+        cv::Mat gray(frame.height, frame.width, CV_8UC1,
+                     const_cast<std::uint8_t*>(frame.data.data()));
+        cv::cvtColor(gray, image, cv::COLOR_GRAY2BGR);
+    } else if (frame.channels == 3) {
+        cv::Mat packed(frame.height, frame.width, CV_8UC3,
+                       const_cast<std::uint8_t*>(frame.data.data()));
+        if (frame.format == PixelFormat::RGB24) {
+            cv::cvtColor(packed, image, cv::COLOR_RGB2BGR);
+        } else {
+            image = packed.clone();
+        }
+    } else {
+        return httpResponse(503, json{{"error", "unsupported preview format"}}.dump());
+    }
+    const auto runtime = snapshots_.read();
+    const std::string overlay = std::string("SERVER CAMERA  |  NPU ") +
+                                std::to_string(runtime.visual.inference_fps).substr(0, 3) + " FPS";
+    cv::putText(image, overlay, {18, 30}, cv::FONT_HERSHEY_SIMPLEX, 0.62,
+                cv::Scalar(73, 214, 255), 2, cv::LINE_AA);
+    std::vector<std::uint8_t> jpeg;
+    if (!cv::imencode(".jpg", image, jpeg, {cv::IMWRITE_JPEG_QUALITY, 82})) {
+        return httpResponse(503, json{{"error", "jpeg encoding failed"}}.dump());
+    }
+    return httpResponse(200,
+                        std::string(reinterpret_cast<const char*>(jpeg.data()), jpeg.size()),
+                        "image/jpeg");
+#else
+    return httpResponse(503, json{{"error", "OpenCV preview not compiled"}}.dump());
+#endif
 }
 
 DemoHttpServer::json DemoHttpServer::snapshotJson() const {

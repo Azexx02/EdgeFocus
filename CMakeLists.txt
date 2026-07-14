@@ -44,7 +44,8 @@ else()
     target_compile_options(edgefocus_distraction_core PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
-# All sources from app/, camera/, vision/, behavior/, policy/, device/, storage/, ui/
+# Production sources. Legacy VisionEngine/BehaviorEngine and board UI are kept
+# in the repository for migration tests only and are not linked into focus_app.
 set(APP_SOURCES
     main.cpp
     app/Logger.cpp
@@ -54,20 +55,12 @@ set(APP_SOURCES
     session/SessionSnapshotPublisher.cpp
     session/SessionRuntime.cpp
     session/SessionOrchestrator.cpp
+    session/LegacySessionProjectionFeature.cpp
     camera/CameraPipeline.cpp
-    vision/FrameQuality.cpp
-    vision/ModelRegistry.cpp
-    vision/PoseModelAdapter.cpp
-    vision/MockVisionSource.cpp
-    vision/InferenceScheduler.cpp
-    vision/VisionEngine.cpp
-    behavior/BehaviorEngine.cpp
+    camera/PreviewFrameStore.cpp
+    vision/DistractionPipelineFeature.cpp
     behavior/PhoneFactBuffer.cpp
     behavior/DistractionAssessmentEngine.cpp
-    behavior/FocusStateMachine.cpp
-    behavior/SlidingWindow.cpp
-    behavior/EventDetector.cpp
-    behavior/RiskScorer.cpp
     policy/ReminderPolicy.cpp
     policy/NotificationRouter.cpp
     policy/ModeManager.cpp
@@ -75,6 +68,7 @@ set(APP_SOURCES
     device/DeviceManager.cpp
     device/GimbalController.cpp
     device/GimbalMonitor.cpp
+    device/GimbalSessionFeature.cpp
     device/ScreenController.cpp
     device/SoundController.cpp
     device/BleBandController.cpp
@@ -82,12 +76,6 @@ set(APP_SOURCES
     storage/ReportGenerator.cpp
     network/AppCommandService.cpp
     network/BleGattServer.cpp
-    ui/UIManager.cpp
-    ui/FrameBuffer.cpp
-    ui/StatusPage.cpp
-    ui/StatsPage.cpp
-    ui/ReviewPage.cpp
-    ui/SettingsPage.cpp
 )
 
 add_executable(focus_app ${APP_SOURCES})
@@ -105,7 +93,7 @@ if(EDGEFOCUS_WITH_DEMO_HTTP)
 endif()
 
 if(EDGEFOCUS_WITH_OPENCV)
-    find_package(OpenCV REQUIRED COMPONENTS core imgproc videoio)
+    find_package(OpenCV REQUIRED COMPONENTS core imgproc videoio imgcodecs)
     target_compile_definitions(focus_app PRIVATE EDGEFOCUS_WITH_OPENCV)
     target_include_directories(focus_app PRIVATE ${OpenCV_INCLUDE_DIRS})
     target_link_libraries(focus_app PRIVATE ${OpenCV_LIBS})
@@ -157,6 +145,7 @@ target_link_libraries(focus_app PRIVATE Threads::Threads)
 # Install target
 install(TARGETS focus_app DESTINATION bin)
 install(DIRECTORY config DESTINATION .)
+install(DIRECTORY models/distraction DESTINATION models)
 
 # --- Tests ---
 enable_testing()

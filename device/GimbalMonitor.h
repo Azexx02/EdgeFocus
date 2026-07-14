@@ -2,6 +2,8 @@
 
 #include "app/Module.h"
 #include "device/GimbalController.h"
+#include "session/SessionDomain.h"
+#include <atomic>
 #include <chrono>
 #include <mutex>
 #include <string>
@@ -18,6 +20,9 @@ public:
     void runOnce(AppContext& ctx) override;
     void shutdown(AppContext& ctx) override;
     GimbalCommandResult executeBusinessCommand(const std::string& command, int timeout_ms);
+    void beginSession();
+    void enterSessionPhase(session::Phase phase);
+    void endSession() noexcept;
 
 private:
     bool enabled() const;
@@ -32,6 +37,8 @@ private:
     bool auto_init_attempted_ = false;
     bool auto_init_running_ = false;
     bool auto_initialized_ = false;
+    std::atomic<bool> session_active_{false};
+    std::atomic<session::Phase> session_phase_{session::Phase::Idle};
     GimbalCommandResult last_command_result_;
     static constexpr int kPollIntervalMs = 500;
 };

@@ -25,9 +25,12 @@ public:
 
 private:
     void mutate(std::int64_t now_ms, const std::function<void(SessionSnapshot&)>& change);
+    void updateTimingLocked(std::int64_t now_ms);
 
     mutable std::mutex mutex_;
     SessionSnapshot snapshot_;
+    std::int64_t focusing_started_ms_{};
+    std::int64_t accumulated_focus_ms_{};
 };
 
 }  // namespace edgefocus::session

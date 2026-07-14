@@ -18,6 +18,13 @@
 
 namespace edgefocus {
 
+class PhoneFactBuffer;
+class PreviewFrameStore;
+namespace session {
+class SessionOrchestrator;
+class SessionSnapshotPublisher;
+}
+
 namespace demo_http {
 
 enum class DemoHttpParseStatus {
@@ -142,6 +149,10 @@ class DemoHttpServer : public Module {
 public:
     DemoHttpServer(SystemStateStore& store, SQLiteStore& sqlite_store,
                    DeviceManager& device_mgr, GimbalMonitor& gimbal_monitor,
+                   session::SessionOrchestrator& sessions,
+                   session::SessionSnapshotPublisher& snapshots,
+                   PhoneFactBuffer& phone_facts,
+                   PreviewFrameStore& preview_frames,
                    int port);
 
     bool init(AppContext& ctx) override;
@@ -163,11 +174,20 @@ private:
     json setDemoCounts(const json& data);
     json setPowerState(const json& data);
     json gimbalNudge(const json& data);
+    json runtimeSnapshotJson() const;
+    json handleRuntimeSession(const json& data);
+    json handleRuntimePhone(const json& data);
+    std::string previewFrameResponse() const;
 
     SystemStateStore& store_;
     SQLiteStore& sqlite_store_;
     DeviceManager& device_mgr_;
     GimbalMonitor& gimbal_monitor_;
+    session::SessionOrchestrator& sessions_;
+    session::SessionSnapshotPublisher& snapshots_;
+    PhoneFactBuffer& phone_facts_;
+    PreviewFrameStore& preview_frames_;
+    std::atomic<std::uint64_t> phone_sequence_{0};
     int port_ = 0;
     std::atomic<bool> running_{false};
     std::thread server_thread_;

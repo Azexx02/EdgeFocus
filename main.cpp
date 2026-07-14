@@ -4,19 +4,21 @@
 #include "app/BoundedQueue.h"
 #include "app/SystemStateStore.h"
 #include "camera/CameraPipeline.h"
-#include "vision/VisionEngine.h"
-#include "vision/VisionResult.h"
-#include "behavior/BehaviorEngine.h"
+#include "camera/PreviewFrameStore.h"
+#include "vision/DistractionPipelineFeature.h"
+#include "behavior/PhoneFactBuffer.h"
+#include "session/LegacySessionProjectionFeature.h"
+#include "session/SessionOrchestrator.h"
+#include "session/SessionSnapshotPublisher.h"
 #include "policy/ReminderPolicy.h"
 #include "device/DeviceManager.h"
 #include "device/GimbalMonitor.h"
+#include "device/GimbalSessionFeature.h"
 #include "storage/SQLiteStore.h"
-#include "storage/ReportGenerator.h"
 #include "network/BleGattServer.h"
 #ifdef EDGEFOCUS_WITH_DEMO_HTTP
 #include "network/DemoHttpServer.h"
 #endif
-#include "ui/UIManager.h"
 
 #include <memory>
 #include <chrono>
@@ -106,47 +108,72 @@ int main(int argc, char* argv[]) {
 
     // Inter-module queues (W03: vision -> behavior data contract)
     BoundedQueue<CameraFrame> camera_frame_queue(3, true);
-    BoundedQueue<VisionResult> vision_result_queue(5, true);
+    PreviewFrameStore preview_frames;
+    session::SessionSnapshotPublisher session_snapshots("focus-app");
+    PhoneFactBuffer phone_facts;
+    auto gimbal_monitor_ptr = std::make_unique<GimbalMonitor>(store);
+    GimbalMonitor& gimbal_monitor = *gimbal_monitor_ptr;
+
+    session::SessionOrchestrator session_orchestrator(
+        session_snapshots,
+        [&](const session::SessionContext& context) {
+            auto runtime = std::make_unique<session::SessionRuntime>(context);
+            runtime->addFeature(
+                std::make_unique<session::LegacySessionProjectionFeature>(store, sqlite_store),
+                true);
+            runtime->addFeature(
+                std::make_unique<DistractionPipelineFeature>(
+                    camera_frame_queue, phone_facts, session_snapshots, store),
+                true);
+            runtime->addFeature(
+                std::make_unique<GimbalSessionFeature>(
+                    gimbal_monitor, store, session_snapshots),
+                false);
+            return runtime;
+        },
+        [] {
+            return std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
+        },
+        [] {
+            return std::chrono::duration_cast<std::chrono::milliseconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count();
+        });
 
     AppContext ctx;
 
     // Register modules in dependency order
     ctx.addModule(std::make_unique<HealthMonitor>(store));
-    ctx.addModule(std::make_unique<CameraPipeline>(camera_frame_queue, store));
-    ctx.addModule(std::make_unique<VisionEngine>(vision_result_queue, camera_frame_queue, store));
-    ctx.addModule(std::make_unique<BehaviorEngine>(vision_result_queue, store, sqlite_store));
+    ctx.addModule(std::make_unique<CameraPipeline>(camera_frame_queue, store, &preview_frames));
     auto device_mgr_ptr = std::make_unique<DeviceManager>(store);
     DeviceManager& device_mgr = *device_mgr_ptr;
     ctx.addModule(std::move(device_mgr_ptr));
-    auto gimbal_monitor_ptr = std::make_unique<GimbalMonitor>(store);
-    GimbalMonitor& gimbal_monitor = *gimbal_monitor_ptr;
     ctx.addModule(std::move(gimbal_monitor_ptr));
     auto reminder_policy_ptr = std::make_unique<ReminderPolicy>(store, sqlite_store, device_mgr);
     ReminderPolicy& reminder_policy = *reminder_policy_ptr;
     ctx.addModule(std::move(reminder_policy_ptr));
     ctx.addModule(std::move(sqlite_store_ptr));
 
-    // Create ReportGenerator (uses SQLiteStore)
-    ReportGenerator report_gen(sqlite_store);
-
     // Create BLE GATT Server
     auto ble_server = std::make_unique<BleGattServer>(store, sqlite_store, reminder_policy,
                                                        reminder_policy.getModeManager(),
-                                                       &gimbal_monitor);
+                                                       &gimbal_monitor,
+                                                       &session_orchestrator,
+                                                       &phone_facts,
+                                                       &session_snapshots);
     ctx.addModule(std::move(ble_server));
 
 #ifdef EDGEFOCUS_WITH_DEMO_HTTP
     if (demo_http_port > 0) {
         ctx.addModule(std::make_unique<DemoHttpServer>(store, sqlite_store, device_mgr,
-                                                       gimbal_monitor, demo_http_port));
+                                                       gimbal_monitor, session_orchestrator,
+                                                       session_snapshots, phone_facts,
+                                                       preview_frames, demo_http_port));
     }
 #endif
 
-    auto ui_mgr = std::make_unique<UIManager>(store);
-    ui_mgr->setReportGenerator(&report_gen);
-    ui_mgr->setSQLiteStore(&sqlite_store);
-    ui_mgr->setModeManager(&reminder_policy.getModeManager());
-    ctx.addModule(std::move(ui_mgr));
+    // Board-local screen UI was removed from the product. App and demo HTTP
+    // consume the session snapshot over Bluetooth/HTTP instead.
 
     if (!ctx.startAll()) {
         LOGE("Main", "Failed to start all modules");

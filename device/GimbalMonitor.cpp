@@ -54,6 +54,7 @@ void GimbalMonitor::publishSnapshot() {
 
 void GimbalMonitor::runAutoInitializationLocked() {
     if (auto_init_attempted_) return;
+    if (!session_active_.load() || session_phase_.load() != session::Phase::Precheck) return;
     const auto& gs = controller_.status();
     if (!GimbalController::readyForAutoInitialization(gs, controller_.state())) return;
 
@@ -65,6 +66,31 @@ void GimbalMonitor::runAutoInitializationLocked() {
     }
     auto_initialized_ = last_command_result_.success;
     auto_init_running_ = false;
+}
+
+void GimbalMonitor::beginSession() {
+    std::lock_guard<std::mutex> lock(controller_mutex_);
+    auto_init_attempted_ = false;
+    auto_initialized_ = false;
+    session_phase_.store(session::Phase::Precheck);
+    session_active_.store(true);
+    publishSnapshot();
+}
+
+void GimbalMonitor::enterSessionPhase(session::Phase phase) {
+    session_phase_.store(phase);
+    if (phase == session::Phase::Paused || phase == session::Phase::Ending) {
+        executeBusinessCommand("STOP", 1000);
+    }
+}
+
+void GimbalMonitor::endSession() noexcept {
+    try {
+        if (session_active_.load()) executeBusinessCommand("STOP", 1000);
+    } catch (...) {
+    }
+    session_active_.store(false);
+    session_phase_.store(session::Phase::Idle);
 }
 
 void GimbalMonitor::runOnce(AppContext& ctx) {

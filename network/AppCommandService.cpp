@@ -4,7 +4,10 @@
 #include "app/SessionController.h"
 #include "app/SessionPhase.h"
 #include "behavior/EventDetector.h"
+#include "behavior/PhoneFactBuffer.h"
 #include "network/PhoneSyncParser.h"
+#include "session/SessionOrchestrator.h"
+#include "session/SessionSnapshotPublisher.h"
 #include "device/GimbalMonitor.h"
 #include "policy/NotificationRouter.h"
 
@@ -46,6 +49,72 @@ json cameraPreviewData(const SystemSnapshot& snap);
 json behaviorContextData(const SystemSnapshot& snap);
 json precheckFlowData(const SystemSnapshot& snap, bool gimbal_precheck_available);
 bool gimbalPrecheckAvailable(const SystemSnapshot& snap, const GimbalMonitor* gimbal_monitor);
+
+const char* applicabilityWire(session::Applicability value) {
+    switch (value) {
+        case session::Applicability::Active: return "ACTIVE";
+        case session::Applicability::NotPresent: return "NOT_PRESENT";
+        case session::Applicability::Unknown: return "UNKNOWN";
+    }
+    return "UNKNOWN";
+}
+
+const char* sourceModeWire(session::SourceMode value) {
+    switch (value) {
+        case session::SourceMode::LiveCamera: return "LIVE_CAMERA";
+        case session::SourceMode::RecordedInput: return "RECORDED_INPUT";
+        case session::SourceMode::EvidenceReplay: return "EVIDENCE_REPLAY";
+    }
+    return "LIVE_CAMERA";
+}
+
+json phoneCategoryWire(const std::optional<session::PhoneCategory>& value) {
+    if (!value) return nullptr;
+    switch (*value) {
+        case session::PhoneCategory::Learning: return "LEARNING";
+        case session::PhoneCategory::Entertainment: return "ENTERTAINMENT";
+        case session::PhoneCategory::GeneralOrUnknown: return "GENERAL_OR_UNKNOWN";
+    }
+    return nullptr;
+}
+
+json stableSessionSnapshotData(const session::SessionSnapshot& value) {
+    json level = value.assessment.level ? json(*value.assessment.level) : json(nullptr);
+    return {
+        {"schema_version", value.schema_version},
+        {"sequence", value.sequence},
+        {"snapshot_ms", value.snapshot_ms},
+        {"session", {
+            {"id", value.context.session_id},
+            {"phase", session::phase_name(value.phase)},
+            {"active", value.runtime_active},
+            {"elapsed_ms", value.elapsed_ms},
+            {"remaining_ms", value.remaining_ms}
+        }},
+        {"source", {{"mode", sourceModeWire(value.context.source_mode)}}},
+        {"visual", {
+            {"presence", value.visual.presence ? json(*value.visual.presence) : json(nullptr)},
+            {"prone", value.visual.prone ? json(*value.visual.prone) : json(nullptr)},
+            {"evidence_timestamp_ms", value.visual.evidence_timestamp_ms},
+            {"frame_id", value.visual.frame_id},
+            {"inference_fps", value.visual.inference_fps},
+            {"inference_latency_ms", value.visual.inference_latency_ms}
+        }},
+        {"phone", {
+            {"fresh", value.phone.fresh},
+            {"active", value.phone.active},
+            {"category", phoneCategoryWire(value.phone.category)},
+            {"sequence", value.phone.sequence}
+        }},
+        {"assessment", {
+            {"applicability", applicabilityWire(value.assessment.applicability)},
+            {"level", level},
+            {"reasons", value.assessment.reasons},
+            {"would_remind", value.assessment.would_remind}
+        }},
+        {"degraded_features", value.degraded_features}
+    };
+}
 
 int publicFocusStateCode(FocusState state) {
     if (state == FocusState::PHONE_IN_LEARNING ||
@@ -489,12 +558,18 @@ json gimbalResultData(const GimbalCommandResult& result) {
 
 AppCommandService::AppCommandService(SystemStateStore& store, SQLiteStore& sqlite_store,
                                      ReminderPolicy& reminder_policy, ModeManager& mode_mgr,
-                                     GimbalMonitor* gimbal_monitor)
+                                     GimbalMonitor* gimbal_monitor,
+                                     session::SessionOrchestrator* session_orchestrator,
+                                     PhoneFactBuffer* phone_facts,
+                                     session::SessionSnapshotPublisher* session_snapshots)
     : store_(store)
     , sqlite_store_(sqlite_store)
     , reminder_policy_(reminder_policy)
     , mode_mgr_(mode_mgr)
-    , gimbal_monitor_(gimbal_monitor) {}
+    , gimbal_monitor_(gimbal_monitor)
+    , session_orchestrator_(session_orchestrator)
+    , phone_facts_(phone_facts)
+    , session_snapshots_(session_snapshots) {}
 
 AppCommandService::~AppCommandService() {
     if (gimbal_task_thread_.joinable()) {
@@ -615,14 +690,10 @@ void AppCommandService::loadPreferences() {
         parseNotificationMaskOrDefault(
             sqlite_store_.getPreference("silent_channels_mask", std::to_string(prefs.silent_channels_mask)),
             prefs.silent_channels_mask), false);
-    const auto legacy_screen_route = normalizeOutputRoute(
-        sqlite_store_.getPreference("screen_output_route", prefs.screen_output_route),
-        prefs.screen_output_route);
-    const auto legacy_sound_route = normalizeOutputRoute(
-        sqlite_store_.getPreference("sound_output_route", prefs.sound_output_route),
-        prefs.sound_output_route);
-    prefs.screen_output_route = legacy_screen_route;
-    prefs.sound_output_route = legacy_sound_route;
+    // Board-local display and sound are no longer product outputs. Ignore
+    // persisted legacy "board" routes and expose App-owned output instead.
+    prefs.screen_output_route = "phone";
+    prefs.sound_output_route = "phone";
     prefs.gimbal_enabled = parseIntOrDefault(
         sqlite_store_.getPreference("gimbal_enabled", prefs.gimbal_enabled ? "1" : "0"),
         prefs.gimbal_enabled ? 1 : 0) != 0;
@@ -751,6 +822,9 @@ std::string AppCommandService::handleGetCurrentState(int req_id) {
     json data = sessionStateData(snap, gimbal_precheck_available);
     data["reminder"] = reminderData(snap);
     data["precheck_guidance"] = precheckGuidanceData(snap);
+    if (session_snapshots_) {
+        data["runtime_snapshot"] = stableSessionSnapshotData(session_snapshots_->read());
+    }
     return makeResponse(req_id, data);
 }
 
@@ -786,6 +860,7 @@ std::string AppCommandService::handleGetLastReport(int req_id) {
 }
 
 std::string AppCommandService::handleSessionControl(const json& data, int req_id) {
+    if (session_orchestrator_) return handleSessionControlV2(data, req_id);
     std::string action = data.value("action", "");
     auto snap = store_.snapshot();
 
@@ -876,6 +951,69 @@ std::string AppCommandService::handleSessionControl(const json& data, int req_id
     return makeError(req_id, "Unknown action: " + action);
 }
 
+std::string AppCommandService::handleSessionControlV2(const json& data, int req_id) {
+    const std::string action = data.value("action", "");
+    const auto before = store_.snapshot();
+    session::SessionOrchestrator::Result result;
+
+    if (action == "start") {
+        const bool already_active = session_orchestrator_->active();
+        const int target_min = targetDurationMinutesFromPayload(data, before.preferences);
+        session::SourceMode source_mode = session::SourceMode::LiveCamera;
+        const std::string source = lowerCopy(data.value("source_mode", "live_camera"));
+        if (source == "recorded_input") source_mode = session::SourceMode::RecordedInput;
+        result = session_orchestrator_->start({minutesToMs(target_min), source_mode});
+        auto after = store_.snapshot();
+        json response = sessionStateData(after, gimbalPrecheckAvailable(after, gimbal_monitor_));
+        response["success"] = result.success;
+        response["already_active"] = already_active && result.success;
+        if (session_snapshots_) {
+            response["runtime_snapshot"] = stableSessionSnapshotData(session_snapshots_->read());
+        }
+        if (!result.error.empty()) response["message"] = result.error;
+        return makeResponse(req_id, response);
+    }
+
+    if (action == "skip_precheck" || action == "skip_calibration") {
+        result = session_orchestrator_->confirmReady();
+    } else if (action == "pause") {
+        result = session_orchestrator_->pause();
+    } else if (action == "resume") {
+        result = session_orchestrator_->resume();
+    } else if (action == "end") {
+        const auto target_duration_ms = before.session.target_duration_ms;
+        result = session_orchestrator_->end(session::StopReason::Completed);
+        const auto ended_snapshot = store_.snapshot();
+        const auto& report = ended_snapshot.last_report;
+        if (result.success && !report.session_id.empty()) {
+            const json push_data = sessionReportData(report, target_duration_ms, "user_ended");
+            store_.pushEvent(makePush("push_session_end", push_data));
+        }
+        json response = sessionReportData(report, target_duration_ms, "user_ended");
+        response["success"] = result.success;
+        if (session_snapshots_) {
+            response["runtime_snapshot"] = stableSessionSnapshotData(session_snapshots_->read());
+        }
+        if (!result.error.empty()) response["message"] = result.error;
+        return makeResponse(req_id, response);
+    } else {
+        return makeError(req_id, "Unknown action: " + action);
+    }
+
+    const auto after = store_.snapshot();
+    const bool gimbal_available = gimbalPrecheckAvailable(after, gimbal_monitor_);
+    json response = sessionStateData(after, gimbal_available);
+    response["success"] = result.success;
+    if (session_snapshots_) {
+        response["runtime_snapshot"] = stableSessionSnapshotData(session_snapshots_->read());
+    }
+    if (!result.error.empty()) response["message"] = result.error;
+    if (result.success) {
+        store_.pushEvent(makePush("push_state", sessionStateData(after, gimbal_available)));
+    }
+    return makeResponse(req_id, response);
+}
+
 std::string AppCommandService::handleUpdatePreferences(const json& data, int req_id) {
     Preferences prefs = store_.snapshot().preferences;
 
@@ -938,14 +1076,10 @@ std::string AppCommandService::handleUpdatePreferences(const json& data, int req
     } else if (data.contains("silent_channels")) {
         prefs.silent_channels_mask = parseChannelMaskFromNames(data["silent_channels"], false);
     }
-    if (data.contains("screen_output_route")) {
-        prefs.screen_output_route = normalizeOutputRoute(data["screen_output_route"].get<std::string>(),
-                                                         prefs.screen_output_route);
-    }
-    if (data.contains("sound_output_route")) {
-        prefs.sound_output_route = normalizeOutputRoute(data["sound_output_route"].get<std::string>(),
-                                                        prefs.sound_output_route);
-    }
+    // Accepted for protocol compatibility, but board-local output cannot be
+    // re-enabled by an old App or stale preference record.
+    prefs.screen_output_route = "phone";
+    prefs.sound_output_route = "phone";
     if (data.contains("gimbal_enabled")) {
         prefs.gimbal_enabled = data["gimbal_enabled"].get<bool>();
     }
@@ -995,6 +1129,36 @@ std::string AppCommandService::handlePhoneSync(const json& data, int req_id) {
     auto parsed = parsePhoneSyncPayload(data);
 
     auto snap = store_.snapshot();
+
+    if (phone_facts_) {
+        session::PhoneFact fact;
+        fact.session_id = snap.session.session_id;
+        fact.sequence = data.value("sequence", ++phone_sequence_);
+        fact.received_monotonic_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        fact.source_timestamp_ms = data.value("timestamp_ms", fact.received_monotonic_ms);
+        fact.active = parsed.active;
+        fact.fresh_for_ms = std::max<int64_t>(100, data.value("fresh_for_ms", 1000));
+        if (parsed.active) {
+            if (parsed.usage_state == PhoneUsageState::LEARNING) {
+                fact.category = session::PhoneCategory::Learning;
+            } else if (parsed.usage_state == PhoneUsageState::PLAYING) {
+                fact.category = session::PhoneCategory::Entertainment;
+            } else {
+                fact.category = session::PhoneCategory::GeneralOrUnknown;
+            }
+        }
+        std::string error;
+        const bool accepted = phone_facts_->publish(fact, &error);
+        json response = {
+            {"accepted", accepted},
+            {"sequence", fact.sequence},
+            {"category_source", "app_raw_fact"},
+            {"distraction_level_ignored", data.contains("distraction_level")}
+        };
+        if (!error.empty()) response["message"] = error;
+        return makeResponse(req_id, response);
+    }
 
     if (!parsed.active) {
         PhoneUsageSignal sig;
@@ -1240,6 +1404,9 @@ std::string AppCommandService::handleGimbalControl(const json& data, int req_id)
     }
     if (isGimbalMotionAction(action)) {
         const auto snap = store_.snapshot();
+        if (!snap.session.active || deriveSessionPhase(snap.session) != SessionPhase::PRECHECK) {
+            return makeError(req_id, "Manual gimbal motion is only available during precheck");
+        }
         if (!snap.device.gimbal_online || !snap.device.gimbal_safe) {
             return makeError(req_id, "Gimbal not ready for motion");
         }
