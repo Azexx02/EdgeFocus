@@ -116,7 +116,7 @@ class TimerStateHolder @Inject constructor(
         scope.launch {
             settingsDao.getSettings().collect { settings ->
                 settings?.let {
-                    val mode = if (isControlPanelActive || it.useEdgeFocusBoard) {
+                    val mode = if (it.useEdgeFocusBoard) {
                         SessionMode.EDGEFOCUS
                     } else {
                         SessionMode.LOCAL
@@ -145,7 +145,7 @@ class TimerStateHolder @Inject constructor(
                 // 连接时，根据设置决定模式
                 if (isConnected && _state.value.timerState == TimerState.IDLE) {
                     val settings = settingsDao.getSettingsOnce()
-                    val mode = if (isControlPanelActive || settings?.useEdgeFocusBoard == true) {
+                    val mode = if (settings?.useEdgeFocusBoard == true) {
                         SessionMode.EDGEFOCUS
                     } else {
                         SessionMode.LOCAL
@@ -486,11 +486,7 @@ class TimerStateHolder @Inject constructor(
 
     fun enterControlPanelMode() {
         isControlPanelActive = true
-        if (_state.value.timerState == TimerState.IDLE ||
-            _state.value.timerState == TimerState.FINISHED) {
-            _state.update { it.copy(sessionMode = SessionMode.EDGEFOCUS) }
-        }
-        if (bleManager.isConnected()) {
+        if (bleManager.isConnected() && _state.value.sessionMode == SessionMode.EDGEFOCUS) {
             scope.launch { checkBoardSession() }
         }
     }

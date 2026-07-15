@@ -21,6 +21,7 @@ import com.edgefocus.app.data.remote.PushAlert
 import com.edgefocus.app.domain.model.TimerState
 import com.edgefocus.app.domain.repository.ISessionRepository
 import com.edgefocus.app.domain.repository.ISettingsRepository
+import com.edgefocus.app.domain.session.AppSessionCoordinator
 import com.edgefocus.app.service.AppMonitorService
 import com.edgefocus.app.util.TimeUtils
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -91,7 +92,8 @@ class ControlPanelViewModel @Inject constructor(
     private val settingsRepository: ISettingsRepository,
     private val sessionRepository: ISessionRepository,
     private val timerStateHolder: TimerStateHolder,
-    private val bleManager: BleManager
+    private val bleManager: BleManager,
+    private val sessionCoordinator: AppSessionCoordinator
 ) : AndroidViewModel(application) {
 
     private val _uiState = MutableStateFlow(ControlPanelUiState())
@@ -117,7 +119,6 @@ class ControlPanelViewModel @Inject constructor(
         }
 
         viewModelScope.launch {
-            var prevTimerState = TimerState.IDLE
             var wasBoardConnected = false
             timerStateHolder.state.collect { sharedState ->
                 _uiState.update { state ->
@@ -160,33 +161,12 @@ class ControlPanelViewModel @Inject constructor(
                     )
                 }
 
-                if ((prevTimerState == TimerState.IDLE || prevTimerState == TimerState.FINISHED) &&
-                    (sharedState.timerState == TimerState.RUNNING ||
-                        sharedState.timerState == TimerState.PRECHECK ||
-                        sharedState.timerState == TimerState.PAUSED)) {
-                    currentSessionId = sharedState.sessionId ?: currentSessionId ?: "session_${System.currentTimeMillis()}"
-                    sessionStartTime = sharedState.sessionStartTime.takeIf { it > 0L }
-                        ?: sessionStartTime.takeIf { it > 0L }
-                        ?: System.currentTimeMillis()
-                    hasSavedCurrentSession = false
-                }
-
-                if (prevTimerState != TimerState.RUNNING &&
-                    sharedState.timerState == TimerState.RUNNING) {
-                    startAppMonitor()
-                }
-
-                if (prevTimerState != TimerState.FINISHED && sharedState.timerState == TimerState.FINISHED) {
-                    saveFinishedSession()
-                    stopAppMonitor()
-                }
                 if (sharedState.isBoardConnected && !wasBoardConnected) {
                     viewModelScope.launch { loadBoardPreferences() }
                 } else if (!sharedState.isBoardConnected && wasBoardConnected) {
                     _uiState.update { it.copy(arePreferencesLoaded = false) }
                 }
                 wasBoardConnected = sharedState.isBoardConnected
-                prevTimerState = sharedState.timerState
             }
         }
 
@@ -317,24 +297,24 @@ class ControlPanelViewModel @Inject constructor(
 
     fun startSession() {
         val duration = _uiState.value.selectedDuration
-        currentSessionId = "session_${System.currentTimeMillis()}"
-        sessionStartTime = System.currentTimeMillis()
-        hasSavedCurrentSession = false
         _uiState.update { it.copy(distractionCount = 0, phoneDistractionCount = 0) }
-        timerStateHolder.startEdgeFocusSession(duration, currentSessionId!!, sessionStartTime)
+        if (timerStateHolder.getSessionMode() == SessionMode.EDGEFOCUS) {
+            sessionCoordinator.startEdgeFocus(duration)
+        } else {
+            sessionCoordinator.startLocal(duration)
+        }
     }
 
     fun pauseSession() {
-        timerStateHolder.pauseSession()
+        sessionCoordinator.pause()
     }
 
     fun resumeSession() {
-        timerStateHolder.resumeSession()
+        sessionCoordinator.resume()
     }
 
     fun stopSession() {
-        stopAppMonitor()
-        timerStateHolder.stopSession()
+        sessionCoordinator.stop()
     }
 
     fun skipPrecheck() {

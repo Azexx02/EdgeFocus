@@ -32,4 +32,17 @@ class SessionPersistenceStore @Inject constructor(
         database.sessionDao().markSynced(sessionId, boardSessionId)
         database.syncOutboxDao().deleteForSession(sessionId)
     }
+
+    suspend fun saveEdgeFocusCompletion(session: Session) {
+        database.sessionDao().insertSession(session.copy(source = "EDGEFOCUS", synced = true))
+    }
+
+    suspend fun dueUploads(nowMs: Long = System.currentTimeMillis()): List<SyncOutboxEntity> =
+        database.syncOutboxDao().due(nowMs)
+
+    suspend fun recordUploadFailure(
+        sessionId: String,
+        nextAttemptAtMs: Long,
+        error: String
+    ) = database.syncOutboxDao().recordFailure(sessionId, nextAttemptAtMs, error)
 }

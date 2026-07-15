@@ -12,6 +12,7 @@ import com.edgefocus.app.domain.model.SessionType
 import com.edgefocus.app.domain.model.TimerState
 import com.edgefocus.app.domain.repository.ISessionRepository
 import com.edgefocus.app.domain.repository.ISettingsRepository
+import com.edgefocus.app.domain.session.AppSessionCoordinator
 import com.edgefocus.app.service.AppMonitorService
 import com.edgefocus.app.util.TimeUtils
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -44,7 +45,8 @@ class HomeViewModel @Inject constructor(
     application: Application,
     private val settingsRepository: ISettingsRepository,
     private val sessionRepository: ISessionRepository,
-    private val timerStateHolder: TimerStateHolder
+    private val timerStateHolder: TimerStateHolder,
+    private val sessionCoordinator: AppSessionCoordinator
 ) : AndroidViewModel(application) {
 
     private val _uiState = MutableStateFlow(TimerUiState())
@@ -89,7 +91,6 @@ class HomeViewModel @Inject constructor(
         }
 
         viewModelScope.launch {
-            var prevTimerState = TimerState.IDLE
             timerStateHolder.state.collect { sharedState ->
                 _uiState.update { state ->
                     state.copy(
@@ -111,28 +112,6 @@ class HomeViewModel @Inject constructor(
                 }
 
                 // 板端同步启动会话时，自动启动 AppMonitorService
-                if ((prevTimerState == TimerState.IDLE || prevTimerState == TimerState.FINISHED) &&
-                    (sharedState.timerState == TimerState.RUNNING ||
-                        sharedState.timerState == TimerState.PAUSED)
-                    && sharedState.sessionMode == SessionMode.EDGEFOCUS) {
-                    currentSessionId = sharedState.sessionId ?: currentSessionId ?: "session_${System.currentTimeMillis()}"
-                    sessionStartTime = sharedState.sessionStartTime.takeIf { it > 0L }
-                        ?: sessionStartTime.takeIf { it > 0L }
-                        ?: System.currentTimeMillis()
-                    hasSavedCurrentSession = false
-                }
-
-                if (prevTimerState != TimerState.RUNNING &&
-                    sharedState.timerState == TimerState.RUNNING &&
-                    sharedState.sessionMode == SessionMode.EDGEFOCUS) {
-                    startAppMonitor()
-                }
-
-                if (prevTimerState != TimerState.FINISHED && sharedState.timerState == TimerState.FINISHED) {
-                    handleSessionFinished()
-                    stopAppMonitor()
-                }
-                prevTimerState = sharedState.timerState
             }
         }
     }
@@ -145,21 +124,14 @@ class HomeViewModel @Inject constructor(
             return
         }
 
-        currentSessionId = "session_${System.currentTimeMillis()}"
-        sessionStartTime = System.currentTimeMillis()
-        hasSavedCurrentSession = false
-        timerStateHolder.startEdgeFocusSession(workDurationMinutes, currentSessionId!!, sessionStartTime)
+        sessionCoordinator.startEdgeFocus(workDurationMinutes)
     }
 
     /**
      * 启动本地模式会话
      */
     fun startLocalSession() {
-        currentSessionId = "session_${System.currentTimeMillis()}"
-        sessionStartTime = System.currentTimeMillis()
-        hasSavedCurrentSession = false
-        startAppMonitor()
-        timerStateHolder.startLocalSession(workDurationMinutes, currentSessionId!!, sessionStartTime)
+        sessionCoordinator.startLocal(workDurationMinutes)
     }
 
     /**
@@ -178,7 +150,7 @@ class HomeViewModel @Inject constructor(
     fun pauseTimer() {
         val state = _uiState.value.timerState
         if (state == TimerState.RUNNING) {
-            timerStateHolder.pauseSession()
+            sessionCoordinator.pause()
         }
     }
 
@@ -200,7 +172,7 @@ class HomeViewModel @Inject constructor(
             stopAppMonitor()
         }
 
-        timerStateHolder.stopSession()
+        sessionCoordinator.stop()
     }
 
     private fun handleSessionFinished() {
