@@ -262,6 +262,10 @@ class BoardJsonParserTest {
                 "phone_usage_state":"playing",
                 "phone_distraction_level":2,
                 "risk_score":50,
+                "battery_percent":88,
+                "battery_charging":true,
+                "power_source":"external",
+                "power_profile":"home",
                 "elapsed_ms":30000,
                 "remaining_ms":1470000,
                 "target_duration_ms":1500000,
@@ -290,6 +294,10 @@ class BoardJsonParserTest {
         assertEquals("playing", state.phoneUsageState)
         assertEquals(2, state.phoneDistractionLevel)
         assertEquals(50, state.riskScore)
+        assertEquals(88, state.batteryPercent)
+        assertTrue(state.batteryCharging)
+        assertEquals("external", state.powerSource)
+        assertEquals(PowerProfile.HOME, state.powerProfile)
         assertEquals(30_000L, state.elapsedMs)
         assertTrue(state.precheckGuidance!!.contains("lean_left"))
         assertTrue(state.cameraPreview!!.available)
@@ -297,6 +305,20 @@ class BoardJsonParserTest {
         assertEquals("phone", state.outputCapability!!.screenOutputRoute)
         assertEquals(listOf("screen", "sound"), state.outputCapability!!.lastAttemptedChannels)
         assertTrue(state.focusReason!!.contains("phone"))
+    }
+
+    @Test
+    fun parseSessionStateDefaultsFailedBatteryReadToSixtySeven() {
+        val missingBattery = BoardJsonParser.parseSessionState(
+            """{"status":"success","data":{"session_phase":"focusing"}}"""
+        )
+        val invalidBattery = BoardJsonParser.parseSessionState(
+            """{"status":"success","data":{"battery_percent":200,"power_profile":"go"}}"""
+        )
+
+        assertEquals(67, missingBattery.batteryPercent)
+        assertEquals(67, invalidBattery.batteryPercent)
+        assertEquals(PowerProfile.GO, invalidBattery.powerProfile)
     }
 
     @Test

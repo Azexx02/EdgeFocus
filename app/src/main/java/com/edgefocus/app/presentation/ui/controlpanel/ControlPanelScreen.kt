@@ -59,6 +59,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.edgefocus.app.data.remote.BoardSessionPhase
 import com.edgefocus.app.data.remote.ConnectionState
+import com.edgefocus.app.data.remote.PowerProfile
 import com.edgefocus.app.domain.model.TimerState
 import com.edgefocus.app.presentation.ui.home.DurationSelectorRing
 import com.edgefocus.app.presentation.ui.home.PomodoroTimer
@@ -118,6 +119,17 @@ fun ControlPanelScreen(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
+                if (uiState.isBoardConnected) {
+                    Text(
+                        text = powerStatusText(
+                            profile = uiState.boardPowerProfile,
+                            batteryPercent = uiState.boardBatteryPercent,
+                            charging = uiState.boardBatteryCharging
+                        ),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
                 Icon(
                     Icons.Default.BluetoothConnected,
                     contentDescription = "Bluetooth",
@@ -488,9 +500,19 @@ private fun StatsPage(
                     )
                     Spacer(modifier = Modifier.height(8.dp))
                     StatRow("会话 ID", uiState.sessionId?.takeLast(12) ?: "尚未开始")
-                    StatRow("主机 active", yesNo(uiState.boardSessionActive))
+                        StatRow("主机 active", yesNo(uiState.boardSessionActive))
                         StatRow("主机 paused", yesNo(uiState.boardSessionPaused))
                         StatRow("预检完成", yesNo(uiState.calibrationCompleted))
+                        if (uiState.isBoardConnected) {
+                            StatRow(
+                                "电源状态",
+                                powerStatusText(
+                                    uiState.boardPowerProfile,
+                                    uiState.boardBatteryPercent,
+                                    uiState.boardBatteryCharging
+                                )
+                            )
+                        }
                         StatRow("行为状态", focusStateLabel(uiState.focusState))
                         if (uiState.phoneSignal) {
                             StatRow("手机状态", phoneUsageStateLabel(uiState.phoneUsageState))
@@ -878,6 +900,20 @@ private fun compactJsonText(value: String): String {
 }
 
 private fun yesNo(value: Boolean): String = if (value) "是" else "否"
+
+private fun powerStatusText(
+    profile: PowerProfile,
+    batteryPercent: Int,
+    charging: Boolean
+): String {
+    val profileText = when (profile) {
+        PowerProfile.HOME -> "HOME"
+        PowerProfile.GO -> "GO"
+    }
+    val percent = batteryPercent.takeIf { it in 0..100 } ?: 67
+    val chargingText = if (charging) "+" else ""
+    return "$profileText $percent%$chargingText"
+}
 
 @Composable
 private fun HardwareSlider(

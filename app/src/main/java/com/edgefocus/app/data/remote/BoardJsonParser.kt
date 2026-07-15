@@ -52,6 +52,10 @@ data class BoardSessionState(
     val phoneDistractionLevel: Int = -1,
     val riskScore: Int = 0,
     val commandLevel: Int = 0,
+    val batteryPercent: Int = 67,
+    val batteryCharging: Boolean = false,
+    val powerSource: String = "battery",
+    val powerProfile: PowerProfile = PowerProfile.GO,
     val elapsedMs: Long = 0L,
     val remainingMs: Long = 0L,
     val hasRemainingMs: Boolean = false,
@@ -271,6 +275,10 @@ object BoardJsonParser {
             phoneDistractionLevel = data.optInt("phone_distraction_level", -1),
             riskScore = data.optInt("risk_score", 0),
             commandLevel = data.optInt("command_level", 0),
+            batteryPercent = data.optBatteryPercent("battery_percent"),
+            batteryCharging = data.optBoolean("battery_charging", false),
+            powerSource = data.optJsonString("power_source") ?: "battery",
+            powerProfile = PowerProfile.fromWire(data.optJsonString("power_profile")) ?: PowerProfile.GO,
             elapsedMs = data.optLong("elapsed_ms", 0L),
             remainingMs = data.optLong("remaining_ms", 0L),
             hasRemainingMs = hasRemainingMs,
@@ -477,6 +485,11 @@ object BoardJsonParser {
 
     private fun JSONObject.optIntOrNull(name: String): Int? {
         return if (has(name) && !isNull(name)) optInt(name) else null
+    }
+
+    private fun JSONObject.optBatteryPercent(name: String): Int {
+        val value = optIntOrNull(name) ?: return 67
+        return value.takeIf { it in 0..100 } ?: 67
     }
 
     private fun JSONObject.optStringList(name: String): List<String> {

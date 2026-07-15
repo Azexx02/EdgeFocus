@@ -7,6 +7,7 @@ import com.edgefocus.app.data.SessionMode
 import com.edgefocus.app.data.TimerStateHolder
 import com.edgefocus.app.data.local.entity.Session
 import com.edgefocus.app.data.remote.LocalSessionUpload
+import com.edgefocus.app.data.remote.PowerProfile
 import com.edgefocus.app.domain.model.SessionType
 import com.edgefocus.app.domain.model.TimerState
 import com.edgefocus.app.domain.repository.ISessionRepository
@@ -32,7 +33,10 @@ data class TimerUiState(
     val isSyncingWithBoard: Boolean = false,
     val distractionCount: Int = 0,
     val reminderCount: Int = 0,
-    val phoneDistractionCount: Int = 0
+    val phoneDistractionCount: Int = 0,
+    val boardBatteryPercent: Int = 67,
+    val boardBatteryCharging: Boolean = false,
+    val boardPowerProfile: PowerProfile = PowerProfile.GO
 )
 
 @HiltViewModel
@@ -99,7 +103,10 @@ class HomeViewModel @Inject constructor(
                         isSyncingWithBoard = sharedState.isSyncingWithBoard,
                         distractionCount = sharedState.distractionCount,
                         reminderCount = sharedState.reminderCount,
-                        phoneDistractionCount = sharedState.phoneDistractionCount
+                        phoneDistractionCount = sharedState.phoneDistractionCount,
+                        boardBatteryPercent = sharedState.boardBatteryPercent,
+                        boardBatteryCharging = sharedState.boardBatteryCharging,
+                        boardPowerProfile = sharedState.boardPowerProfile
                     )
                 }
 

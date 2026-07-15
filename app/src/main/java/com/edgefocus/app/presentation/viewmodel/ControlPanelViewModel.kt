@@ -16,6 +16,7 @@ import com.edgefocus.app.data.remote.CameraPreviewImage
 import com.edgefocus.app.data.remote.GimbalStatus
 import com.edgefocus.app.data.remote.NotificationMode
 import com.edgefocus.app.data.remote.OutputCapability
+import com.edgefocus.app.data.remote.PowerProfile
 import com.edgefocus.app.data.remote.PushAlert
 import com.edgefocus.app.domain.model.TimerState
 import com.edgefocus.app.domain.repository.ISessionRepository
@@ -63,6 +64,10 @@ data class ControlPanelUiState(
     val phoneDistractionLevel: Int = -1,
     val riskScore: Int = 0,
     val commandLevel: Int = 0,
+    val boardBatteryPercent: Int = 67,
+    val boardBatteryCharging: Boolean = false,
+    val boardPowerSource: String = "battery",
+    val boardPowerProfile: PowerProfile = PowerProfile.GO,
     val elapsedMs: Long = 0L,
     val precheck: BoardPrecheck? = null,
     val outputCapability: OutputCapability? = null,
@@ -137,6 +142,10 @@ class ControlPanelViewModel @Inject constructor(
                         phoneDistractionLevel = sharedState.phoneDistractionLevel,
                         riskScore = sharedState.riskScore,
                         commandLevel = sharedState.commandLevel,
+                        boardBatteryPercent = sharedState.boardBatteryPercent,
+                        boardBatteryCharging = sharedState.boardBatteryCharging,
+                        boardPowerSource = sharedState.boardPowerSource,
+                        boardPowerProfile = sharedState.boardPowerProfile,
                         elapsedMs = sharedState.elapsedMs,
                         precheck = sharedState.precheck,
                         outputCapability = sharedState.outputCapability,
@@ -375,12 +384,13 @@ class ControlPanelViewModel @Inject constructor(
             timerStateHolder.getBoardTotalDuration()
         } else {
             ((state.totalTime - state.timeRemaining) / 1000).toInt()
-        }
+        }.coerceAtLeast(0)
         val focusSeconds = if (isEdgeFocus && timerStateHolder.getBoardFocusDuration() > 0) {
             timerStateHolder.getBoardFocusDuration()
         } else {
             elapsedSeconds
-        }
+        }.coerceAtLeast(0)
+        val localDistractionCount = maxOf(state.distractionCount, state.phoneDistractionCount)
 
         viewModelScope.launch {
             sessionRepository.insertSession(
@@ -390,14 +400,14 @@ class ControlPanelViewModel @Inject constructor(
                     endTime = System.currentTimeMillis(),
                     duration = elapsedSeconds,
                     focusDuration = focusSeconds,
-                    distractionCount = if (isEdgeFocus) timerStateHolder.getBoardSessionDistractionCount() else 0,
+                    distractionCount = if (isEdgeFocus) timerStateHolder.getBoardSessionDistractionCount() else localDistractionCount,
                     reminderCount = if (isEdgeFocus) timerStateHolder.getBoardSessionReminderCount() else 0,
                     phoneDistractionCount = if (isEdgeFocus) {
                         timerStateHolder.getBoardSessionPhoneDistractionCount()
                     } else {
                         state.phoneDistractionCount
                     },
-                    feedback = "just_right",
+                    feedback = null,
                     boardSessionId = if (isEdgeFocus) sessionId else null,
                     source = if (isEdgeFocus) "EDGEFOCUS" else "LOCAL",
                     synced = isEdgeFocus && hasBoardReport

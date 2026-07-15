@@ -13,6 +13,7 @@ import com.edgefocus.app.data.remote.ConnectionState
 import com.edgefocus.app.data.remote.GimbalStatus
 import com.edgefocus.app.data.remote.LocalSessionUpload
 import com.edgefocus.app.data.remote.OutputCapability
+import com.edgefocus.app.data.remote.PowerProfile
 import com.edgefocus.app.data.remote.PushAlert
 import com.edgefocus.app.data.remote.PushEventHandler
 import com.edgefocus.app.domain.model.FocusState
@@ -63,6 +64,10 @@ data class SharedTimerState(
     val phoneDistractionLevel: Int = -1,
     val riskScore: Int = 0,
     val commandLevel: Int = 0,
+    val boardBatteryPercent: Int = 67,
+    val boardBatteryCharging: Boolean = false,
+    val boardPowerSource: String = "battery",
+    val boardPowerProfile: PowerProfile = PowerProfile.GO,
     val elapsedMs: Long = 0L,
     val precheck: BoardPrecheck? = null,
     val outputCapability: OutputCapability? = null,
@@ -129,7 +134,13 @@ class TimerStateHolder @Inject constructor(
         scope.launch {
             bleManager.connectionState.collect { connectionState ->
                 val isConnected = connectionState == ConnectionState.CONNECTED
-                _state.update { it.copy(isBoardConnected = isConnected) }
+                _state.update {
+                    if (isConnected) {
+                        it.copy(isBoardConnected = true)
+                    } else {
+                        it.copy(isBoardConnected = false)
+                    }
+                }
 
                 // 连接时，根据设置决定模式
                 if (isConnected && _state.value.timerState == TimerState.IDLE) {
@@ -192,6 +203,9 @@ class TimerStateHolder @Inject constructor(
                 if (state.sessionPhase == BoardSessionPhase.IDLE && isEdgeFocusActiveLocally()) {
                     handleBoardIdleWhileLocalActive("push_state_idle")
                     return
+                }
+                if (state.sessionPhase == BoardSessionPhase.IDLE) {
+                    applyBoardDeviceStatus(state)
                 }
                 if (state.sessionPhase != BoardSessionPhase.IDLE ||
                     state.hasRemainingMs ||
@@ -826,6 +840,18 @@ class TimerStateHolder @Inject constructor(
         }
     }
 
+    private fun applyBoardDeviceStatus(boardState: BoardSessionState) {
+        _state.update {
+            it.copy(
+                boardBatteryPercent = boardState.batteryPercent,
+                boardBatteryCharging = boardState.batteryCharging,
+                boardPowerSource = boardState.powerSource,
+                boardPowerProfile = boardState.powerProfile,
+                outputCapability = boardState.outputCapability ?: it.outputCapability
+            )
+        }
+    }
+
     private fun applyBoardSessionState(
         boardState: BoardSessionState,
         fallbackDurationMinutes: Int = _state.value.targetDurationMinutes
@@ -878,6 +904,10 @@ class TimerStateHolder @Inject constructor(
                 phoneDistractionLevel = boardState.phoneDistractionLevel,
                 riskScore = boardState.riskScore,
                 commandLevel = boardState.commandLevel,
+                boardBatteryPercent = boardState.batteryPercent,
+                boardBatteryCharging = boardState.batteryCharging,
+                boardPowerSource = boardState.powerSource,
+                boardPowerProfile = boardState.powerProfile,
                 elapsedMs = boardState.elapsedMs.takeIf { elapsed -> elapsed > 0L }
                     ?: (targetMs - remainingMs).coerceAtLeast(0L),
                 precheck = boardState.precheck,
@@ -930,6 +960,7 @@ class TimerStateHolder @Inject constructor(
                     handleBoardIdleWhileLocalActive("poll_idle")
                     return@onSuccess
                 }
+                applyBoardDeviceStatus(boardState)
 
                 val isActive = stateData.optBoolean("active", false)
                 val focusState = stateData.optInt("focus_state", 0)
@@ -971,6 +1002,10 @@ class TimerStateHolder @Inject constructor(
                             phoneDistractionLevel = boardState.phoneDistractionLevel,
                             riskScore = boardState.riskScore,
                             commandLevel = boardState.commandLevel,
+                            boardBatteryPercent = boardState.batteryPercent,
+                            boardBatteryCharging = boardState.batteryCharging,
+                            boardPowerSource = boardState.powerSource,
+                            boardPowerProfile = boardState.powerProfile,
                             elapsedMs = effectiveElapsedMs,
                             outputCapability = boardState.outputCapability ?: it.outputCapability,
                             cameraPreview = boardState.cameraPreview ?: it.cameraPreview,
@@ -1088,6 +1123,10 @@ class TimerStateHolder @Inject constructor(
                     phoneDistractionLevel = boardState.phoneDistractionLevel,
                     riskScore = boardState.riskScore,
                     commandLevel = boardState.commandLevel,
+                    boardBatteryPercent = boardState.batteryPercent,
+                    boardBatteryCharging = boardState.batteryCharging,
+                    boardPowerSource = boardState.powerSource,
+                    boardPowerProfile = boardState.powerProfile,
                     elapsedMs = boardState.elapsedMs.takeIf { elapsed -> elapsed > 0L }
                         ?: (boardTargetDurationMs - boardRemainingMs).coerceAtLeast(0L),
                     outputCapability = boardState.outputCapability ?: it.outputCapability,
