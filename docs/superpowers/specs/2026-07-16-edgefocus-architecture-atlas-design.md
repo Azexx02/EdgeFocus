@@ -83,7 +83,7 @@ flowchart TB
 
 回答“分神如何判定”。
 
-必须包含：CameraFrame、质量门、YOLO11n Pose、主体选择、17 keypoints、58-d features、2 秒/16 step 时序 Prone MLP、Presence、PhoneFact、FusionCore、三级等级、reasons/episode、近 30 秒证据时间线。
+必须包含：CameraFrame、质量门、YOLO11n Pose、主体选择、17 keypoints、58-d features、2 秒/16 step 时序 Prone MLP、Presence、PhoneFact、FusionCore、Level 0 正常 + Level 1–3 三级分神、reasons/episode、近 30 秒证据时间线。
 
 明确表达：手机学习类只弱化手机分支，不覆盖独立视觉证据；NOT_PRESENT 和 UNKNOWN 不产生分神提醒。
 
@@ -97,7 +97,7 @@ flowchart TB
 - NPU：Pose 感知；
 - M33：100 ms 风扇实时安全岛；
 - G431：云台电机确定性执行平面；
-- A35↔M33 RPMsg、A35↔G431 UART4/Enable/Fault；
+- A35↔M33 RPMsg；A35↔G431 仅 UART4 双向，PD7 Enable 为 A35→G431，PD6 Fault 为 G431→A35；
 - 任一协处理器故障不拖垮基础会话主链。
 
 ### A4 跨设备可靠协同
@@ -196,13 +196,13 @@ C0 是不计入专题数量的唯一完整系统母图。C 套另含以下 12 �
 
 | 图 | 唯一回答的问题 | 必选分组、节点与方向 | 禁止内容 | 方向/规模 | 必选量化标签 |
 |---|---|---|---|---|---|
-| C0 | 整个系统如何闭环 | 用户/App/展示页 → A35/NPU/M33/G431 → 摄像头/云台/风扇/供电/手环；感知→决策→提醒与控制 | 代码文件、旧兼容字段、Demo 伪装正式链 | LR，≤24 节点 | 1.2 TOPS@800MHz、2s phone heartbeat、100ms fan loop |
+| C0 | 整个系统如何闭环 | 摄像头→A35/NPU；STUSB4500→A35 策略；A35→G431→云台；A35↔M33→风扇；A35↔App；A35→手环；A35→浏览器展示；感知→决策→提醒与控制 | 代码文件、旧兼容字段、Demo 伪装正式链 | LR，≤24 节点 | 1.2 TOPS@800MHz、2s phone heartbeat、100ms fan loop |
 | C01 | 用户如何使用产品 | App 会话/PRECHECK/提醒/记录，主机权威会话，手环执行，浏览器只读展示 | 旧板载 UI、App 自算最终等级 | LR，≤14 | 三级分神、30s 展示时间线 |
 | C02 | 软件如何分域和传递类型化数据 | 常驻域/SessionRuntime/DemoRuntime；CameraFrame/PhoneFact/Assessment/Snapshot；资源租约 | 把 SystemStateStore 画成新核心 | TB，≤22 | FrameQueue=3、Home/Go cadence |
 | C03 | 会话阶段如何控制资源 | IDLE/PRECHECK/FOCUSING/PAUSED/ENDING 与相机/NPU/Fusion/提醒/存储开关 | PRECHECK 计时/入库/手机融合 | LR 状态机+表，≤10 状态 | PRECHECK 250ms、PAUSED 1000ms |
 | C04 | 分神如何从证据产生 | Camera→quality→Pose→subject→58d→Prone；Presence/Phone→Fusion→level/reasons/episode | 困倦、视觉手机判断、把 UNKNOWN 当专注 | LR，≤18 | 17 keypoints、58d、2s/16 steps、level 0+1–3 |
 | C05 | 手机与手环如何可靠协同 | 板端 Server↔App Client；板端 Client↔Band Server；hello/state/heartbeat/ACK/outbox/TTL/retry | 画反 GATT 角色、把手环接到 App | 双泳道序列/流图，≤20 | 2s/5s、10s TTL、ACK 3 stages |
-| C06 | 多计算域为何这样分工 | A35↔NPU、A35↔M33 RPMsg、A35↔G431 UART/PD6/PD7；故障隔离 | M33 控云台/供电，A35 生成电机 PWM | TB 四泳道，≤18 | NPU 1.2 TOPS@800MHz、M33 100ms、RPMsg 1Hz |
+| C06 | 多计算域为何这样分工 | A35→NPU；A35↔M33 RPMsg；UART4 双向；PD7 Enable 为 A35→G431；PD6 Fault 为 G431→A35；故障隔离 | M33 控云台/供电，A35 生成电机 PWM | TB 四泳道，≤18 | NPU 1.2 TOPS@800MHz、M33 100ms、RPMsg 1Hz |
 | C07 | 云台如何从视觉到安全执行 | 唯一 Camera→人物目标→PRECHECK/追踪→HW Service↔G431→电机；PD7/PD6/STOP/Fault/恢复 | PD4 画复位、第二相机、原始 UART 暴露 | LR 闭环+安全支路，≤20 | UART 115200、Fault 低有效 |
 | C08 | 风扇如何在异核失联时安全 | cpu-thermal→bridge↔RPMsg→M33→PB10→fan→PB11；loader/health/fallback 互斥接管 | Linux 与 M33 同时控制 PWM | LR 主闭环+下方 fallback，≤18 | 100ms、1Hz、3s TTL、约6000 RPM安全档 |
 | C09 | 供电如何改变性能而不影响安全 | STUSB→去抖→P/A/U→profile policy→Home/Go→Vision cadence；manual override/epoch | 电量、电压、UNKNOWN=ABSENT | LR 策略图，≤16 | 3 samples×250ms、Home≈4FPS、Go≈3FPS |
@@ -351,7 +351,7 @@ C11 固定使用六列：`故障域 / 检测信号 / 立即动作 / 保留能力
 | App BLE | 断连、ACK 超时 | 事件进入 outbox，主机会话继续 | 计时、推理、存储、手环 | App 重连中 | 重连后 hello/get-state/幂等补发，A35+App |
 | 手环 BLE | 连接失败、10 s TTL 到期 | 队列重试/丢弃过期低优先级提醒 | App 提醒和会话全链路 | 手环未连接 | 周期搜索，等级覆盖队列，A35 负责 |
 | SQLite | 事务失败、磁盘错误 | 保留内存 snapshot，禁止伪报已落盘 | 实时判定与提醒 | 记录保存异常 | 限次重试并上报，Storage/A35 负责 |
-| G431 / Fault | PD6 低、UART 连续失败、对齐失败 | PD7 Enable 拉低、STOP、停止跟踪 | 固定相机视觉与正式会话 | 云台已降级 | 低频 PING/STAT/FAULT 检查，恢复后重新对齐，A35+G431 |
+| G431 / Fault | PD6 低、UART 连续失败、对齐失败 | G431 本地先停驱动；A35 立即撤销 PD7 并停止下发目标 | 固定相机视觉与正式会话 | 云台已降级 | 低频 PING/STAT/FAULT 检查，恢复后重新对齐，A35+G431；仅正常结束或链路仍可通信时采用 STOP→OK→Enable=0 |
 | M33 / RPMsg | 3 s TTL、remoteproc/bridge health 失败 | M33 安全高转或互斥切换 Linux fallback | 会话、AI 与硬件温控 | 散热安全模式 | healthcheck 恢复 M33 后再移交，M33/A35 |
 | STUSB4500 | I2C 失败、样本不一致 | 状态置 UNKNOWN；无覆盖时采用 Go | 全部安全链路 | 供电状态未知/Go | 周期采样；确认插拔事件清除手动覆盖，Power/A35 |
 | Demo 资源冲突 | Camera/NPU lease 获取失败 | Demo 不启动或切换 Frontend replay | 正式会话完全保留 | 演示资源占用/回放 | 正式资源释放后再试，DemoRuntime |
