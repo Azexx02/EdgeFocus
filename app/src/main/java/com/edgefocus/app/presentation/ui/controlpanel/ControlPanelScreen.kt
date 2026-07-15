@@ -1,7 +1,5 @@
 package com.edgefocus.app.presentation.ui.controlpanel
 
-import android.media.AudioManager
-import android.media.ToneGenerator
 import android.graphics.BitmapFactory
 import android.util.Base64
 import androidx.compose.foundation.Image
@@ -48,7 +46,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -86,14 +83,6 @@ fun ControlPanelScreen(
     val context = LocalContext.current
     val effectiveConnectionState = bleViewModel.getEffectiveConnectionState()
     val alert = uiState.lastAlert
-
-    LaunchedEffect(alert) {
-        if (alert?.phoneActions?.any { it.equals("SOUND", ignoreCase = true) || it.equals("sound", ignoreCase = true) } == true) {
-            val volume = ((alert.soundVolume ?: uiState.soundVolume).coerceIn(0f, 1f) * 100).toInt()
-            ToneGenerator(AudioManager.STREAM_NOTIFICATION, volume)
-                .startTone(ToneGenerator.TONE_PROP_BEEP, 180)
-        }
-    }
 
     Column(
         modifier = Modifier

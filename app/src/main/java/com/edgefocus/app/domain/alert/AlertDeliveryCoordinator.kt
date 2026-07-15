@@ -97,15 +97,31 @@ class AlertDeliveryCoordinator @Inject constructor(
                 val data = JSONObject(event.payloadJson).optJSONObject("data") ?: JSONObject()
                 val alert = BoardJsonParser.parsePushAlert(data)
                 val settings = settingsDao.getSettingsOnce()
-                if (settings?.appScreenAlertsEnabled != false &&
+                val overlayDelivered = settings?.appScreenAlertsEnabled != false &&
                     alert.phoneActions.any { it.equals("screen", ignoreCase = true) }
-                ) {
+                if (overlayDelivered) {
                     timerStateHolder.applyReliableAlert(alert)
                     _activeAlert.value = ActiveHostAlert(event.eventId, event.sessionId, alert)
                 }
-                deliverNotification(event.eventId, alert, settings?.appSoundAlertsEnabled != false)
+                val notificationDelivered = runCatching {
+                    deliverNotification(event.eventId, alert, settings?.appSoundAlertsEnabled != false)
+                }.getOrDefault(false)
+                if (!overlayDelivered && !notificationDelivered) {
+                    inbox.markDeliveryUncertain(event.eventId, "no_phone_alert_route_delivered")
+                    return
+                }
             }
-            ReliableEventType.SESSION_END -> timerStateHolder.applyReliableSessionEnd(event.payloadJson)
+            ReliableEventType.SESSION_END -> {
+                try {
+                    timerStateHolder.applyReliableSessionEnd(event.payloadJson)
+                } catch (error: Exception) {
+                    inbox.markDeliveryUncertain(
+                        event.eventId,
+                        error.message ?: "session_end_delivery_failed"
+                    )
+                    return
+                }
+            }
         }
         inbox.markPresented(claimed.eventId)
         advanceAndFlush(event, EventAckStage.PRESENTED)
@@ -142,11 +158,15 @@ class AlertDeliveryCoordinator @Inject constructor(
         }
     }
 
-    private suspend fun deliverNotification(eventId: String, alert: PushAlert, soundEnabled: Boolean) {
+    private suspend fun deliverNotification(
+        eventId: String,
+        alert: PushAlert,
+        soundEnabled: Boolean
+    ): Boolean {
         val settings = settingsDao.getSettingsOnce()
         val actions = alert.phoneActions.map { it.lowercase() }.toSet()
-        if ("screen" !in actions && "sound" !in actions && "vibrate" !in actions) return
-        if (settings?.appScreenAlertsEnabled == false && settings.appSoundAlertsEnabled == false) return
+        if ("screen" !in actions && "sound" !in actions && "vibrate" !in actions) return true
+        if (settings?.appScreenAlertsEnabled == false && settings.appSoundAlertsEnabled == false) return false
 
         val intent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -170,6 +190,7 @@ class AlertDeliveryCoordinator @Inject constructor(
             .build()
         context.getSystemService(NotificationManager::class.java)
             .notify(eventId.hashCode(), notification)
+        return true
     }
 
     private fun createNotificationChannel() {

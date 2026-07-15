@@ -34,7 +34,7 @@ class SessionPersistenceStore @Inject constructor(
     }
 
     suspend fun saveEdgeFocusCompletion(session: Session) {
-        database.sessionDao().insertSession(session.copy(source = "EDGEFOCUS", synced = true))
+        database.sessionDao().insertSession(session.copy(source = "EDGEFOCUS"))
     }
 
     suspend fun dueUploads(nowMs: Long = System.currentTimeMillis()): List<SyncOutboxEntity> =

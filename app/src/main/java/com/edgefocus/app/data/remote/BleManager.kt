@@ -8,6 +8,7 @@ import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothGattDescriptor
 import android.bluetooth.BluetoothManager
+import android.bluetooth.BluetoothStatusCodes
 import android.bluetooth.le.ScanFilter
 import android.bluetooth.le.ScanCallback
 import android.bluetooth.le.ScanResult
@@ -33,6 +34,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.CopyOnWriteArrayList
 import javax.inject.Inject
 import javax.inject.Singleton
+import androidx.annotation.RequiresApi
 import kotlin.coroutines.resume
 
 enum class ConnectionState {
@@ -313,6 +315,7 @@ class BleManager @Inject constructor(
             discoverServices(gatt)
         }
 
+        @SuppressLint("MissingPermission")
         override fun onServicesDiscovered(gatt: BluetoothGatt, status: Int) {
             if (!isCurrentGatt(gatt)) return
             if (status == BluetoothGatt.GATT_SUCCESS) {
@@ -526,16 +529,23 @@ class BleManager @Inject constructor(
         gatt: BluetoothGatt,
         descriptor: BluetoothGattDescriptor
     ): Boolean {
-        return if (BleGattConnectionPolicy.shouldUseValueBasedDescriptorWrite(Build.VERSION.SDK_INT)) {
-            gatt.writeDescriptor(
-                descriptor,
-                BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
-            ) == BLUETOOTH_STATUS_SUCCESS
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            writeNotifyDescriptorApi33(gatt, descriptor)
         } else {
             descriptor.value = BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
             gatt.writeDescriptor(descriptor)
         }
     }
+
+    @RequiresApi(Build.VERSION_CODES.TIRAMISU)
+    @SuppressLint("MissingPermission")
+    private fun writeNotifyDescriptorApi33(
+        gatt: BluetoothGatt,
+        descriptor: BluetoothGattDescriptor
+    ): Boolean = gatt.writeDescriptor(
+        descriptor,
+        BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+    ) == BluetoothStatusCodes.SUCCESS
 
     @SuppressLint("MissingPermission")
     private fun failGattInitialization(gatt: BluetoothGatt, message: String) {
@@ -615,6 +625,7 @@ class BleManager @Inject constructor(
         }
     }
 
+    @SuppressLint("MissingPermission")
     private suspend fun sendDataAndAwaitLocked(data: ByteArray): Result<ByteArray> {
         val originalJson = dataToString(data)
 

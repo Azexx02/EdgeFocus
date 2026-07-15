@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -41,6 +42,8 @@ class AppSessionCoordinator @Inject constructor(
     private var started = false
     private var runtime: LocalSessionRuntime? = null
     private var monitorRunning = false
+    @Volatile
+    private var completionInProgress = false
     private var previousTimerState = TimerState.IDLE
 
     val timerState: StateFlow<SharedTimerState> = timerStateHolder.state
@@ -51,7 +54,7 @@ class AppSessionCoordinator @Inject constructor(
         if (started) return
         started = true
         scope.launch {
-            timerStateHolder.state.collectLatest { state ->
+            timerStateHolder.state.collect { state ->
                 observeTimerState(state)
             }
         }
@@ -80,7 +83,14 @@ class AppSessionCoordinator @Inject constructor(
     fun stop() {
         val state = timerStateHolder.state.value
         if (state.sessionMode == SessionMode.LOCAL && state.timerState in ACTIVE_STATES) {
-            scope.launch { persistCompletion(state, forceLocalStop = true) }
+            completionInProgress = true
+            scope.launch {
+                try {
+                    persistCompletion(state, forceLocalStop = true)
+                } finally {
+                    completionInProgress = false
+                }
+            }
         }
         timerStateHolder.stopSession()
     }
@@ -91,7 +101,10 @@ class AppSessionCoordinator @Inject constructor(
             activeOwner = current?.takeIf { !it.saved }?.owner,
             requestedOwner = requestedOwner
         )
-        if (current != null && !current.saved) return
+        if (current != null && !current.saved &&
+            (timerStateHolder.state.value.timerState in ACTIVE_STATES ||
+                timerStateHolder.state.value.isSyncingWithBoard || completionInProgress)
+        ) return
         val now = System.currentTimeMillis()
         val sessionId = "session_$now"
         runtime = LocalSessionRuntime(sessionId, owner, now)
@@ -114,8 +127,18 @@ class AppSessionCoordinator @Inject constructor(
         if (state.timerState == TimerState.RUNNING && previousTimerState != TimerState.RUNNING) {
             startMonitor(state.sessionId ?: runtime?.sessionId)
         }
+        val active = runtime
+        val canPersistFinished = active?.saved == false &&
+            (active.owner == SessionMode.LOCAL || timerStateHolder.hasBoardSessionReport())
+        if (state.timerState == TimerState.FINISHED && canPersistFinished && !completionInProgress) {
+            completionInProgress = true
+            try {
+                persistCompletion(state)
+            } finally {
+                completionInProgress = false
+            }
+        }
         if (state.timerState == TimerState.FINISHED && previousTimerState != TimerState.FINISHED) {
-            persistCompletion(state)
             stopMonitor()
         }
         if (state.timerState == TimerState.IDLE && previousTimerState in ACTIVE_STATES) {
@@ -175,8 +198,10 @@ class AppSessionCoordinator @Inject constructor(
             if (owner == SessionMode.LOCAL) {
                 val upload = session.toUpload()
                 persistenceStore.saveLocalCompletion(session, upload.toJson().toString(), end)
-            } else if (!forceLocalStop) {
+            } else if (!forceLocalStop && timerStateHolder.hasBoardSessionReport()) {
                 persistenceStore.saveEdgeFocusCompletion(session)
+            } else {
+                return
             }
             runtime = active.copy(saved = true)
         }
@@ -195,6 +220,19 @@ class AppSessionCoordinator @Inject constructor(
                 return@forEach
             }
             bleManager.uploadLocalSession(upload).onSuccess { response ->
+                val acceptance = runCatching {
+                    com.edgefocus.app.data.ble.HostJsonCodec.parseBusinessAcceptance(
+                        String(response, Charsets.UTF_8)
+                    )
+                }.getOrNull()
+                if (acceptance?.accepted != true) {
+                    persistenceStore.recordUploadFailure(
+                        item.sessionId,
+                        System.currentTimeMillis() + retryDelayMs(item.attemptCount),
+                        acceptance?.error ?: "upload_rejected"
+                    )
+                    return@onSuccess
+                }
                 val boardId = runCatching {
                     JSONObject(String(response, Charsets.UTF_8)).optJSONObject("data")
                         ?.optString("session_id")
