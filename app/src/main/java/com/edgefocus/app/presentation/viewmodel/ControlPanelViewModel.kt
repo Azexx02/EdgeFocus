@@ -22,6 +22,8 @@ import com.edgefocus.app.domain.model.TimerState
 import com.edgefocus.app.domain.repository.ISessionRepository
 import com.edgefocus.app.domain.repository.ISettingsRepository
 import com.edgefocus.app.domain.session.AppSessionCoordinator
+import com.edgefocus.app.domain.alert.AlertDeliveryCoordinator
+import com.edgefocus.app.domain.precheck.PrecheckController
 import com.edgefocus.app.service.AppMonitorService
 import com.edgefocus.app.util.TimeUtils
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -93,7 +95,9 @@ class ControlPanelViewModel @Inject constructor(
     private val sessionRepository: ISessionRepository,
     private val timerStateHolder: TimerStateHolder,
     private val bleManager: BleManager,
-    private val sessionCoordinator: AppSessionCoordinator
+    private val sessionCoordinator: AppSessionCoordinator,
+    private val alertDeliveryCoordinator: AlertDeliveryCoordinator,
+    private val precheckController: PrecheckController
 ) : AndroidViewModel(application) {
 
     private val _uiState = MutableStateFlow(ControlPanelUiState())
@@ -318,11 +322,11 @@ class ControlPanelViewModel @Inject constructor(
     }
 
     fun skipPrecheck() {
-        timerStateHolder.skipPrecheck()
+        runPrecheckCommand { precheckController.confirmPositionAndContinue() }
     }
 
     fun skipCalibration() {
-        timerStateHolder.skipCalibration()
+        runPrecheckCommand { precheckController.skipAutoAdjustAndContinue() }
     }
 
     fun refreshCameraPreview() {
@@ -341,16 +345,29 @@ class ControlPanelViewModel @Inject constructor(
             deltaY > 0 -> "nudge_down"
             else -> return
         }
-        val step = maxOf(kotlin.math.abs(deltaX), kotlin.math.abs(deltaY)).coerceIn(1, 8)
-        timerStateHolder.moveGimbal(action = action, stepDeg = step)
+        val direction = when (action) {
+            "nudge_left" -> "LEFT"
+            "nudge_right" -> "RIGHT"
+            "nudge_up" -> "UP"
+            else -> "DOWN"
+        }
+        runPrecheckCommand { precheckController.nudge(direction) }
     }
 
     fun stopGimbal() {
-        timerStateHolder.moveGimbal(action = "stop", speed = 10)
+        runPrecheckCommand { precheckController.stop() }
     }
 
     fun centerGimbal() {
-        timerStateHolder.moveGimbal(action = "center_x", speed = 10)
+        runPrecheckCommand { precheckController.center() }
+    }
+
+    private fun runPrecheckCommand(block: suspend () -> Result<Unit>) {
+        viewModelScope.launch {
+            block().onFailure { error ->
+                _uiState.update { it.copy(boardErrorMessage = error.message ?: "主机预检操作失败") }
+            }
+        }
     }
 
     private fun saveFinishedSession() {
@@ -423,7 +440,11 @@ class ControlPanelViewModel @Inject constructor(
     }
 
     fun dismissAlert() {
-        timerStateHolder.clearAlert()
+        if (alertDeliveryCoordinator.activeAlert.value != null) {
+            alertDeliveryCoordinator.userAcknowledgeActiveAlert()
+        } else {
+            timerStateHolder.clearAlert()
+        }
     }
 
     override fun onCleared() {

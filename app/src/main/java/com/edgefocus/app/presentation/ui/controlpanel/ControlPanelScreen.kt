@@ -2,6 +2,9 @@ package com.edgefocus.app.presentation.ui.controlpanel
 
 import android.media.AudioManager
 import android.media.ToneGenerator
+import android.graphics.BitmapFactory
+import android.util.Base64
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -17,6 +20,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
@@ -47,10 +51,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -390,6 +397,23 @@ private fun PrecheckPage(
                 }
                 val preview = uiState.cameraPreview
                 if (preview?.available == true) {
+                    val bitmap = remember(preview.sequence, preview.dataBase64) {
+                        runCatching {
+                            val encoded = preview.dataBase64
+                                ?.substringAfter("base64,", preview.dataBase64.orEmpty())
+                                .orEmpty()
+                            val bytes = Base64.decode(encoded, Base64.DEFAULT)
+                            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                        }.getOrNull()
+                    }
+                    if (bitmap != null) {
+                        Image(
+                            bitmap = bitmap.asImageBitmap(),
+                            contentDescription = "主机摄像头预览",
+                            modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
+                            contentScale = ContentScale.Fit
+                        )
+                    }
                     StatRow("预览尺寸", "${preview.width} x ${preview.height}")
                     StatRow("来源", preview.source ?: "主机摄像头")
                     StatRow("序号", "${preview.sequence}")

@@ -6,6 +6,7 @@ import com.edgefocus.app.data.local.dao.SettingsDao
 import com.edgefocus.app.data.local.entity.Settings
 import com.edgefocus.app.data.ble.ConnectionSupervisor
 import com.edgefocus.app.domain.session.AppSessionCoordinator
+import com.edgefocus.app.domain.alert.AlertDeliveryCoordinator
 import dagger.hilt.android.HiltAndroidApp
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -25,12 +26,16 @@ class EdgeFocusApp : Application() {
     @Inject
     lateinit var sessionCoordinator: AppSessionCoordinator
 
+    @Inject
+    lateinit var alertDeliveryCoordinator: AlertDeliveryCoordinator
+
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     override fun onCreate() {
         super.onCreate()
         connectionSupervisor.start()
         sessionCoordinator.start()
+        alertDeliveryCoordinator.start()
         initializeDefaultSettings()
     }
 

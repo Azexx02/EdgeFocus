@@ -29,6 +29,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 import javax.inject.Inject
@@ -109,10 +111,16 @@ class TimerStateHolder @Inject constructor(
     private var localCountdownJob: Job? = null
     private var boardSyncJob: Job? = null
     private var boardCompletionFallbackJob: Job? = null
+    private var previewJob: Job? = null
     @Volatile
     private var isControlPanelActive = false
 
     init {
+        scope.launch {
+            state.map { it.sessionPhase }.distinctUntilChanged().collect { phase ->
+                if (phase == BoardSessionPhase.PRECHECK) startPreviewLoop() else stopPreviewLoop()
+            }
+        }
         scope.launch {
             settingsDao.getSettings().collect { settings ->
                 settings?.let {
@@ -274,6 +282,26 @@ class TimerStateHolder @Inject constructor(
                 bleManager.reminderAck("last_alert")
             }
         }
+    }
+
+    fun applyReliableAlert(alert: PushAlert) {
+        _state.update {
+            it.copy(
+                lastAlert = alert,
+                outputCapability = alert.outputCapability ?: it.outputCapability,
+                reminderCount = alert.reminderCount ?: it.reminderCount
+            )
+        }
+    }
+
+    fun clearReliableAlert() {
+        _state.update { it.copy(lastAlert = null) }
+    }
+
+    fun applyReliableSessionEnd(payloadJson: String) {
+        cancelBoardCompletionFallback()
+        val report = JSONObject(payloadJson).optJSONObject("data") ?: return
+        finishFromBoardReport(report)
     }
 
     // ==================== 会话控制 ====================
@@ -625,6 +653,29 @@ class TimerStateHolder @Inject constructor(
                 _state.update { it.copy(boardErrorMessage = "无法刷新摄像头预览：${error.message ?: "未知错误"}") }
             }
         }
+    }
+
+    fun refreshBoardState() {
+        scope.launch { checkBoardSession() }
+    }
+
+    private fun startPreviewLoop() {
+        if (previewJob?.isActive == true) return
+        previewJob = scope.launch {
+            while (_state.value.sessionPhase == BoardSessionPhase.PRECHECK) {
+                bleManager.getCameraPreviewImage().onSuccess { data ->
+                    val preview = BoardJsonParser.parseCameraPreview(String(data, Charsets.UTF_8))
+                    _state.update { it.copy(cameraPreview = preview, boardErrorMessage = null) }
+                }
+                delay(750L)
+            }
+        }
+    }
+
+    private fun stopPreviewLoop() {
+        previewJob?.cancel()
+        previewJob = null
+        scope.launch { bleManager.cancelPreviewRequests() }
     }
 
     fun refreshGimbalStatus() {

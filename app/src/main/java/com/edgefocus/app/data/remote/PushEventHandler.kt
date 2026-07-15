@@ -1,6 +1,7 @@
 package com.edgefocus.app.data.remote
 
 import com.edgefocus.app.domain.model.FocusState
+import com.edgefocus.app.data.ble.model.ReliableEventEnvelope
 
 data class TimerComplete(
     val sessionId: String? = null,
@@ -22,4 +23,8 @@ interface PushEventHandler {
     fun onPushSessionEnd(summary: String)
     fun onPushTimerComplete(timerComplete: TimerComplete)
     fun onPushAlert(alert: PushAlert) {}
+}
+
+fun interface ReliablePushEventHandler {
+    fun onReliableEvent(event: ReliableEventEnvelope)
 }

@@ -9,22 +9,37 @@ import android.nfc.NdefMessage
 import android.nfc.NfcAdapter
 import android.os.Build
 import android.os.Bundle
+import android.view.WindowManager
 import android.provider.Settings
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.Box
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import com.edgefocus.app.presentation.navigation.NavigationGraph
 import com.edgefocus.app.presentation.ui.theme.EdgeFocusTheme
+import com.edgefocus.app.presentation.shared.AlertOverlay
+import com.edgefocus.app.presentation.shared.BlackScreenSaver
+import com.edgefocus.app.domain.alert.AlertDeliveryCoordinator
+import com.edgefocus.app.data.local.dao.SettingsDao
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import javax.inject.Inject
 import dagger.hilt.android.AndroidEntryPoint
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
+
+    @Inject
+    lateinit var alertDeliveryCoordinator: AlertDeliveryCoordinator
+
+    @Inject
+    lateinit var settingsDao: SettingsDao
 
     companion object {
         private const val TAG = "MainActivity"
@@ -42,6 +57,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         requestPermissions()
 
         // NFC / Deep Link: edgefocus://controlpanel
@@ -49,12 +65,27 @@ class MainActivity : ComponentActivity() {
         intent = null
 
         setContent {
+            val activeAlert by alertDeliveryCoordinator.activeAlert.collectAsState()
+            val appSettings by settingsDao.getSettings().collectAsState(initial = null)
             EdgeFocusTheme {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MaterialTheme.colorScheme.background
+                BlackScreenSaver(
+                    enabled = appSettings?.screenSaverEnabled == true,
+                    timeoutSeconds = appSettings?.screenSaverTimeoutSec ?: 120
                 ) {
-                    NavigationGraph()
+                    Surface(
+                        modifier = Modifier.fillMaxSize(),
+                        color = MaterialTheme.colorScheme.background
+                    ) {
+                        Box(Modifier.fillMaxSize()) {
+                            NavigationGraph()
+                            activeAlert?.let {
+                                AlertOverlay(
+                                    activeAlert = it,
+                                    onAcknowledge = alertDeliveryCoordinator::userAcknowledgeActiveAlert
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }

@@ -94,6 +94,10 @@ class HostEventInbox @Inject constructor(
         database.hostEventDao().confirmAckStage(eventId, stage.ordinal + 1, status)
     }
 
+    suspend fun recordAckFailure(eventId: String, status: String?, error: String) {
+        database.hostEventDao().recordAckFailure(eventId, status, error)
+    }
+
     suspend fun pendingAcks(): List<HostEventEntity> = database.hostEventDao().getPendingAcks()
 
     private suspend fun updateState(eventId: String, state: String, error: String? = null) {

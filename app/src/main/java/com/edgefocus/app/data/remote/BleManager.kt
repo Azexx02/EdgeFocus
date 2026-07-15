@@ -87,6 +87,7 @@ class BleManager @Inject constructor(
     val deviceStatus: StateFlow<DeviceStatus?> = _deviceStatus.asStateFlow()
 
     private val pushEventHandlers = CopyOnWriteArrayList<PushEventHandler>()
+    private val reliablePushEventHandlers = CopyOnWriteArrayList<ReliablePushEventHandler>()
     private var bleLogListener: ((String, String) -> Unit)? = null
 
     data class DiscoveredDevice(val name: String, val address: String)
@@ -183,6 +184,14 @@ class BleManager @Inject constructor(
 
     fun removePushEventHandler(handler: PushEventHandler) {
         pushEventHandlers.remove(handler)
+    }
+
+    fun addReliablePushEventHandler(handler: ReliablePushEventHandler) {
+        reliablePushEventHandlers.addIfAbsent(handler)
+    }
+
+    fun removeReliablePushEventHandler(handler: ReliablePushEventHandler) {
+        reliablePushEventHandlers.remove(handler)
     }
 
     fun setBleLogListener(listener: (direction: String, content: String) -> Unit) {
@@ -1119,6 +1128,11 @@ class BleManager @Inject constructor(
 
             val cmd = json.optString("cmd", "")
             val eventData = json.optJSONObject("data")
+            val reliableEvent = HostJsonCodec.parseReliableEvent(jsonStr)
+            if (reliableEvent != null) {
+                reliablePushEventHandlers.forEach { it.onReliableEvent(reliableEvent) }
+                return
+            }
 
             when {
                 cmd == "push_state" && eventData != null -> {
