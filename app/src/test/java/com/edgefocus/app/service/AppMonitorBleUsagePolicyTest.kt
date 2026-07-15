@@ -1,6 +1,7 @@
 package com.edgefocus.app.service
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -13,16 +14,17 @@ class AppMonitorBleUsagePolicyTest {
         assertEquals("com.edgefocus.app", report.packageName)
         assertEquals("learning", report.category)
         assertEquals(0, report.level)
-        assertTrue(report.isInUse)
+        assertFalse(report.isInUse)
     }
 
     @Test
-    fun unknownForegroundReportsActiveUsingLevelThree() {
-        val report = AppMonitorBleUsagePolicy.unknownForeground("desktop_or_background")
+    fun systemSurfaceReportsNotInUse() {
+        val report = AppMonitorBleUsagePolicy.systemSurface("com.android.systemui")
 
-        assertEquals("desktop_or_background", report.packageName)
+        assertEquals("com.android.systemui", report.packageName)
         assertEquals("using", report.category)
-        assertEquals(3, report.level)
-        assertTrue(report.isInUse)
+        assertEquals(0, report.level)
+        assertFalse(report.isInUse)
+        assertTrue(AppMonitorBleUsagePolicy.isSystemSurface("com.miui.home.launcher"))
     }
 }

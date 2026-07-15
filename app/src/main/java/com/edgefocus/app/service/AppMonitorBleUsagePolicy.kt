@@ -13,16 +13,21 @@ object AppMonitorBleUsagePolicy {
             packageName = selfPackage,
             category = "learning",
             level = 0,
-            isInUse = true
+            isInUse = false
         )
     }
 
-    fun unknownForeground(backgroundPackageName: String): AppMonitorBleUsageReport {
+    fun systemSurface(packageName: String): AppMonitorBleUsageReport {
         return AppMonitorBleUsageReport(
-            packageName = backgroundPackageName,
+            packageName = packageName,
             category = "using",
-            level = 3,
-            isInUse = true
+            level = 0,
+            isInUse = false
         )
     }
+
+    fun isSystemSurface(packageName: String): Boolean =
+        packageName == "com.android.systemui" ||
+            packageName.contains("launcher", ignoreCase = true) ||
+            packageName.contains("recents", ignoreCase = true)
 }

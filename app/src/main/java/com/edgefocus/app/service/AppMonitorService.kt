@@ -8,6 +8,8 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.os.PowerManager
+import android.os.SystemClock
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.edgefocus.app.MainActivity
@@ -19,6 +21,9 @@ import com.edgefocus.app.data.remote.AppEventLog
 import com.edgefocus.app.data.remote.BleManager
 import com.edgefocus.app.data.remote.PhoneUsage
 import com.edgefocus.app.data.remote.PhoneUsagePolicy
+import com.edgefocus.app.data.ble.ConnectionSupervisor
+import com.edgefocus.app.data.ble.HostJsonCodec
+import com.edgefocus.app.data.session.ProtocolCheckpointStore
 import com.edgefocus.app.presentation.viewmodel.DistractionAppConfig
 import com.edgefocus.app.util.AppCategorizer
 import dagger.hilt.android.AndroidEntryPoint
@@ -86,6 +91,12 @@ class AppMonitorService : Service() {
     @Inject
     lateinit var settingsDao: SettingsDao
 
+    @Inject
+    lateinit var connectionSupervisor: ConnectionSupervisor
+
+    @Inject
+    lateinit var checkpointStore: ProtocolCheckpointStore
+
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val monitoringMutex = Mutex()
     private var monitoringJob: Job? = null
@@ -94,6 +105,8 @@ class AppMonitorService : Service() {
     private var sessionId: String? = null
     private var distractionLevels: Map<String, Int> = emptyMap()
     private var lastBleReportedKey: String? = null
+    private var lastBleReportedAtElapsed: Long = 0L
+    private var lastAcceptedSequence: Long? = null
 
     // 通知时间记录
     private var lastHighDistractionAlert = 0L
@@ -174,6 +187,8 @@ class AppMonitorService : Service() {
 
         loadDistractionLevels()
         lastBleReportedKey = null
+        lastBleReportedAtElapsed = 0L
+        lastAcceptedSequence = null
 
         monitoringJob = serviceScope.launch {
             while (isActive) {
@@ -193,6 +208,7 @@ class AppMonitorService : Service() {
         monitoringJob = null
         closeCurrentAppUsage()
         lastBleReportedKey = null
+        lastBleReportedAtElapsed = 0L
         Log.d(TAG, "Monitoring stopped")
     }
 
@@ -221,6 +237,13 @@ class AppMonitorService : Service() {
             return
         }
 
+        val powerManager = getSystemService(PowerManager::class.java)
+        if (!powerManager.isInteractive) {
+            closeCurrentAppUsage()
+            reportBleIfChanged("system_noninteractive", "using", 0, isInUse = false)
+            return
+        }
+
         val foregroundPackage = AppCategorizer.getForegroundApp(this)
         Log.d(TAG, "Foreground: $foregroundPackage, self=$packageName")
 
@@ -240,7 +263,12 @@ class AppMonitorService : Service() {
         // 2. null：复用原通知逻辑，按后台/桌面/other 处理
         if (foregroundPackage == null) {
             closeCurrentAppUsage()
-            val report = AppMonitorBleUsagePolicy.unknownForeground(DESKTOP_OR_BACKGROUND)
+            return
+        }
+
+        if (AppMonitorBleUsagePolicy.isSystemSurface(foregroundPackage)) {
+            closeCurrentAppUsage()
+            val report = AppMonitorBleUsagePolicy.systemSurface(foregroundPackage)
             reportBleIfChanged(
                 packageName = report.packageName,
                 category = report.category,
@@ -248,10 +276,6 @@ class AppMonitorService : Service() {
                 isInUse = report.isInUse
             )
 
-            if (now - lastBackgroundAlert >= BACKGROUND_INTERVAL) {
-                lastBackgroundAlert = now
-                showBackgroundNotification()
-            }
             return
         }
 
@@ -442,14 +466,15 @@ class AppMonitorService : Service() {
         level: Int,
         isInUse: Boolean = true
     ) {
-        val key = "$packageName|$category|$level|$isInUse"
+        val key = "$packageName|$category|$isInUse"
+        val nowElapsed = SystemClock.elapsedRealtime()
 
-        if (key == lastBleReportedKey) {
+        if (key == lastBleReportedKey && nowElapsed - lastBleReportedAtElapsed < 2_000L) {
             return
         }
 
         if (!AppMonitorBleReportPolicy.shouldReport(
-                bleConnected = bleManager.isConnected(),
+                bleConnected = connectionSupervisor.snapshot.value.isReady,
                 activeEdgeFocusSession = timerStateHolder.isActiveEdgeFocusSession()
             )
         ) {
@@ -461,19 +486,33 @@ class AppMonitorService : Service() {
             "playing", "entertainment", "game", "video" -> "playing"
             else -> "using"
         }
+        val activeSessionId = timerStateHolder.state.value.sessionId ?: return
+        val sequence = checkpointStore.allocatePhoneSequence(
+            sessionId = activeSessionId,
+            runtimeSequence = connectionSupervisor.snapshot.value.hostState?.session?.phoneSequence,
+            lastAcceptedSequence = lastAcceptedSequence
+        )
         val result = bleManager.phoneSync(
             PhoneUsage(
                 isInUse = isInUse,
                 appCategory = category,
                 usageState = usageState,
-                distractionLevel = level,
+                sessionId = activeSessionId,
+                sequence = sequence,
+                timestampMs = System.currentTimeMillis(),
                 appName = packageName,
                 durationSec = null
             )
         )
 
         if (result.isSuccess) {
+            val parsed = runCatching {
+                HostJsonCodec.parsePhoneSync(String(result.getOrThrow(), Charsets.UTF_8))
+            }.getOrNull()
+            if (parsed?.accepted == false) return
+            lastAcceptedSequence = parsed?.lastAcceptedSequence ?: sequence
             lastBleReportedKey = key
+            lastBleReportedAtElapsed = nowElapsed
             appEventLog.log("PHONE_SYNC", "$category, level=$level, pkg=$packageName")
             // 手机干扰计数（level > 0 表示干扰应用）
             if (PhoneUsagePolicy.shouldCountPhoneDistraction(
