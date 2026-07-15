@@ -79,7 +79,7 @@ AppUiSnapshot
 ├─ connection: DISCONNECTED | CONNECTING | SUBSCRIBED | NEGOTIATING | READY | DEGRADED
 ├─ session
 │  ├─ owner: APP | HOST
-│  ├─ phase: IDLE | PRECHECK | RUNNING | PAUSED | ENDING | FINISHED
+│  ├─ phase: UNKNOWN | IDLE | PRECHECK | RUNNING | PAUSED | ENDING | FINISHED
 │  ├─ sessionId
 │  ├─ targetMs / remainingMs
 │  ├─ stale / pendingAction
@@ -160,6 +160,9 @@ IDLE -> PRECHECK -> RUNNING <-> PAUSED -> ENDING -> FINISHED -> IDLE
 
 - App 的 start/pause/resume/end 只是 intent。
 - 只有主机响应或权威快照能改变 phase。
+- App 固定将主机 wire phase `FOCUSING` 映射为 UI/domain `RUNNING`。
+- 主机当前没有持久 `FINISHED` phase；App 只有在收到匹配的 `push_session_end`、end 成功报告，或 `IDLE` 加匹配报告时才进入 FINISHED，禁止单凭 `IDLE` 完成落库。
+- 快照缺少 session_id/phase 等当前状态必需字段或 phase 无法识别时，拒绝整份新快照，保留上一份值并标记 `stale=true`、`phase=UNKNOWN`；不得用 IDLE 或旧数值枚举补齐。
 - 本地倒计时仅用于显示插值，不改变 phase。
 - 本地剩余时间到零时显示等待主机确认，不本地完成。
 - 只有 `push_session_end`、end 成功报告，或权威 FINISHED/IDLE 加匹配报告，才能保存主机会话结果。
@@ -217,6 +220,7 @@ P4 camera preview
 - 超时只表示结果未知。
 - 未知字段忽略；缺失必需字段进入显式 UNKNOWN。
 - 不使用默认 67%、旧电量或旧状态补齐 UI。
+- `session_control(action=start)` 固定发送 `source_mode=live_camera`，不得发送主机展示页的预录或前端演示模式。
 
 ## 8. 手机原始事实
 
@@ -239,6 +243,13 @@ EDGEFOCUS 时序：
 - 新会话 sequence 从 1 开始；
 - 检查 `accepted` 与 `last_accepted_sequence`。
 
+sequence checkpoint：
+
+- 为当前正式 `session_id` 持久化最近发送和最近被主机接受的 sequence。
+- App 进程重启或连接恢复后，从 `runtime_snapshot.phone.sequence`、本地持久 checkpoint 和最近响应的 `last_accepted_sequence` 取最大值，下一次发送使用 `max(...) + 1`。
+- 只有权威快照确认进入新的 `session_id` 后才从 1 开始。
+- 主机拒绝某 sequence 时不复用冲突值；更新 checkpoint 后用更大的下一 sequence 发送当前真实事实。
+
 禁止发送或消费为最终判定：
 
 - `distraction_level`；
@@ -247,13 +258,10 @@ EDGEFOCUS 时序：
 
 前台语义：
 
-- `MainActivity` 是 App 自身前台；
-- `ControlPanelActivity` 同样是 App 自身前台；
-- App 黑屏屏保是 App 自身非交互状态；
-- 上述情况不得上报为娱乐、其他应用或强干扰；
-- 系统屏幕关闭/设备非交互不得制造强干扰；
-- 缺少 Usage Access 时进入 `UNKNOWN_PERMISSION` 并提示授权；
-- UsageEvents 短暂空洞只在 TTL 内沿用最近可信事实，过期后 UNKNOWN。
+- `MainActivity`、`ControlPanelActivity`、二者切换窗口、App 黑屏屏保和系统屏幕关闭/设备非交互，均视为没有使用手机做无关事项；在需要发送心跳时明确发送 `is_in_use=false`，不得用 `learning` 伪装。
+- 缺少 Usage Access 时进入本地 `UNKNOWN_PERMISSION` 并提示授权。schema 2.1 没有 UNKNOWN wire 值，因此不发送 `phone_sync`，让主机 5 秒 freshness 自然过期。
+- UsageEvents 短暂空洞只在 TTL 内沿用最近可信事实；TTL 过期后进入 UNKNOWN 并停止发送，直到重新获得可信事实。
+- “稳定 2 秒心跳”适用于存在可信事实的 RUNNING/PAUSED；UNKNOWN_PERMISSION/UNKNOWN 是明确例外，不制造虚假事实。
 
 ## 9. 可靠事件与提醒交付
 
@@ -270,16 +278,33 @@ EDGEFOCUS 时序：
 -> event_ack(received)
 -> 前台效果或系统通知实际投递
 -> event_ack(presented)
--> 用户主动确认
+-> 仅 push_alert 的用户主动确认
 -> event_ack(user_ack)
 ```
 
+- ACK 成功状态从响应 `data.ack_status` 读取，不读取不存在的顶层 accepted 字段。
 - ACK 阶段只能前进。
 - `accepted` 和 `duplicate` 视为阶段成功。
 - `session_mismatch/unknown_event/expired` 记录诊断，不伪装成功。
 - 同一 event_id 不重复播放声音、闪屏或振动。
 - 多提醒使用持久队列，不再使用单一 `lastAlert` 覆盖槽。
 - 旧 `reminder_ack` 不进入正式链路。
+
+事件类型矩阵：
+
+| 事件 | received | presented | user_ack |
+|---|---|---|---|
+| `push_alert` | 入库后发送 | 前台效果开始或通知实际投递后发送 | 用户主动确认提醒后发送 |
+| `push_session_end` | 结果/事件入库后发送 | 结束结果页面或通知实际展示后发送 | 本轮永不发送，避免错误触发提醒冷却 |
+
+TTL 与崩溃语义：
+
+- 使用主机可靠事件中的 `created_at_ms`、`ttl_ms`、`remaining_ttl_ms`；`push_alert` 当前投递 TTL 为 10 秒，`push_session_end` 为 60 秒。
+- 每次准备投递以及 App 重启恢复时都重新检查 TTL；过期事件保留诊断但不再展示、播放或振动。
+- 外部提醒效果采用 at-most-once：先在事务中把事件标记为 `dispatch_claimed/effect_started`，再调用声音、振动或通知 API。
+- 通知 ID 由 event_id 稳定派生，重放只更新同一通知。
+- 如果在 `effect_started` 落库后、实际效果确认前崩溃，恢复时将其标为 `delivery_uncertain`，不重复声音/振动，也不伪发 `presented`；可保留或恢复同一稳定 ID 的静态通知。
+- Event Inbox 分别保存 received/presented/user_ack 的本地与主机确认状态，未确认阶段可重试 ACK，但不重复外部效果。
 
 交付方式：
 
@@ -326,6 +351,22 @@ LOCAL 结束事务同时写：
 - 主机不允许跳过时隐藏或禁用“跳过”。
 
 云台仅在 `gimbal_precheck_v1` 存在时显示。命令必须带当前 `session_id` 和严格递增 sequence，只允许方向、center、stop、realign、confirm 等产品命令；不得暴露步长、角度、UART、BOOT0 或复位。
+
+精确命令与业务判定：
+
+| UI 意图 | 主机 cmd | 必需 data | 成功条件 |
+|---|---|---|---|
+| 停止自动搜索 | `precheck_skip_auto_adjust` | session_id, sequence | response success 且 data.accepted=true |
+| 方向微调 | `gimbal_nudge` | session_id, sequence, direction=UP/DOWN/LEFT/RIGHT | response success 且 data.accepted=true |
+| 居中 | `gimbal_center` | session_id, sequence | response success 且 data.accepted=true |
+| 停止运动 | `gimbal_stop` | session_id, sequence | response success 且 data.accepted=true |
+| 重新对齐 | `gimbal_realign` | session_id, sequence | response success 且 data.accepted=true |
+| 确认位置 | `precheck_confirm_position` | session_id, sequence | response success 且 data.accepted=true |
+
+- 每次尝试使用严格递增 sequence；业务拒绝或超时后不得复用旧 sequence。
+- “停止自动搜索”不等于跳过 PRECHECK。
+- 确认进入正式会话必须执行两步序列：`precheck_confirm_position` 成功后，再发送 `session_control(action=skip_precheck)`；只有随后主机快照进入 `FOCUSING` 才把 App phase 映射为 RUNNING。
+- 如果快照不允许 App 跳过、manual lease 不存在或 capability 消失，相关按钮隐藏或禁用。
 
 ## 12. 手环代理与供电
 
@@ -436,6 +477,7 @@ MIUI 14 / Android 13 真机重点验证：
 - RequestScheduler 优先级、取消和超时；
 - schema 2.1 hello 与 capability gate；
 - 手机事实映射、sequence、TTL 和自 App 前台判定；
+- phone sequence 持久 checkpoint、进程重启恢复与拒绝后递增；
 - UNKNOWN 与遗留字段忽略；
 - LOCAL 结果与反馈规则。
 
@@ -446,6 +488,8 @@ MIUI 14 / Android 13 真机重点验证：
 - `AppSessionCoordinator` 双模式集成测试；
 - PRECHECK/RUNNING/PAUSED/ENDING 断线恢复测试；
 - Event Inbox 重放、阶段恢复和重启去重测试；
+- Event Inbox 在 claim 前、effect_started 后、外部效果后各崩溃边界的恢复测试；
+- 事件 TTL 到期、过期重放与稳定 notification ID 测试；
 - Sync Outbox 离线结束、App 重启、重复上传测试；
 - 竖横屏共享 session_id、Activity 重建不重复落库测试。
 
@@ -458,6 +502,16 @@ MIUI 14 / Android 13 真机重点验证：
 - 黑屏屏保首次触摸拦截；
 - 手环 capability 有/无；
 - PRESENT/ABSENT/UNKNOWN 与 Home/Go。
+
+关键协议用例必须写成可判定断言：
+
+- `event_ack` 响应读取 `data.ack_status`；覆盖 accepted、duplicate、session_mismatch、unknown_event、expired。
+- `push_alert` 产生 received → presented → user_ack；`push_session_end` 最多产生 received → presented，抓包中没有 user_ack。
+- 运行中杀 App 后恢复同一 session，下一 phone sequence 大于本地 checkpoint、runtime snapshot 和 last accepted 的最大值。
+- MainActivity → ControlPanelActivity 切换、App 黑屏和系统非交互抓包均为 `is_in_use=false`。
+- Usage Access 缺失或事实 TTL 过期时抓包中停止 phone_sync，而不是发送 learning/using 占位。
+- start 请求固定包含 `source_mode=live_camera`。
+- PRECHECK 确认抓包顺序为 `precheck_confirm_position` 成功后 `session_control(skip_precheck)`，最终等待 `FOCUSING` 快照。
 
 ### 17.4 真机联调顺序
 
@@ -503,4 +557,3 @@ MIUI 14 / Android 13 真机重点验证：
 13. PRECHECK/RUNNING/PAUSED 断线后正确恢复且不本地误完成；
 14. coordinator、断线恢复、Inbox/Outbox 重启测试通过；
 15. Redmi Note 10 Pro / MIUI 14 / Android 13 完成通知、前台服务、屏保和 BLE 真机回归。
-
