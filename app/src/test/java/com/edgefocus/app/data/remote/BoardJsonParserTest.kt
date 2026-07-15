@@ -450,12 +450,15 @@ class BoardJsonParserTest {
     }
 
     @Test
-    fun buildPhoneSyncIncludesUsageStateAndAllowsZeroDistractionLevel() {
+    fun buildPhoneSyncIncludesOnlyRawHostFact() {
         val json = BoardJsonParser.buildPhoneSync(
             PhoneUsage(
                 isInUse = true,
                 appCategory = "learning",
                 usageState = "learning",
+                sessionId = "session_1",
+                sequence = 4,
+                timestampMs = 1000,
                 distractionLevel = 0,
                 appName = "com.edgefocus.app"
             )
@@ -464,10 +467,13 @@ class BoardJsonParserTest {
         assertEquals("phone_sync", json.getString("cmd"))
         val data = json.getJSONObject("data")
         assertTrue(data.getBoolean("is_in_use"))
-        assertEquals("learning", data.getString("app_category"))
         assertEquals("learning", data.getString("usage_state"))
-        assertEquals(0, data.getInt("distraction_level"))
-        assertEquals("com.edgefocus.app", data.getString("app_name"))
+        assertEquals("session_1", data.getString("session_id"))
+        assertEquals(4L, data.getLong("sequence"))
+        assertEquals(1000L, data.getLong("timestamp_ms"))
+        assertFalse(data.has("app_category"))
+        assertFalse(data.has("distraction_level"))
+        assertFalse(data.has("app_name"))
     }
 
     @Test

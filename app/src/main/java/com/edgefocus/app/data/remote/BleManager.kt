@@ -16,6 +16,10 @@ import android.content.Context
 import android.os.Build
 import android.util.Log
 import com.edgefocus.app.BuildConfig
+import com.edgefocus.app.data.ble.BleRequestScheduler
+import com.edgefocus.app.data.ble.HostJsonCodec
+import com.edgefocus.app.data.ble.HostRequestPriority
+import com.edgefocus.app.data.ble.model.EventAckStage
 import com.edgefocus.app.domain.model.DeviceStatus
 import com.edgefocus.app.domain.model.FocusState
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -23,8 +27,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
@@ -72,7 +74,7 @@ class BleManager @Inject constructor(
     private var negotiatedMtu: Int = 23
 
     private val writeLock = Any()
-    private val commandMutex = Mutex()
+    private val requestScheduler = BleRequestScheduler()
     private var pendingWriteCallback: ((Boolean) -> Unit)? = null
     private val nextRequestId = AtomicInteger(1)
     private val pendingResponseCallbacks = mutableMapOf<Int, (Result<ByteArray>) -> Unit>()
@@ -94,6 +96,8 @@ class BleManager @Inject constructor(
     private var targetMacAddress: String = ""
     @Volatile
     private var autoConnectStoredTargetDuringScan = true
+    @Volatile
+    private var autoReconnectEnabled = true
     @Volatile
     private var simulatedConnected = false
     @Volatile
@@ -392,6 +396,7 @@ class BleManager @Inject constructor(
             return
         }
         try {
+            autoReconnectEnabled = true
             autoConnectStoredTargetDuringScan = autoConnectStoredTarget
             _connectionState.value = ConnectionState.SCANNING
             val settings = ScanSettings.Builder()
@@ -553,6 +558,7 @@ class BleManager @Inject constructor(
 
     @SuppressLint("MissingPermission")
     fun disconnect() {
+        autoReconnectEnabled = false
         synchronized(writeLock) {
             bluetoothGatt?.disconnect()
             bluetoothGatt?.close()
@@ -582,17 +588,20 @@ class BleManager @Inject constructor(
     }
 
     suspend fun sendData(data: ByteArray): Result<ByteArray> {
-        return sendDataAndAwait(data)
+        return sendDataAndAwait(data, HostRequestPriority.P3_BACKGROUND)
     }
 
     @SuppressLint("MissingPermission")
     override suspend fun getDeviceStatus(): Result<ByteArray> {
         val json = """{"cmd":"get_device_status"}"""
-        return sendDataAndAwait(json.toByteArray(Charsets.UTF_8))
+        return sendDataAndAwait(json.toByteArray(Charsets.UTF_8), HostRequestPriority.P2_STATE)
     }
 
-    private suspend fun sendDataAndAwait(data: ByteArray): Result<ByteArray> {
-        return commandMutex.withLock {
+    private suspend fun sendDataAndAwait(
+        data: ByteArray,
+        priority: HostRequestPriority = HostRequestPriority.P3_BACKGROUND
+    ): Result<ByteArray> {
+        return requestScheduler.execute(priority) {
             sendDataAndAwaitLocked(data)
         }
     }
@@ -737,6 +746,15 @@ class BleManager @Inject constructor(
         targetMacAddress = mac
     }
 
+    fun shouldAutoReconnect(): Boolean = autoReconnectEnabled && targetMacAddress.isNotBlank()
+
+    fun requestReconnect(): Boolean {
+        val target = targetMacAddress.takeIf { it.isNotBlank() } ?: return false
+        autoReconnectEnabled = true
+        connectToDiscoveredDevice(target)
+        return true
+    }
+
     @SuppressLint("MissingPermission")
     fun connectToDiscoveredDevice(address: String) {
         val adapter = bluetoothAdapter
@@ -746,6 +764,7 @@ class BleManager @Inject constructor(
             return
         }
         targetMacAddress = address
+        autoReconnectEnabled = true
         val currentGattAddress = synchronized(writeLock) {
             bluetoothGatt?.device?.address
         }
@@ -805,7 +824,7 @@ class BleManager @Inject constructor(
         }
 
         val json = """{"cmd":"get_current_state"}"""
-        return sendDataAndAwait(json.toByteArray(Charsets.UTF_8))
+        return sendDataAndAwait(json.toByteArray(Charsets.UTF_8), HostRequestPriority.P2_STATE)
     }
 
     @SuppressLint("MissingPermission")
@@ -853,7 +872,7 @@ class BleManager @Inject constructor(
     @SuppressLint("MissingPermission")
     override suspend fun getCameraPreviewImage(): Result<ByteArray> {
         val json = BoardJsonParser.buildCommand("get_camera_preview_image").toString()
-        return sendDataAndAwait(json.toByteArray(Charsets.UTF_8))
+        return sendDataAndAwait(json.toByteArray(Charsets.UTF_8), HostRequestPriority.P4_PREVIEW)
     }
 
     @SuppressLint("MissingPermission")
@@ -905,7 +924,7 @@ class BleManager @Inject constructor(
             else -> action
         }
         val data = BoardJsonParser.buildSessionControl(actionName, targetDurationMin).toString()
-        return sendDataAndAwait(data.toByteArray(Charsets.UTF_8))
+        return sendDataAndAwait(data.toByteArray(Charsets.UTF_8), HostRequestPriority.P0_CRITICAL)
     }
 
     @SuppressLint("MissingPermission")
@@ -962,7 +981,10 @@ class BleManager @Inject constructor(
     override suspend fun phoneSync(usage: PhoneUsage): Result<ByteArray> {
         val root = BoardJsonParser.buildPhoneSync(usage)
 
-        return sendDataAndAwait(root.toString().toByteArray(Charsets.UTF_8))
+        return sendDataAndAwait(
+            root.toString().toByteArray(Charsets.UTF_8),
+            HostRequestPriority.P1_PHONE_HEARTBEAT
+        )
     }
 
     @SuppressLint("MissingPermission")
@@ -976,6 +998,87 @@ class BleManager @Inject constructor(
     override suspend fun getConsoleData(): Result<ByteArray> {
         val json = """{"cmd":"get_console_data"}"""
         return sendDataAndAwait(json.toByteArray(Charsets.UTF_8))
+    }
+
+    override suspend fun clientHello(): Result<ByteArray> {
+        val root = HostJsonCodec.clientHello(nextRequestId.getAndIncrement())
+        return sendDataAndAwait(
+            root.toString().toByteArray(Charsets.UTF_8),
+            HostRequestPriority.P2_STATE
+        )
+    }
+
+    override suspend fun eventAck(
+        eventId: String,
+        sessionId: String,
+        stage: String
+    ): Result<ByteArray> {
+        val ackStage = EventAckStage.entries.firstOrNull { it.wireValue == stage.lowercase() }
+            ?: return Result.failure(IllegalArgumentException("Unknown ACK stage: $stage"))
+        val root = HostJsonCodec.eventAck(
+            requestId = nextRequestId.getAndIncrement(),
+            eventId = eventId,
+            sessionId = sessionId,
+            stage = ackStage
+        )
+        return sendDataAndAwait(
+            root.toString().toByteArray(Charsets.UTF_8),
+            HostRequestPriority.P0_CRITICAL
+        )
+    }
+
+    override suspend fun gimbalPrecheckCommand(
+        command: String,
+        sessionId: String,
+        sequence: Long,
+        direction: String?
+    ): Result<ByteArray> {
+        val root = HostJsonCodec.gimbalCommand(
+            requestId = nextRequestId.getAndIncrement(),
+            command = command,
+            sessionId = sessionId,
+            sequence = sequence,
+            direction = direction
+        )
+        return sendDataAndAwait(
+            root.toString().toByteArray(Charsets.UTF_8),
+            HostRequestPriority.P0_CRITICAL
+        )
+    }
+
+    override suspend fun getBandStatus(): Result<ByteArray> {
+        val root = HostJsonCodec.getCurrentState(nextRequestId.getAndIncrement())
+        root.put("cmd", "get_band_status")
+        return sendDataAndAwait(
+            root.toString().toByteArray(Charsets.UTF_8),
+            HostRequestPriority.P2_STATE
+        )
+    }
+
+    override suspend fun bandControl(action: String): Result<ByteArray> {
+        if (action != "scan_connect" && action != "reconnect") {
+            return Result.failure(IllegalArgumentException("Unknown band action: $action"))
+        }
+        val root = org.json.JSONObject()
+            .put("cmd", "band_control")
+            .put("id", nextRequestId.getAndIncrement())
+            .put("data", org.json.JSONObject().put("action", action))
+        return sendDataAndAwait(
+            root.toString().toByteArray(Charsets.UTF_8),
+            HostRequestPriority.P2_STATE
+        )
+    }
+
+    override suspend fun setPowerProfile(profile: String): Result<ByteArray> {
+        val root = HostJsonCodec.setPowerProfile(nextRequestId.getAndIncrement(), profile)
+        return sendDataAndAwait(
+            root.toString().toByteArray(Charsets.UTF_8),
+            HostRequestPriority.P2_STATE
+        )
+    }
+
+    override suspend fun cancelPreviewRequests() {
+        requestScheduler.cancelQueued(HostRequestPriority.P4_PREVIEW, "PRECHECK preview stopped")
     }
 
     private fun handleNotification(data: ByteArray) {

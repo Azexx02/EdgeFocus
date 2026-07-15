@@ -176,7 +176,10 @@ object BoardJsonParser {
     fun buildSessionControl(action: String, targetDurationMin: Int? = null): JSONObject {
         val data = JSONObject().apply {
             put("action", action)
-            targetDurationMin?.let { put("target_duration_min", it) }
+            if (action == "start") {
+                targetDurationMin?.let { put("target_duration_min", it) }
+                put("source_mode", "live_camera")
+            }
         }
         return JSONObject().apply {
             put("cmd", "session_control")
@@ -222,12 +225,17 @@ object BoardJsonParser {
     fun buildPhoneSync(usage: PhoneUsage): JSONObject {
         val data = JSONObject().apply {
             put("is_in_use", usage.isInUse)
-            val category = usage.appCategory ?: usage.usageState ?: "other"
-            put("app_category", category)
-            put("usage_state", usage.usageState ?: category)
-            put("distraction_level", usage.distractionLevel.coerceIn(0, 3))
-            put("app_name", usage.appName ?: "")
-            usage.durationSec?.let { put("duration_sec", it) }
+            usage.sessionId?.takeIf { it.isNotBlank() }?.let { put("session_id", it) }
+            usage.sequence?.takeIf { it > 0 }?.let { put("sequence", it) }
+            usage.timestampMs?.let { put("timestamp_ms", it) }
+            if (usage.isInUse) {
+                val state = when ((usage.usageState ?: usage.appCategory).orEmpty().lowercase()) {
+                    "learning" -> "learning"
+                    "playing", "entertainment" -> "playing"
+                    else -> "using"
+                }
+                put("usage_state", state)
+            }
         }
         return JSONObject().apply {
             put("cmd", "phone_sync")
