@@ -1,49 +1,55 @@
-flowchart LR
-    User["用户 / NFC 标签"]
-    Main["MainActivity<br/>竖屏应用"]
-    Panel["ControlPanelActivity<br/>横屏三页 Pager"]
-    UI["Compose UI"]
+flowchart TB
+    subgraph PRESENTATION["Presentation"]
+        MAIN["MainActivity<br/>竖屏导航"]
+        PANEL["ControlPanelActivity<br/>横屏三页 Pager"]
+        UI["Compose Screens / ViewModels"]
+        OVERLAY["AlertOverlay / BlackScreenSaver"]
+        MAIN --> UI
+        PANEL --> UI
+        MAIN --> OVERLAY
+        PANEL --> OVERLAY
+    end
 
-    Session["AppSessionCoordinator<br/>唯一会话"]
-    Timer["TimerStateHolder<br/>兼容状态运行时"]
-    Alert["AlertDeliveryCoordinator<br/>可靠事件"]
-    Precheck["PrecheckController<br/>PRECHECK"]
-    Monitor["AppMonitorService<br/>PhoneFact"]
+    subgraph APPLICATION["Application Coordination"]
+        SESSION["AppSessionCoordinator"]
+        TIMER["TimerStateHolder"]
+        ALERT["AlertDeliveryCoordinator"]
+        PRECHECK["PrecheckController"]
+        CONNECTION["ConnectionSupervisor"]
+        MONITOR["AppMonitorService"]
+    end
 
-    Supervisor["ConnectionSupervisor<br/>READY 协商"]
-    Codec["HostJsonCodec<br/>schema 2.1"]
-    Scheduler["BleRequestScheduler<br/>P0-P4"]
-    BLE["BleManager<br/>GATT"]
+    subgraph DATA["Data / Protocol"]
+        CODEC["HostJsonCodec"]
+        SCHEDULER["BleRequestScheduler P0-P4"]
+        BLE["BleManager / BluetoothGatt"]
+        STORES["SessionStore / EventInbox / CheckpointStore"]
+        ROOM[("Room v8")]
+    end
 
-    Inbox[("Event Inbox")]
-    Outbox[("Sync Outbox")]
-    Checkpoint[("Protocol Checkpoint")]
-    Host["EdgeFocus 主机"]
+    HOST["EdgeFocus Host<br/>schema 2.1"]
 
-    User --> Main
-    User --> Panel
-    Main --> UI
-    Panel --> UI
-    UI --> Session
-    UI --> Alert
-    UI --> Precheck
+    UI --> SESSION
+    UI --> TIMER
+    UI --> PRECHECK
+    OVERLAY --> ALERT
+    SESSION --> TIMER
+    SESSION --> MONITOR
+    SESSION --> STORES
+    ALERT --> STORES
+    PRECHECK --> STORES
+    MONITOR --> STORES
+    STORES --> ROOM
 
-    Session --> Timer
-    Session --> Outbox
-    Session --> Monitor
-    Alert --> Inbox
-    Monitor --> Checkpoint
-    Precheck --> Checkpoint
-
-    Session --> Supervisor
-    Alert --> Supervisor
-    Monitor --> Supervisor
-    Precheck --> Supervisor
-    Supervisor --> Codec
-    Supervisor --> BLE
-    Timer --> BLE
-    Alert --> BLE
-    Precheck --> BLE
-    Monitor --> BLE
-    BLE --> Scheduler
-    BLE <--> Host
+    SESSION --> CONNECTION
+    ALERT --> CONNECTION
+    PRECHECK --> CONNECTION
+    MONITOR --> CONNECTION
+    CONNECTION --> CODEC
+    CONNECTION --> BLE
+    TIMER --> BLE
+    ALERT --> BLE
+    PRECHECK --> BLE
+    MONITOR --> BLE
+    BLE --> SCHEDULER
+    BLE <--> HOST
