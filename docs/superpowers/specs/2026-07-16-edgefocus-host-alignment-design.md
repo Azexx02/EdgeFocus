@@ -299,8 +299,10 @@ sequence checkpoint：
 
 TTL 与崩溃语义：
 
-- 使用主机可靠事件中的 `created_at_ms`、`ttl_ms`、`remaining_ttl_ms`；`push_alert` 当前投递 TTL 为 10 秒，`push_session_end` 为 60 秒。
-- 每次准备投递以及 App 重启恢复时都重新检查 TTL；过期事件保留诊断但不再展示、播放或振动。
+- 使用主机可靠事件中的 `ttl_ms` 与 `remaining_ttl_ms`；`push_alert` 当前投递 TTL 为 10 秒，`push_session_end` 为 60 秒。主机 `created_at_ms` 来自主机单调时钟，只保存作诊断，绝不与手机墙钟或 `elapsedRealtime()` 直接比较。
+- 收到或重收到事件时，以手机 `elapsedRealtime()` 计算本地 deadline：`receivedElapsed + clamp(remaining_ttl_ms, 0, ttl_ms)`，并在 Inbox 持久化 `receivedElapsed`、deadline 和手机 boot count。
+- 同一手机启动周期内，App 进程重启后可继续用持久 deadline 判断；若 boot count 改变、当前 elapsedRealtime 小于持久值或无法证明 deadline 仍有效，则不得从 Inbox 自行重放外部效果，也不发送 presented，等待主机重新推送并携带新的 `remaining_ttl_ms`。
+- 每次准备投递以及 App 进程重启恢复时都重新检查本地 deadline；过期事件保留诊断但不再展示、播放或振动。
 - 外部提醒效果采用 at-most-once：先在事务中把事件标记为 `dispatch_claimed/effect_started`，再调用声音、振动或通知 API。
 - 通知 ID 由 event_id 稳定派生，重放只更新同一通知。
 - 如果在 `effect_started` 落库后、实际效果确认前崩溃，恢复时将其标为 `delivery_uncertain`，不重复声音/振动，也不伪发 `presented`；可保留或恢复同一稳定 ID 的静态通知。
@@ -364,6 +366,8 @@ LOCAL 结束事务同时写：
 | 确认位置 | `precheck_confirm_position` | session_id, sequence | response success 且 data.accepted=true |
 
 - 每次尝试使用严格递增 sequence；业务拒绝或超时后不得复用旧 sequence。
+- 按 PRECHECK `session_id` 持久化最近分配的 gimbal command sequence，并在发送命令前先提交新 sequence；超时、业务拒绝或进程死亡均不得回退。
+- App 在 PRECHECK 中被杀并恢复同一 session 时，从持久 sequence 继续递增。只有权威快照确认新的 session_id 后才从初始值重新开始。
 - “停止自动搜索”不等于跳过 PRECHECK。
 - 确认进入正式会话必须执行两步序列：`precheck_confirm_position` 成功后，再发送 `session_control(action=skip_precheck)`；只有随后主机快照进入 `FOCUSING` 才把 App phase 映射为 RUNNING。
 - 如果快照不允许 App 跳过、manual lease 不存在或 capability 消失，相关按钮隐藏或禁用。
@@ -490,6 +494,7 @@ MIUI 14 / Android 13 真机重点验证：
 - Event Inbox 重放、阶段恢复和重启去重测试；
 - Event Inbox 在 claim 前、effect_started 后、外部效果后各崩溃边界的恢复测试；
 - 事件 TTL 到期、过期重放与稳定 notification ID 测试；
+- 主机/手机时钟任意偏移、App 进程重启沿用本地 deadline、手机重启后禁止 Inbox 自行重放测试；
 - Sync Outbox 离线结束、App 重启、重复上传测试；
 - 竖横屏共享 session_id、Activity 重建不重复落库测试。
 
@@ -512,6 +517,7 @@ MIUI 14 / Android 13 真机重点验证：
 - Usage Access 缺失或事实 TTL 过期时抓包中停止 phone_sync，而不是发送 learning/using 占位。
 - start 请求固定包含 `source_mode=live_camera`。
 - PRECHECK 确认抓包顺序为 `precheck_confirm_position` 成功后 `session_control(skip_precheck)`，最终等待 `FOCUSING` 快照。
+- PRECHECK 发送一次云台命令后杀 App，恢复同一 session 的下一命令 sequence 必须更大；超时和拒绝也不得复用旧值。
 
 ### 17.4 真机联调顺序
 
