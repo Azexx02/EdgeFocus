@@ -16,7 +16,7 @@
 
 ## 2. 展示主张
 
-EdgeFocus 的展示重点不是“摄像头加模型”，而是一套在低于 2 TOPS 的边缘平台上完成感知、时序判定、跨设备交互、会话编排和实时硬件控制的异构系统。
+EdgeFocus 的展示重点不是指定芯片的 TOPS，也不是“摄像头加模型”，而是在 STM32MP257 上完成感知、时序判定、跨设备交互、会话编排和实时硬件控制的异构系统。
 
 统一叙事：
 
@@ -34,7 +34,7 @@ EdgeFocus 的展示重点不是“摄像头加模型”，而是一套在低于 
 母文档和全部图按以下完成形态表达：
 
 - STM32MP257 A35/Linux 负责产品会话、视觉数据流、融合、BLE、存储、供电策略和硬件编排；
-- STM32MP257 NPU 运行 YOLO11n Pose；800 MHz 标称理论算力为 1.2 TOPS INT8，只有实际启用 900 MHz overdrive 时才使用 1.35 TOPS 理论上限口径；
+- STM32MP257 是赛道指定型号，NPU 运行 YOLO11n Pose；主海报不把 TOPS 作为项目指标，母文档技术附注可记录 1.2–1.35 TOPS 范围，但不得写成实测吞吐；
 - Pose 关键点经 58 维特征和时序 Prone MLP，与 Presence 和手机原始事实进入 FusionCore；
 - 输出为 `ACTIVE / NOT_PRESENT / UNKNOWN`、0–3 分神等级、reasons 和 episode；
 - App 是用户主要交互面，展示 PRECHECK、发送会话意图和手机事实、呈现提醒并缓存记录；正式状态权威始终在主机；
@@ -196,13 +196,13 @@ C0 是不计入专题数量的唯一完整系统母图。C 套另含以下 12 �
 
 | 图 | 唯一回答的问题 | 必选分组、节点与方向 | 禁止内容 | 方向/规模 | 必选量化标签 |
 |---|---|---|---|---|---|
-| C0 | 整个系统如何闭环 | 摄像头→A35/NPU；STUSB4500→A35 策略；A35→G431→云台；A35↔M33→风扇；A35↔App；A35→手环；A35→浏览器展示；感知→决策→提醒与控制 | 代码文件、旧兼容字段、Demo 伪装正式链 | LR，≤24 节点 | 1.2 TOPS@800MHz、2s phone heartbeat、100ms fan loop |
+| C0 | 整个系统如何闭环 | 摄像头→A35/NPU；STUSB4500→A35 策略；A35→G431→云台；A35↔M33→风扇；A35↔App；A35→手环；A35→浏览器展示；感知→决策→提醒与控制 | 代码文件、旧兼容字段、Demo 伪装正式链 | LR，≤24 节点 | 4 compute domains、2s phone heartbeat、100ms fan loop |
 | C01 | 用户如何使用产品 | App 会话/PRECHECK/提醒/记录，主机权威会话，手环执行，浏览器只读展示 | 旧板载 UI、App 自算最终等级 | LR，≤14 | 三级分神、30s 展示时间线 |
 | C02 | 软件如何分域和传递类型化数据 | 常驻域/SessionRuntime/DemoRuntime；CameraFrame/PhoneFact/Assessment/Snapshot；资源租约 | 把 SystemStateStore 画成新核心 | TB，≤22 | FrameQueue=3、Home/Go cadence |
 | C03 | 会话阶段如何控制资源 | IDLE/PRECHECK/FOCUSING/PAUSED/ENDING 与相机/NPU/Fusion/提醒/存储开关 | PRECHECK 计时/入库/手机融合 | LR 状态机+表，≤10 状态 | PRECHECK 250ms、PAUSED 1000ms |
 | C04 | 分神如何从证据产生 | Camera→quality→Pose→subject→58d→Prone；Presence/Phone→Fusion→level/reasons/episode | 困倦、视觉手机判断、把 UNKNOWN 当专注 | LR，≤18 | 17 keypoints、58d、2s/16 steps、level 0+1–3 |
 | C05 | 手机与手环如何可靠协同 | 板端 Server↔App Client；板端 Client↔Band Server；hello/state/heartbeat/ACK/outbox/TTL/retry | 画反 GATT 角色、把手环接到 App | 双泳道序列/流图，≤20 | 2s/5s、10s TTL、ACK 3 stages |
-| C06 | 多计算域为何这样分工 | A35→NPU；A35↔M33 RPMsg；UART4 双向；PD7 Enable 为 A35→G431；PD6 Fault 为 G431→A35；故障隔离 | M33 控云台/供电，A35 生成电机 PWM | TB 四泳道，≤18 | NPU 1.2 TOPS@800MHz、M33 100ms、RPMsg 1Hz |
+| C06 | 多计算域为何这样分工 | A35→NPU；A35↔M33 RPMsg；UART4 双向；PD7 Enable 为 A35→G431；PD6 Fault 为 G431→A35；故障隔离 | M33 控云台/供电，A35 生成电机 PWM | TB 四泳道，≤18 | 4 compute domains、M33 100ms、RPMsg 1Hz |
 | C07 | 云台如何从视觉到安全执行 | 唯一 Camera→人物目标→PRECHECK/追踪→HW Service↔G431→电机；PD7/PD6/STOP/Fault/恢复 | PD4 画复位、第二相机、原始 UART 暴露 | LR 闭环+安全支路，≤20 | UART 115200、Fault 低有效 |
 | C08 | 风扇如何在异核失联时安全 | cpu-thermal→bridge↔RPMsg→M33→PB10→fan→PB11；loader/health/fallback 互斥接管 | Linux 与 M33 同时控制 PWM | LR 主闭环+下方 fallback，≤18 | 100ms、1Hz、3s TTL、约6000 RPM安全档 |
 | C09 | 供电如何改变性能而不影响安全 | STUSB→去抖→P/A/U→profile policy→Home/Go→Vision cadence；manual override/epoch | 电量、电压、UNKNOWN=ABSENT | LR 策略图，≤16 | 3 samples×250ms、Home≈4FPS、Go≈3FPS |
@@ -284,8 +284,8 @@ flowchart LR
 
 | 数值 | 唯一含义 | 不得误写为 | 主要出现图 |
 |---|---|---|---|
-| `1.2 TOPS INT8 @ 800 MHz` | STM32MP257 NPU 标称理论算力口径 | 实测端到端吞吐；默认 1.35 TOPS | C0、C04、C06 |
-| `1.35 TOPS @ 900 MHz` | 仅启用 overdrive 时的理论上限 | 当前默认工作点 | 母文档注释，不进入核心海报短文案 |
+| `4 compute domains` | A35、NPU、M33、G431 的异构职责 | 把四者画成同一软件线程 | C0、C06 |
+| `1.2–1.35 TOPS` | 仅供母文档硬件参数附注；STM32MP257 为赛道指定型号 | 海报创新指标；实测端到端吞吐 | 不进入 A/B/C 主图 |
 | `2 s / 16 steps` | Prone MLP 的时序观察窗口 | 手机心跳或云台恢复周期 | C04 |
 | `2 s heartbeat / 5 s TTL` | App 手机原始事实的上报与新鲜度 | 模型窗口 | C05 |
 | `30 s` | 展示页“近 30 秒证据时间线”可视窗口 | 模型只看 30 秒 | C01、C04、C10 |
