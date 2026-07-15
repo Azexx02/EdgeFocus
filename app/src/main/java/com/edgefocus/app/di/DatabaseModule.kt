@@ -11,6 +11,9 @@ import com.edgefocus.app.data.local.MIGRATION_6_7
 import com.edgefocus.app.data.local.dao.AppUsageDao
 import com.edgefocus.app.data.local.dao.SessionDao
 import com.edgefocus.app.data.local.dao.SettingsDao
+import com.edgefocus.app.data.local.dao.HostEventDao
+import com.edgefocus.app.data.local.dao.SyncOutboxDao
+import com.edgefocus.app.data.local.dao.ProtocolCheckpointDao
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -36,6 +39,7 @@ object DatabaseModule {
                 MIGRATION_5_6,
                 MIGRATION_6_7
             )
+            .fallbackToDestructiveMigration()
             .build()
     }
 
@@ -53,4 +57,14 @@ object DatabaseModule {
     fun provideAppUsageDao(database: AppDatabase): AppUsageDao {
         return database.appUsageDao()
     }
+
+    @Provides
+    fun provideHostEventDao(database: AppDatabase): HostEventDao = database.hostEventDao()
+
+    @Provides
+    fun provideSyncOutboxDao(database: AppDatabase): SyncOutboxDao = database.syncOutboxDao()
+
+    @Provides
+    fun provideProtocolCheckpointDao(database: AppDatabase): ProtocolCheckpointDao =
+        database.protocolCheckpointDao()
 }

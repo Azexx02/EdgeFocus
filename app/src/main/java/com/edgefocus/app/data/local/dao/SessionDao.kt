@@ -39,4 +39,7 @@ interface SessionDao {
 
     @Query("UPDATE sessions SET synced = 1 WHERE id = :id")
     suspend fun markSynced(id: String)
+
+    @Query("UPDATE sessions SET synced = 1, boardSessionId = :boardSessionId WHERE id = :id")
+    suspend fun markSynced(id: String, boardSessionId: String)
 }

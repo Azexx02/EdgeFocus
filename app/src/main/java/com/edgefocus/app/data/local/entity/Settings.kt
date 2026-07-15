@@ -8,5 +8,9 @@ data class Settings(
     @PrimaryKey val id: Int = 1,
     val pomodoroDuration: Int = 25,
     val useEdgeFocusBoard: Boolean = true,
-    val edgeFocusMacAddress: String = ""
+    val edgeFocusMacAddress: String = "",
+    val screenSaverEnabled: Boolean = true,
+    val screenSaverTimeoutSec: Int = 120,
+    val appScreenAlertsEnabled: Boolean = true,
+    val appSoundAlertsEnabled: Boolean = true
 )
