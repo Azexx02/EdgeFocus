@@ -13,6 +13,8 @@ import com.edgefocus.app.domain.model.TimerState
 import com.edgefocus.app.domain.repository.ISessionRepository
 import com.edgefocus.app.domain.repository.ISettingsRepository
 import com.edgefocus.app.domain.session.AppSessionCoordinator
+import com.edgefocus.app.data.ble.ConnectionSupervisor
+import com.edgefocus.app.data.ble.model.ExternalPowerState
 import com.edgefocus.app.service.AppMonitorService
 import com.edgefocus.app.util.TimeUtils
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -37,7 +39,8 @@ data class TimerUiState(
     val phoneDistractionCount: Int = 0,
     val boardBatteryPercent: Int = 67,
     val boardBatteryCharging: Boolean = false,
-    val boardPowerProfile: PowerProfile = PowerProfile.GO
+    val boardPowerProfile: PowerProfile = PowerProfile.GO,
+    val externalPowerState: ExternalPowerState = ExternalPowerState.UNKNOWN
 )
 
 @HiltViewModel
@@ -46,7 +49,8 @@ class HomeViewModel @Inject constructor(
     private val settingsRepository: ISettingsRepository,
     private val sessionRepository: ISessionRepository,
     private val timerStateHolder: TimerStateHolder,
-    private val sessionCoordinator: AppSessionCoordinator
+    private val sessionCoordinator: AppSessionCoordinator,
+    private val connectionSupervisor: ConnectionSupervisor
 ) : AndroidViewModel(application) {
 
     private val _uiState = MutableStateFlow(TimerUiState())
@@ -70,6 +74,20 @@ class HomeViewModel @Inject constructor(
     private var isAppMonitorRunning = false
 
     init {
+        viewModelScope.launch {
+            connectionSupervisor.snapshot.collect { snapshot ->
+                _uiState.update { state ->
+                    state.copy(
+                        externalPowerState = snapshot.hostState?.power?.state ?: ExternalPowerState.UNKNOWN,
+                        boardPowerProfile = when (snapshot.hostState?.power?.profile) {
+                            "home" -> PowerProfile.HOME
+                            "go" -> PowerProfile.GO
+                            else -> state.boardPowerProfile
+                        }
+                    )
+                }
+            }
+        }
         // 加载设置
         viewModelScope.launch {
             settingsRepository.getSettings().collect { settings ->

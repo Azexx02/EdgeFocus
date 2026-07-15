@@ -67,6 +67,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.edgefocus.app.data.remote.BoardSessionPhase
 import com.edgefocus.app.data.remote.ConnectionState
 import com.edgefocus.app.data.remote.PowerProfile
+import com.edgefocus.app.data.ble.model.ExternalPowerState
 import com.edgefocus.app.domain.model.TimerState
 import com.edgefocus.app.presentation.ui.home.DurationSelectorRing
 import com.edgefocus.app.presentation.ui.home.PomodoroTimer
@@ -130,8 +131,7 @@ fun ControlPanelScreen(
                     Text(
                         text = powerStatusText(
                             profile = uiState.boardPowerProfile,
-                            batteryPercent = uiState.boardBatteryPercent,
-                            charging = uiState.boardBatteryCharging
+                            externalPowerState = uiState.externalPowerState
                         ),
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.primary
@@ -532,20 +532,25 @@ private fun StatsPage(
                                 "电源状态",
                                 powerStatusText(
                                     uiState.boardPowerProfile,
-                                    uiState.boardBatteryPercent,
-                                    uiState.boardBatteryCharging
+                                    uiState.externalPowerState
                                 )
                             )
                         }
-                        StatRow("行为状态", focusStateLabel(uiState.focusState))
-                        if (uiState.phoneSignal) {
-                            StatRow("手机状态", phoneUsageStateLabel(uiState.phoneUsageState))
+                        StatRow(
+                            "手环状态",
+                            when (uiState.braceletConnected) {
+                                true -> "已连接"
+                                false -> "未连接"
+                                null -> "未知"
+                            }
+                        )
+                        if (!uiState.bandControlAvailable) {
+                            Text(
+                                "当前主机仅提供手环状态，连接控制为只读。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
-                        if (uiState.phoneDistractionLevel >= 0) {
-                            StatRow("手机信号等级", "L${uiState.phoneDistractionLevel}")
-                        }
-                        StatRow("风险分", "${uiState.riskScore}")
-                        uiState.focusReason?.let { StatRow("状态原因", compactJsonText(it)) }
                 }
             }
 
@@ -561,7 +566,6 @@ private fun StatsPage(
                     StatRow("走神次数", "${uiState.distractionCount}")
                     StatRow("提醒次数", "${uiState.reminderCount}")
                     StatRow("手机干扰", "${uiState.phoneDistractionCount}")
-                    lastAlert?.phoneDistractionLevel?.let { StatRow("手机干扰等级", "L$it") }
                 }
             }
 
@@ -640,9 +644,7 @@ private fun StatsPage(
                         StatRow("等级", "L${lastAlert.level}")
                         StatRow("消息", lastAlert.message.ifBlank { "主机未提供消息" })
                         StatRow("手机动作", lastAlert.phoneActions.joinToString("、") { channelLabel(it) })
-           lastAlert.riskScore?.let { StatRow("风险分", "%.2f".format(it)) }
            lastAlert.reason?.let { StatRow("原因", compactJsonText(it)) }
-           lastAlert.soundVolume?.let { StatRow("声音音量", "${(it * 100).toInt()}%") }
                     }
                 }
             }
@@ -927,16 +929,18 @@ private fun yesNo(value: Boolean): String = if (value) "是" else "否"
 
 private fun powerStatusText(
     profile: PowerProfile,
-    batteryPercent: Int,
-    charging: Boolean
+    externalPowerState: ExternalPowerState
 ): String {
     val profileText = when (profile) {
         PowerProfile.HOME -> "HOME"
         PowerProfile.GO -> "GO"
     }
-    val percent = batteryPercent.takeIf { it in 0..100 } ?: 67
-    val chargingText = if (charging) "+" else ""
-    return "$profileText $percent%$chargingText"
+    val sourceText = when (externalPowerState) {
+        ExternalPowerState.PRESENT -> "外部供电"
+        ExternalPowerState.ABSENT -> "移动供电"
+        ExternalPowerState.UNKNOWN -> "供电未知"
+    }
+    return "$profileText · $sourceText"
 }
 
 @Composable

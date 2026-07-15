@@ -131,6 +131,33 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
+        SettingsCard(title = "显示与提醒", icon = Icons.Default.Settings) {
+            SettingsToggle(
+                label = "启用 App 黑屏屏保",
+                checked = settings.screenSaverEnabled,
+                onCheckedChange = viewModel::updateScreenSaverEnabled
+            )
+            SettingsSlider(
+                label = "无操作后进入黑屏（秒）",
+                value = settings.screenSaverTimeoutSec.toFloat(),
+                valueRange = 15f..600f,
+                onValueChange = { viewModel.updateScreenSaverTimeout(it.toInt()) },
+                unit = "秒"
+            )
+            SettingsToggle(
+                label = "在 App 内显示主机提醒",
+                checked = settings.appScreenAlertsEnabled,
+                onCheckedChange = viewModel::updateAppScreenAlerts
+            )
+            SettingsToggle(
+                label = "允许主机提醒声音/振动",
+                checked = settings.appSoundAlertsEnabled,
+                onCheckedChange = viewModel::updateAppSoundAlerts
+            )
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
         // Distraction Apps - visible
         NavigationCard(
             title = "分心应用设置",

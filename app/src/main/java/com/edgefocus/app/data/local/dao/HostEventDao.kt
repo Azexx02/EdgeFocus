@@ -123,4 +123,24 @@ interface HostEventDao {
         """
     )
     suspend fun markStartedEffectsUncertainAfterDeviceReboot(currentBootCount: Int)
+
+    @Query(
+        """
+        UPDATE host_event_inbox
+        SET dispatchState = 'PENDING', lastError = 'process_restart_before_effect'
+        WHERE receivedBootCount = :currentBootCount
+          AND localDeadlineElapsedMs > :nowElapsedMs
+          AND dispatchState = 'CLAIMED'
+        """
+    )
+    suspend fun resetClaimsAfterProcessRestart(currentBootCount: Int, nowElapsedMs: Long)
+
+    @Query(
+        """
+        UPDATE host_event_inbox
+        SET dispatchState = 'DELIVERY_UNCERTAIN', lastError = 'process_restart_after_effect_started'
+        WHERE dispatchState = 'EFFECT_STARTED'
+        """
+    )
+    suspend fun markStartedEffectsUncertainAfterProcessRestart()
 }

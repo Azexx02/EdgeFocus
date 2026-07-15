@@ -67,6 +67,12 @@ class HostEventInbox @Inject constructor(
         database.withTransaction {
             database.hostEventDao().waitForReplayAfterDeviceReboot(bootCount)
             database.hostEventDao().markStartedEffectsUncertainAfterDeviceReboot(bootCount)
+            database.hostEventDao().resetClaimsAfterProcessRestart(
+                bootCount,
+                SystemClock.elapsedRealtime()
+            )
+            database.hostEventDao().markStartedEffectsUncertainAfterProcessRestart()
+            database.hostEventDao().expireDue(bootCount, SystemClock.elapsedRealtime())
         }
     }
 

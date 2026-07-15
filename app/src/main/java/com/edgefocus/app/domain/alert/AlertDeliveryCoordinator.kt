@@ -96,9 +96,14 @@ class AlertDeliveryCoordinator @Inject constructor(
             ReliableEventType.ALERT -> {
                 val data = JSONObject(event.payloadJson).optJSONObject("data") ?: JSONObject()
                 val alert = BoardJsonParser.parsePushAlert(data)
-                timerStateHolder.applyReliableAlert(alert)
-                _activeAlert.value = ActiveHostAlert(event.eventId, event.sessionId, alert)
-                deliverNotification(event.eventId, alert)
+                val settings = settingsDao.getSettingsOnce()
+                if (settings?.appScreenAlertsEnabled != false &&
+                    alert.phoneActions.any { it.equals("screen", ignoreCase = true) }
+                ) {
+                    timerStateHolder.applyReliableAlert(alert)
+                    _activeAlert.value = ActiveHostAlert(event.eventId, event.sessionId, alert)
+                }
+                deliverNotification(event.eventId, alert, settings?.appSoundAlertsEnabled != false)
             }
             ReliableEventType.SESSION_END -> timerStateHolder.applyReliableSessionEnd(event.payloadJson)
         }
@@ -137,7 +142,7 @@ class AlertDeliveryCoordinator @Inject constructor(
         }
     }
 
-    private suspend fun deliverNotification(eventId: String, alert: PushAlert) {
+    private suspend fun deliverNotification(eventId: String, alert: PushAlert, soundEnabled: Boolean) {
         val settings = settingsDao.getSettingsOnce()
         val actions = alert.phoneActions.map { it.lowercase() }.toSet()
         if ("screen" !in actions && "sound" !in actions && "vibrate" !in actions) return
@@ -161,6 +166,7 @@ class AlertDeliveryCoordinator @Inject constructor(
             .setContentIntent(pendingIntent)
             .setAutoCancel(false)
             .setOnlyAlertOnce(true)
+            .setSilent(!soundEnabled)
             .build()
         context.getSystemService(NotificationManager::class.java)
             .notify(eventId.hashCode(), notification)

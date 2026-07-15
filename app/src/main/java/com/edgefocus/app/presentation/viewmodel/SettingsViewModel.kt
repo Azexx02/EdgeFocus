@@ -37,6 +37,26 @@ class SettingsViewModel @Inject constructor(
         saveSettings()
     }
 
+    fun updateScreenSaverEnabled(enabled: Boolean) {
+        _settings.value = _settings.value.copy(screenSaverEnabled = enabled)
+        saveSettings()
+    }
+
+    fun updateScreenSaverTimeout(seconds: Int) {
+        _settings.value = _settings.value.copy(screenSaverTimeoutSec = seconds.coerceIn(15, 600))
+        saveSettings()
+    }
+
+    fun updateAppScreenAlerts(enabled: Boolean) {
+        _settings.value = _settings.value.copy(appScreenAlertsEnabled = enabled)
+        saveSettings()
+    }
+
+    fun updateAppSoundAlerts(enabled: Boolean) {
+        _settings.value = _settings.value.copy(appSoundAlertsEnabled = enabled)
+        saveSettings()
+    }
+
     private fun saveSettings() {
         viewModelScope.launch {
             settingsRepository.updateSettings(_settings.value)

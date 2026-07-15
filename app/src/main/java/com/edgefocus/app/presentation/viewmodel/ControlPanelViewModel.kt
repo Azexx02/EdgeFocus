@@ -24,6 +24,8 @@ import com.edgefocus.app.domain.repository.ISettingsRepository
 import com.edgefocus.app.domain.session.AppSessionCoordinator
 import com.edgefocus.app.domain.alert.AlertDeliveryCoordinator
 import com.edgefocus.app.domain.precheck.PrecheckController
+import com.edgefocus.app.data.ble.ConnectionSupervisor
+import com.edgefocus.app.data.ble.model.ExternalPowerState
 import com.edgefocus.app.service.AppMonitorService
 import com.edgefocus.app.util.TimeUtils
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -85,7 +87,10 @@ data class ControlPanelUiState(
     val soundVolume: Float = 0.7f,
     val defaultFocusDurationMin: Int = 25,
     val normalChannels: Set<String> = setOf("screen", "band", "sound"),
-    val silentChannels: Set<String> = setOf("screen", "band")
+    val silentChannels: Set<String> = setOf("screen", "band"),
+    val externalPowerState: ExternalPowerState = ExternalPowerState.UNKNOWN,
+    val braceletConnected: Boolean? = null,
+    val bandControlAvailable: Boolean = false
 )
 
 @HiltViewModel
@@ -97,7 +102,8 @@ class ControlPanelViewModel @Inject constructor(
     private val bleManager: BleManager,
     private val sessionCoordinator: AppSessionCoordinator,
     private val alertDeliveryCoordinator: AlertDeliveryCoordinator,
-    private val precheckController: PrecheckController
+    private val precheckController: PrecheckController,
+    private val connectionSupervisor: ConnectionSupervisor
 ) : AndroidViewModel(application) {
 
     private val _uiState = MutableStateFlow(ControlPanelUiState())
@@ -110,6 +116,23 @@ class ControlPanelViewModel @Inject constructor(
 
     init {
         timerStateHolder.enterControlPanelMode()
+
+        viewModelScope.launch {
+            connectionSupervisor.snapshot.collect { snapshot ->
+                _uiState.update { state ->
+                    state.copy(
+                        externalPowerState = snapshot.hostState?.power?.state ?: ExternalPowerState.UNKNOWN,
+                        braceletConnected = snapshot.hostState?.braceletConnected,
+                        bandControlAvailable = snapshot.hello?.supports("band_proxy_control_v1") == true,
+                        boardPowerProfile = when (snapshot.hostState?.power?.profile) {
+                            "home" -> PowerProfile.HOME
+                            "go" -> PowerProfile.GO
+                            else -> state.boardPowerProfile
+                        }
+                    )
+                }
+            }
+        }
 
         viewModelScope.launch {
             settingsRepository.getSettings().collect { settings ->

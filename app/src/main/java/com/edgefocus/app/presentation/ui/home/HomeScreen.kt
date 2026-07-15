@@ -48,6 +48,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.edgefocus.app.data.SessionMode
 import com.edgefocus.app.data.remote.ConnectionState
 import com.edgefocus.app.data.remote.PowerProfile
+import com.edgefocus.app.data.ble.model.ExternalPowerState
 import com.edgefocus.app.domain.model.SessionType
 import com.edgefocus.app.domain.model.TimerState
 import com.edgefocus.app.presentation.viewmodel.BleViewModel
@@ -121,7 +122,7 @@ fun HomeScreen(
                 Text(
                     text = when {
                         !isConnected && useBoard -> "设备未连接"
-                        useBoard -> "EdgeFocus 模式 · ${powerStatusText(uiState.boardPowerProfile, uiState.boardBatteryPercent, uiState.boardBatteryCharging)}"
+                        useBoard -> "EdgeFocus 模式 · ${powerStatusText(uiState.boardPowerProfile, uiState.externalPowerState)}"
                         else -> "本地模式"
                     },
                         style = MaterialTheme.typography.labelSmall,
@@ -297,16 +298,18 @@ fun HomeScreen(
 
 private fun powerStatusText(
     profile: PowerProfile,
-    batteryPercent: Int,
-    charging: Boolean
+    externalPowerState: ExternalPowerState
 ): String {
     val profileText = when (profile) {
         PowerProfile.HOME -> "HOME"
         PowerProfile.GO -> "GO"
     }
-    val percent = batteryPercent.takeIf { it in 0..100 } ?: 67
-    val chargingText = if (charging) "+" else ""
-    return "$profileText $percent%$chargingText"
+    val sourceText = when (externalPowerState) {
+        ExternalPowerState.PRESENT -> "外部供电"
+        ExternalPowerState.ABSENT -> "移动供电"
+        ExternalPowerState.UNKNOWN -> "供电未知"
+    }
+    return "$profileText · $sourceText"
 }
 
 @Composable
