@@ -1,0 +1,49 @@
+flowchart LR
+    User["用户 / NFC 标签"]
+    Main["MainActivity<br/>竖屏应用"]
+    Panel["ControlPanelActivity<br/>横屏三页 Pager"]
+    UI["Compose UI"]
+
+    Session["AppSessionCoordinator<br/>唯一会话"]
+    Timer["TimerStateHolder<br/>兼容状态运行时"]
+    Alert["AlertDeliveryCoordinator<br/>可靠事件"]
+    Precheck["PrecheckController<br/>PRECHECK"]
+    Monitor["AppMonitorService<br/>PhoneFact"]
+
+    Supervisor["ConnectionSupervisor<br/>READY 协商"]
+    Codec["HostJsonCodec<br/>schema 2.1"]
+    Scheduler["BleRequestScheduler<br/>P0-P4"]
+    BLE["BleManager<br/>GATT"]
+
+    Inbox[("Event Inbox")]
+    Outbox[("Sync Outbox")]
+    Checkpoint[("Protocol Checkpoint")]
+    Host["EdgeFocus 主机"]
+
+    User --> Main
+    User --> Panel
+    Main --> UI
+    Panel --> UI
+    UI --> Session
+    UI --> Alert
+    UI --> Precheck
+
+    Session --> Timer
+    Session --> Outbox
+    Session --> Monitor
+    Alert --> Inbox
+    Monitor --> Checkpoint
+    Precheck --> Checkpoint
+
+    Session --> Supervisor
+    Alert --> Supervisor
+    Monitor --> Supervisor
+    Precheck --> Supervisor
+    Supervisor --> Codec
+    Supervisor --> BLE
+    Timer --> BLE
+    Alert --> BLE
+    Precheck --> BLE
+    Monitor --> BLE
+    BLE --> Scheduler
+    BLE <--> Host
