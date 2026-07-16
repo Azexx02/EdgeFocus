@@ -31,7 +31,7 @@ public:
 
     CommandResult moveTo(double yaw, double pitch, int) override {
         calls.push_back("move:" + std::to_string(yaw) + "," + std::to_string(pitch));
-        if (!move_success) return {false, false, "move_failed"};
+        if (!move_success) return {false, false, move_error};
         current.state = State::Holding;
         current.yaw_deg = yaw;
         current.pitch_deg = pitch;
@@ -63,6 +63,7 @@ public:
     Status current{State::Ready, false, false, true, {}, 0.0, 0.0};
     bool align_success{true};
     bool move_success{true};
+    std::string move_error{"move_failed"};
     bool hold_success{true};
     std::vector<std::string> calls;
 };
@@ -243,6 +244,56 @@ void test_manual_lease_session_and_sequence_guards() {
     assert(controller.snapshot().state == PrecheckState::Holding);
 }
 
+void test_holding_can_reenter_manual_control() {
+    FakeHardware hardware;
+    GimbalPrecheckController controller(hardware, config());
+    assert(controller.start("holding-manual", 0));
+    assert(controller.skipAuto("holding-manual", 1, 50).success);
+    assert(controller.confirmPosition("holding-manual", 2, 60).success);
+    assert(controller.snapshot().state == PrecheckState::Holding);
+    assert(!controller.snapshot().manual_lease);
+
+    const auto resumed = controller.skipAuto("holding-manual", 3, 70);
+    assert(resumed.success);
+    assert(controller.snapshot().state == PrecheckState::Manual);
+    assert(controller.snapshot().manual_lease);
+    assert(controller.nudge(
+        "holding-manual", 4, NudgeDirection::Right, 80).success);
+}
+
+void test_nudge_wraps_protocol_angles_at_zero() {
+    FakeHardware hardware;
+    GimbalPrecheckController controller(hardware, config());
+    assert(controller.start("angle-wrap", 0));
+    assert(controller.skipAuto("angle-wrap", 1, 50).success);
+
+    hardware.current.yaw_deg = 0.0;
+    hardware.current.pitch_deg = 0.0;
+    assert(controller.nudge("angle-wrap", 2, NudgeDirection::Left, 60).success);
+    assert(hardware.current.yaw_deg == 358.0);
+    assert(controller.nudge("angle-wrap", 3, NudgeDirection::Down, 70).success);
+    assert(hardware.current.pitch_deg == 358.0);
+}
+
+void test_safe_window_rejection_keeps_manual_lease() {
+    FakeHardware hardware;
+    GimbalPrecheckController controller(hardware, config());
+    assert(controller.start("safe-window", 0));
+    assert(controller.skipAuto("safe-window", 1, 50).success);
+
+    hardware.move_success = false;
+    hardware.move_error = "target_out_of_bounds";
+    const auto rejected = controller.nudge(
+        "safe-window", 2, NudgeDirection::Right, 60);
+    assert(!rejected.success);
+    assert(rejected.error == "target_out_of_bounds");
+    assert(controller.snapshot().state == PrecheckState::Manual);
+    assert(controller.snapshot().manual_lease);
+
+    hardware.move_success = true;
+    assert(controller.nudge("safe-window", 3, NudgeDirection::Left, 70).success);
+}
+
 void test_failed_motion_degrades_and_disables() {
     FakeHardware hardware;
     hardware.move_success = false;
@@ -321,6 +372,9 @@ int main() {
     test_hard_deadline_centers_and_releases_manual_control();
     test_production_clock_excludes_alignment_from_search_budget();
     test_manual_lease_session_and_sequence_guards();
+    test_holding_can_reenter_manual_control();
+    test_nudge_wraps_protocol_angles_at_zero();
+    test_safe_window_rejection_keeps_manual_lease();
     test_failed_motion_degrades_and_disables();
     test_realign_requires_recoverable_disabled_state();
     test_runtime_fault_disables_use_until_passive_recovery_is_confirmed();

@@ -522,7 +522,8 @@ CommandResult GimbalPrecheckController::skipAuto(
     if (session_id != status_.session_id) return rejected("session_mismatch");
     if (status_.state != PrecheckState::Searching &&
         status_.state != PrecheckState::Centering &&
-        status_.state != PrecheckState::Framing) {
+        status_.state != PrecheckState::Framing &&
+        status_.state != PrecheckState::Holding) {
         return rejected("automatic_search_not_active");
     }
     if (sequence == 0 || sequence <= last_command_sequence_) return rejected("stale_command_sequence");
@@ -553,12 +554,25 @@ CommandResult GimbalPrecheckController::nudge(
     if (!hardware.yaw_deg || !hardware.pitch_deg) return rejected("gimbal_angle_unknown");
     double yaw = *hardware.yaw_deg;
     double pitch = *hardware.pitch_deg;
-    if (direction == NudgeDirection::Left) yaw -= config_.nudge_step_deg;
-    if (direction == NudgeDirection::Right) yaw += config_.nudge_step_deg;
-    if (direction == NudgeDirection::Up) pitch += config_.nudge_step_deg;
-    if (direction == NudgeDirection::Down) pitch -= config_.nudge_step_deg;
+    if (direction == NudgeDirection::Left) {
+        yaw = offsetAngle(yaw, -config_.nudge_step_deg);
+    }
+    if (direction == NudgeDirection::Right) {
+        yaw = offsetAngle(yaw, config_.nudge_step_deg);
+    }
+    if (direction == NudgeDirection::Up) {
+        pitch = offsetAngle(pitch, config_.nudge_step_deg);
+    }
+    if (direction == NudgeDirection::Down) {
+        pitch = offsetAngle(pitch, -config_.nudge_step_deg);
+    }
     result = hardware_.moveToVerified(yaw, pitch, 5000, 1.5);
-    if (!result.success) degradeLocked(result.error.empty() ? "gimbal_nudge_failed" : result.error);
+    // Reaching the configured safe window is an expected user-input boundary,
+    // not a hardware failure. Keep the manual lease so the user can move back
+    // in the opposite direction; real motion/UART failures still degrade safely.
+    if (!result.success && result.error != "target_out_of_bounds") {
+        degradeLocked(result.error.empty() ? "gimbal_nudge_failed" : result.error);
+    }
     return result;
 }
 
