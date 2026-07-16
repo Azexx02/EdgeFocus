@@ -745,7 +745,7 @@ class TimerStateHolder @Inject constructor(
     }
 
     fun refreshCameraPreview() {
-        if (!bleManager.isConnected()) return
+        if (!bleManager.isConnected() || !connectionSupervisor.snapshot.value.isReady) return
         if (_state.value.preparationState != BoardPreparationState.READY &&
             _state.value.preparationState != BoardPreparationState.DEGRADED
         ) return
@@ -1132,6 +1132,7 @@ class TimerStateHolder @Inject constructor(
 
 
     private suspend fun checkBoardSession() {
+        if (!bleManager.isConnected() || !connectionSupervisor.snapshot.value.isReady) return
         try {
             val result = bleManager.getCurrentState()
             result.onSuccess { data ->
