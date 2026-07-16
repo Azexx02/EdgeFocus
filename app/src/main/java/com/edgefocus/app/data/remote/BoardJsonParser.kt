@@ -11,7 +11,8 @@ enum class BoardSessionPhase(val wireValue: String) {
 
     companion object {
         fun fromWire(value: String?): BoardSessionPhase {
-            return entries.firstOrNull { it.wireValue == value } ?: IDLE
+            val normalized = value?.trim()?.lowercase()
+            return entries.firstOrNull { it.wireValue == normalized } ?: IDLE
         }
     }
 }
@@ -76,6 +77,16 @@ data class BoardSessionState(
     val focusReason: String? = null,
     val behaviorContext: String? = null
 )
+
+fun BoardSessionState.representsActiveRuntime(): Boolean =
+    sessionPhase != BoardSessionPhase.IDLE || active || paused || remainingMs > 0L || precheck != null
+
+fun BoardSessionState.effectivePhase(): BoardSessionPhase = when {
+    sessionPhase != BoardSessionPhase.IDLE -> sessionPhase
+    paused || focusState == 6 -> BoardSessionPhase.PAUSED
+    active || remainingMs > 0L -> BoardSessionPhase.FOCUSING
+    else -> BoardSessionPhase.IDLE
+}
 
 data class PrecheckControl(
     val owner: String = "board",

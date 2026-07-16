@@ -7,6 +7,8 @@ import com.edgefocus.app.data.remote.BoardJsonParser
 import com.edgefocus.app.data.remote.BoardPrecheck
 import com.edgefocus.app.data.remote.BoardSessionPhase
 import com.edgefocus.app.data.remote.BoardSessionState
+import com.edgefocus.app.data.remote.effectivePhase
+import com.edgefocus.app.data.remote.representsActiveRuntime
 import com.edgefocus.app.data.remote.BleManager
 import com.edgefocus.app.data.remote.CameraPreviewImage
 import com.edgefocus.app.data.remote.ConnectionState
@@ -124,6 +126,7 @@ class TimerStateHolder @Inject constructor(
         scope.launch {
             settingsDao.getSettings().collect { settings ->
                 settings?.let {
+                    updateIdleDuration(it.pomodoroDuration)
                     val mode = if (it.useEdgeFocusBoard) {
                         SessionMode.EDGEFOCUS
                     } else {
@@ -215,10 +218,7 @@ class TimerStateHolder @Inject constructor(
                 if (state.sessionPhase == BoardSessionPhase.IDLE) {
                     applyBoardDeviceStatus(state)
                 }
-                if (state.sessionPhase != BoardSessionPhase.IDLE ||
-                    state.hasRemainingMs ||
-                    state.precheck != null
-                ) {
+                if (state.representsActiveRuntime()) {
                     applyBoardSessionState(state)
                 }
             }
@@ -306,6 +306,22 @@ class TimerStateHolder @Inject constructor(
 
     // ==================== 会话控制 ====================
 
+    fun updateIdleDuration(minutes: Int) {
+        val clamped = minutes.coerceIn(1, 120)
+        val durationMs = TimeUtils.minutesToMillis(clamped)
+        _state.update { current ->
+            if (current.timerState != TimerState.IDLE && current.timerState != TimerState.FINISHED) {
+                current
+            } else {
+                current.copy(
+                    targetDurationMinutes = clamped,
+                    timeRemaining = durationMs,
+                    totalTime = durationMs
+                )
+            }
+        }
+    }
+
     /**
      * 启动 EdgeFocus 模式会话
      * 
@@ -338,6 +354,9 @@ class TimerStateHolder @Inject constructor(
                 sessionPhase = BoardSessionPhase.IDLE,
                 focusState = 0,
                 elapsedMs = 0L,
+                timeRemaining = totalTimeMs,
+                totalTime = totalTimeMs,
+                targetDurationMinutes = targetDurationMinutes.coerceIn(1, 120),
                 precheck = null,
                 precheckGuidance = null,
                 cameraPreview = null,
@@ -909,13 +928,9 @@ class TimerStateHolder @Inject constructor(
             _state.value.totalTime > 0L -> _state.value.totalTime
             else -> fallbackTotalMs
         }
-        val phase = when {
-            boardState.sessionPhase != BoardSessionPhase.IDLE -> boardState.sessionPhase
-            boardState.paused || boardState.focusState == 6 -> BoardSessionPhase.PAUSED
-            boardState.active || boardState.hasRemainingMs -> BoardSessionPhase.FOCUSING
-            else -> BoardSessionPhase.IDLE
-        }
+        val phase = boardState.effectivePhase()
         val remainingMs = when {
+            phase == BoardSessionPhase.PRECHECK && boardState.remainingMs <= 0L -> targetMs
             boardState.hasRemainingMs -> boardState.remainingMs.coerceAtLeast(0L)
             phase == BoardSessionPhase.PRECHECK -> targetMs
             _state.value.timeRemaining > 0L -> _state.value.timeRemaining

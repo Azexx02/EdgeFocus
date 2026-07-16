@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.Timelapse
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
@@ -59,6 +60,7 @@ fun SettingsScreen(
     onNavigateToTest: () -> Unit = {}
 ) {
     val settings by viewModel.settings.collectAsState()
+    val bandControl by viewModel.bandControl.collectAsState()
     var versionTapCount by remember { mutableIntStateOf(0) }
     var showDevTools by remember { mutableIntStateOf(0) }
 
@@ -127,6 +129,47 @@ fun SettingsScreen(
                 icon = Icons.Default.BluetoothConnected,
                 onClick = onNavigateToBleConnect
             )
+
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(
+                text = "手环：" + when (bandControl.braceletConnected) {
+                    true -> "已连接"
+                    false -> "未连接"
+                    null -> "状态未知"
+                },
+                style = MaterialTheme.typography.bodyMedium
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedButton(
+                    onClick = viewModel::requestBandSearch,
+                    enabled = bandControl.hostConnected && bandControl.available && !bandControl.inProgress,
+                    modifier = Modifier.weight(1f)
+                ) { Text("立即搜索手环") }
+                OutlinedButton(
+                    onClick = viewModel::requestBandReconnect,
+                    enabled = bandControl.hostConnected && bandControl.available && !bandControl.inProgress,
+                    modifier = Modifier.weight(1f)
+                ) { Text("重新连接") }
+            }
+            if (!bandControl.hostConnected) {
+                Text(
+                    "连接 EdgeFocus 主机后可控制手环搜索。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else if (!bandControl.available) {
+                Text(
+                    "当前主机固件仅支持自动搜索和重连。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            bandControl.message?.let {
+                Text(it, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+            }
         }
 
         Spacer(modifier = Modifier.height(16.dp))

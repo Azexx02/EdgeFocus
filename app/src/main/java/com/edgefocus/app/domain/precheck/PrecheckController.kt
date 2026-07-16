@@ -28,12 +28,16 @@ class PrecheckController @Inject constructor(
     suspend fun realign(): Result<Unit> = send("gimbal_realign")
 
     suspend fun confirmPositionAndContinue(): Result<Unit> = runCatching {
-        send("precheck_confirm_position").getOrThrow()
+        if (timerStateHolder.state.value.precheck?.gimbal != null) {
+            send("precheck_confirm_position").getOrThrow()
+        }
         continueSession().getOrThrow()
     }
 
     suspend fun skipAutoAdjustAndContinue(): Result<Unit> = runCatching {
-        send("precheck_skip_auto_adjust").getOrThrow()
+        if (timerStateHolder.state.value.precheck?.gimbal != null) {
+            send("precheck_skip_auto_adjust").getOrThrow()
+        }
         continueSession().getOrThrow()
     }
 

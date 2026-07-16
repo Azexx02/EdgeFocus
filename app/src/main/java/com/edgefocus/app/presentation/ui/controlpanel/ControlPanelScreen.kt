@@ -234,7 +234,7 @@ private fun TimerPage(
     uiState: com.edgefocus.app.presentation.viewmodel.ControlPanelUiState
 ) {
     val isRunning = uiState.timerState == TimerState.RUNNING
-    val isIdle = uiState.timerState == TimerState.IDLE
+    val isIdle = uiState.timerState == TimerState.IDLE || uiState.timerState == TimerState.FINISHED
 
     if (uiState.timerState == TimerState.PRECHECK) {
         PrecheckPage(viewModel = viewModel, uiState = uiState)
@@ -670,6 +670,46 @@ private fun SettingsPage(
                 Text("尚未读取设备设置", style = MaterialTheme.typography.bodySmall)
                 OutlinedButton(onClick = viewModel::refreshBoardPreferences) {
                     Text("重新读取")
+                }
+            }
+        }
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text("手环连接", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    when (uiState.braceletConnected) {
+                        true -> "当前已连接手环"
+                        false -> "当前未连接手环"
+                        null -> "手环状态未知"
+                    },
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        onClick = viewModel::requestBandSearch,
+                        enabled = uiState.isBoardConnected && uiState.bandControlAvailable && !uiState.bandControlInProgress
+                    ) { Text("立即搜索手环") }
+                    OutlinedButton(
+                        onClick = viewModel::requestBandReconnect,
+                        enabled = uiState.isBoardConnected && uiState.bandControlAvailable && !uiState.bandControlInProgress
+                    ) { Text("重新连接") }
+                }
+                if (uiState.isBoardConnected && !uiState.bandControlAvailable) {
+                    Text(
+                        "当前主机固件仅支持自动搜索和重连。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                uiState.bandControlMessage?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.primary)
                 }
             }
         }

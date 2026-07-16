@@ -34,6 +34,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
 import javax.inject.Inject
 
 enum class SystemMode {
@@ -90,7 +91,9 @@ data class ControlPanelUiState(
     val silentChannels: Set<String> = setOf("screen", "band"),
     val externalPowerState: ExternalPowerState = ExternalPowerState.UNKNOWN,
     val braceletConnected: Boolean? = null,
-    val bandControlAvailable: Boolean = false
+    val bandControlAvailable: Boolean = false,
+    val bandControlInProgress: Boolean = false,
+    val bandControlMessage: String? = null
 )
 
 @HiltViewModel
@@ -202,8 +205,7 @@ class ControlPanelViewModel @Inject constructor(
     }
 
     fun updateSelectedDuration(minutes: Int) {
-        val clamped = minutes.coerceIn(5, 120)
-        _uiState.update { it.copy(selectedDuration = clamped) }
+        timerStateHolder.updateIdleDuration(minutes)
     }
 
     fun setSystemMode(mode: Int) {
@@ -280,6 +282,41 @@ class ControlPanelViewModel @Inject constructor(
     fun refreshBoardPreferences() {
         if (!_uiState.value.isBoardConnected) return
         viewModelScope.launch { loadBoardPreferences() }
+    }
+
+    fun requestBandSearch() = runBandControl("scan_connect")
+
+    fun requestBandReconnect() = runBandControl("reconnect")
+
+    private fun runBandControl(action: String) {
+        val current = _uiState.value
+        if (!current.isBoardConnected || !current.bandControlAvailable || current.bandControlInProgress) return
+        viewModelScope.launch {
+            _uiState.update { it.copy(bandControlInProgress = true, bandControlMessage = null) }
+            bleManager.bandControl(action)
+                .onSuccess { response ->
+                    val accepted = com.edgefocus.app.data.ble.HostJsonCodec.parseBusinessAcceptance(
+                        String(response, Charsets.UTF_8)
+                    )
+                    _uiState.update {
+                        it.copy(
+                            bandControlMessage = if (accepted.accepted) {
+                                if (action == "reconnect") "已要求主机立即重连手环" else "已要求主机立即搜索手环"
+                            } else {
+                                accepted.error ?: "主机未接受手环操作"
+                            }
+                        )
+                    }
+                    repeat(6) {
+                        delay(1_500L)
+                        connectionSupervisor.refreshHostState()
+                    }
+                }
+                .onFailure { error ->
+                    _uiState.update { it.copy(bandControlMessage = error.message ?: "手环操作失败") }
+                }
+            _uiState.update { it.copy(bandControlInProgress = false) }
+        }
     }
 
     private suspend fun loadBoardPreferences() {

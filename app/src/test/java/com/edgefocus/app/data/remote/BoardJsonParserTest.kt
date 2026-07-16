@@ -204,6 +204,29 @@ class BoardJsonParserTest {
     }
 
     @Test
+    fun idleSnapshotWithExplicitZeroDoesNotRepresentActiveRuntime() {
+        val state = BoardJsonParser.parseSessionState(
+            """{"status":"success","data":{"session_phase":"IDLE","active":false,"remaining_ms":0,"target_duration_ms":0}}"""
+        )
+
+        assertEquals(BoardSessionPhase.IDLE, state.sessionPhase)
+        assertTrue(state.hasRemainingMs)
+        assertFalse(state.representsActiveRuntime())
+        assertEquals(BoardSessionPhase.IDLE, state.effectivePhase())
+    }
+
+    @Test
+    fun uppercasePrecheckRemainsAnActiveRuntime() {
+        val state = BoardJsonParser.parseSessionState(
+            """{"status":"success","data":{"session_phase":"PRECHECK","active":false,"remaining_ms":0}}"""
+        )
+
+        assertEquals(BoardSessionPhase.PRECHECK, state.sessionPhase)
+        assertTrue(state.representsActiveRuntime())
+        assertEquals(BoardSessionPhase.PRECHECK, state.effectivePhase())
+    }
+
+    @Test
     fun parseSessionStateIncludesStartSourceAndPrecheckControl() {
         val state = BoardJsonParser.parseSessionState(
             """

@@ -8,11 +8,15 @@ import com.edgefocus.app.data.TimerStateHolder
 import com.edgefocus.app.data.local.entity.Session
 import com.edgefocus.app.data.remote.LocalSessionUpload
 import com.edgefocus.app.data.remote.PowerProfile
+import com.edgefocus.app.data.remote.BoardPrecheck
+import com.edgefocus.app.data.remote.CameraPreviewImage
+import com.edgefocus.app.data.remote.GimbalStatus
 import com.edgefocus.app.domain.model.SessionType
 import com.edgefocus.app.domain.model.TimerState
 import com.edgefocus.app.domain.repository.ISessionRepository
 import com.edgefocus.app.domain.repository.ISettingsRepository
 import com.edgefocus.app.domain.session.AppSessionCoordinator
+import com.edgefocus.app.domain.precheck.PrecheckController
 import com.edgefocus.app.data.ble.ConnectionSupervisor
 import com.edgefocus.app.data.ble.model.ExternalPowerState
 import com.edgefocus.app.service.AppMonitorService
@@ -40,7 +44,12 @@ data class TimerUiState(
     val boardBatteryPercent: Int = 67,
     val boardBatteryCharging: Boolean = false,
     val boardPowerProfile: PowerProfile = PowerProfile.GO,
-    val externalPowerState: ExternalPowerState = ExternalPowerState.UNKNOWN
+    val externalPowerState: ExternalPowerState = ExternalPowerState.UNKNOWN,
+    val precheck: BoardPrecheck? = null,
+    val cameraPreview: CameraPreviewImage? = null,
+    val gimbalStatus: GimbalStatus? = null,
+    val precheckGuidance: String? = null,
+    val boardErrorMessage: String? = null
 )
 
 @HiltViewModel
@@ -50,7 +59,8 @@ class HomeViewModel @Inject constructor(
     private val sessionRepository: ISessionRepository,
     private val timerStateHolder: TimerStateHolder,
     private val sessionCoordinator: AppSessionCoordinator,
-    private val connectionSupervisor: ConnectionSupervisor
+    private val connectionSupervisor: ConnectionSupervisor,
+    private val precheckController: PrecheckController
 ) : AndroidViewModel(application) {
 
     private val _uiState = MutableStateFlow(TimerUiState())
@@ -60,10 +70,7 @@ class HomeViewModel @Inject constructor(
 
     fun setWorkDuration(minutes: Int) {
         workDurationMinutes = minutes.coerceIn(1, 120)
-        if (_uiState.value.timerState == TimerState.IDLE) {
-            val duration = TimeUtils.minutesToMillis(workDurationMinutes)
-            _uiState.update { it.copy(timeRemaining = duration, totalTime = duration) }
-        }
+        timerStateHolder.updateIdleDuration(workDurationMinutes)
     }
 
     fun getWorkDurationMinutes(): Int = workDurationMinutes
@@ -92,7 +99,8 @@ class HomeViewModel @Inject constructor(
         viewModelScope.launch {
             settingsRepository.getSettings().collect { settings ->
                 settings?.let {
-                    workDurationMinutes = it.pomodoroDuration
+                    workDurationMinutes = it.pomodoroDuration.coerceIn(1, 120)
+                    timerStateHolder.updateIdleDuration(workDurationMinutes)
 
                     // 空闲状态时更新显示时间
                     if (_uiState.value.timerState == TimerState.IDLE) {
@@ -110,6 +118,9 @@ class HomeViewModel @Inject constructor(
 
         viewModelScope.launch {
             timerStateHolder.state.collect { sharedState ->
+                if (sharedState.timerState == TimerState.IDLE || sharedState.timerState == TimerState.FINISHED) {
+                    workDurationMinutes = sharedState.targetDurationMinutes.coerceIn(1, 120)
+                }
                 _uiState.update { state ->
                     state.copy(
                         timerState = sharedState.timerState,
@@ -125,7 +136,12 @@ class HomeViewModel @Inject constructor(
                         phoneDistractionCount = sharedState.phoneDistractionCount,
                         boardBatteryPercent = sharedState.boardBatteryPercent,
                         boardBatteryCharging = sharedState.boardBatteryCharging,
-                        boardPowerProfile = sharedState.boardPowerProfile
+                        boardPowerProfile = sharedState.boardPowerProfile,
+                        precheck = sharedState.precheck,
+                        cameraPreview = sharedState.cameraPreview,
+                        gimbalStatus = sharedState.gimbalStatus,
+                        precheckGuidance = sharedState.precheckGuidance,
+                        boardErrorMessage = sharedState.boardErrorMessage
                     )
                 }
 
@@ -191,6 +207,38 @@ class HomeViewModel @Inject constructor(
         }
 
         sessionCoordinator.stop()
+    }
+
+    fun refreshCameraPreview() = timerStateHolder.refreshCameraPreview()
+
+    fun confirmPrecheck() {
+        runPrecheckCommand { precheckController.confirmPositionAndContinue() }
+    }
+
+    fun skipPrecheckAutoAdjust() {
+        runPrecheckCommand { precheckController.skipAutoAdjustAndContinue() }
+    }
+
+    fun nudgeGimbal(direction: String) {
+        runPrecheckCommand { precheckController.nudge(direction) }
+    }
+
+    fun centerGimbal() {
+        runPrecheckCommand { precheckController.center() }
+    }
+
+    fun stopGimbal() {
+        runPrecheckCommand { precheckController.stop() }
+    }
+
+    private fun runPrecheckCommand(block: suspend () -> Result<Unit>) {
+        viewModelScope.launch {
+            block().onFailure { error ->
+                _uiState.update {
+                    it.copy(boardErrorMessage = error.message ?: "主机预检操作失败")
+                }
+            }
+        }
     }
 
     private fun handleSessionFinished() {

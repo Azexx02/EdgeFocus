@@ -1,5 +1,8 @@
 package com.edgefocus.app.presentation.ui.home
 
+import android.graphics.BitmapFactory
+import android.util.Base64
+import androidx.compose.foundation.Image
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -20,6 +23,9 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.BluetoothConnected
@@ -30,9 +36,13 @@ import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Work
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -42,7 +52,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.edgefocus.app.data.SessionMode
@@ -142,6 +154,15 @@ fun HomeScreen(
             }
         }
 
+        if (uiState.timerState == TimerState.PRECHECK) {
+            HomePrecheckPage(
+                uiState = uiState,
+                viewModel = viewModel,
+                modifier = Modifier.weight(1f)
+            )
+            return@Column
+        }
+
         Spacer(modifier = Modifier.height(32.dp))
 
         // Context Tag
@@ -182,7 +203,7 @@ fun HomeScreen(
                 .background(MaterialTheme.colorScheme.surface, CircleShape),
             contentAlignment = Alignment.Center
         ) {
-            if (uiState.timerState == TimerState.IDLE) {
+            if (uiState.timerState == TimerState.IDLE || uiState.timerState == TimerState.FINISHED) {
                 DurationSelectorRing(
                     selectedMinutes = viewModel.getWorkDurationMinutes(),
                     onDurationChanged = { viewModel.setWorkDuration(it) }
@@ -293,6 +314,92 @@ fun HomeScreen(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
+    }
+}
+
+@Composable
+private fun HomePrecheckPage(
+    uiState: com.edgefocus.app.presentation.viewmodel.TimerUiState,
+    viewModel: HomeViewModel,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier
+            .fillMaxWidth()
+            .verticalScroll(rememberScrollState())
+            .padding(top = 16.dp, bottom = 24.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        Text("开始前预检", style = MaterialTheme.typography.headlineMedium)
+        Text(
+            uiState.precheckGuidance ?: "请确认画面、距离和坐姿，再开始正式专注。",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                val preview = uiState.cameraPreview
+                val bitmap = remember(preview?.sequence, preview?.dataBase64) {
+                    runCatching {
+                        val encoded = preview?.dataBase64
+                            ?.substringAfter("base64,", preview.dataBase64.orEmpty())
+                            .orEmpty()
+                        val bytes = Base64.decode(encoded, Base64.DEFAULT)
+                        BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                    }.getOrNull()
+                }
+                if (preview?.available == true && bitmap != null) {
+                    Image(
+                        bitmap = bitmap.asImageBitmap(),
+                        contentDescription = "主机摄像头预览",
+                        modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
+                        contentScale = ContentScale.Fit
+                    )
+                } else {
+                    Text("暂无预览，点击刷新获取最近一帧。")
+                }
+                OutlinedButton(onClick = viewModel::refreshCameraPreview) {
+                    Text("刷新画面")
+                }
+            }
+        }
+
+        if (uiState.precheck?.gimbal != null) {
+            Text("云台微调", style = MaterialTheme.typography.titleMedium)
+            OutlinedButton(onClick = { viewModel.nudgeGimbal("UP") }) { Text("上") }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { viewModel.nudgeGimbal("LEFT") }) { Text("左") }
+                OutlinedButton(onClick = viewModel::centerGimbal) { Text("归中") }
+                OutlinedButton(onClick = { viewModel.nudgeGimbal("RIGHT") }) { Text("右") }
+            }
+            OutlinedButton(onClick = { viewModel.nudgeGimbal("DOWN") }) { Text("下") }
+            TextButton(onClick = viewModel::stopGimbal) { Text("停止云台") }
+        }
+
+        uiState.boardErrorMessage?.let {
+            Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            OutlinedButton(onClick = viewModel::skipPrecheckAutoAdjust) { Text("跳过自动调整") }
+            TactileButton(
+                onClick = viewModel::confirmPrecheck,
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = Color.White
+            ) {
+                Icon(Icons.Default.PlayArrow, contentDescription = null)
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("确认并开始")
+            }
+        }
+        TextButton(onClick = viewModel::stopTimer) { Text("取消本次专注") }
     }
 }
 
