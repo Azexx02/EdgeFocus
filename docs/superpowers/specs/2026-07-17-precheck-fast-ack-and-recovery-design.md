@@ -147,7 +147,7 @@ sequenceDiagram
 - `INITIALIZING` 必须计入 `active()`；此时 main shutdown 必须在 `ctx.stopAll()` 前调用 `end(ProcessShutdown)`。
 - `end(INITIALIZING)` 是阻塞清理屏障：锁内只设置 cancel/generation，随后释放 orchestrator 主锁再 join worker。
 - worker 完成已取得资源的逆序 stop，并执行恰好一次 `after_stop_hook`；join、feature stop 和 hook 均不得持有 orchestrator 主锁。
-- 清理完成前 phase 保持 `ENDING`，不发布 IDLE、不接受新 start。join 完成后才原子发布 IDLE。
+- `ENDING/CLEANING` 仅是 Orchestrator 内部 lifecycle state，用于拒绝新 start，不进入线协议。清理期间对外 snapshot 保持此前稳定 phase（初始化期通常仍为 `PRECHECK/INITIALIZING`）；清理完成后才一次性发布 `IDLE`，prepare 失败同时保留 `FAILED` 终态。旧 App 永远不会收到未知的 `ENDING` phase。
 - 析构执行同一 cancel-and-join 路径；不得持锁 join，避免 worker 回锁死锁。
 - completed worker 的 thread handle 在下一次 start 前于锁外 join/reap，不能覆盖新的 worker。
 
