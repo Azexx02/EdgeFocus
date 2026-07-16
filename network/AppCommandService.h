@@ -18,6 +18,7 @@
 namespace edgefocus {
 
 class GimbalMonitor;
+class DeviceManager;
 class PhoneFactBuffer;
 class AppEventOutbox;
 namespace session {
@@ -38,7 +39,8 @@ public:
                       session::SessionSnapshotPublisher* session_snapshots = nullptr,
                       AppEventOutbox* event_outbox = nullptr,
                       power::WorkloadProfilePolicy* workload_policy = nullptr,
-                      gimbal::GimbalPrecheckController* gimbal_precheck = nullptr);
+                      gimbal::GimbalPrecheckController* gimbal_precheck = nullptr,
+                      DeviceManager* device_manager = nullptr);
     ~AppCommandService();
 
     void loadPreferences();
@@ -62,6 +64,7 @@ private:
     AppEventOutbox* event_outbox_;
     power::WorkloadProfilePolicy* workload_policy_;
     gimbal::GimbalPrecheckController* gimbal_precheck_;
+    DeviceManager* device_manager_;
     std::atomic<uint64_t> phone_sequence_{0};
 
     std::string handleGetDeviceStatus(int req_id);
@@ -84,6 +87,7 @@ private:
     std::string handleClientHello(const json& data, int req_id);
     std::string handleEventAck(const json& data, int req_id);
     std::string handleSetPowerProfile(const json& data, int req_id);
+    std::string handleBandControl(const json& data, int req_id);
     std::string handleGimbalPrecheckCommand(const std::string& command,
                                             const json& data, int req_id);
     void applyManualPowerProfile(power::WorkloadProfile profile);

@@ -261,6 +261,8 @@ void BleBandController::startConnection() {
     if (enabled_.load()) return;
     if (conn_thread_.joinable() || writer_thread_.joinable()) stopConnection();
     stop_requested_ = false;
+    search_requested_ = false;
+    reconnect_requested_ = false;
     enabled_ = true;
     writer_thread_ = std::thread(&BleBandController::writerThreadFunc, this);
 #ifdef __linux__
@@ -274,7 +276,10 @@ void BleBandController::stopConnection() {
     stop_requested_ = true;
     enabled_ = false;
     connected_ = false;
+    search_requested_ = false;
+    reconnect_requested_ = false;
     writer_cv_.notify_all();
+    connection_cv_.notify_all();
     if (conn_thread_.joinable()) conn_thread_.join();
     if (writer_thread_.joinable()) writer_thread_.join();
     {
@@ -288,6 +293,20 @@ void BleBandController::stopConnection() {
     }
 #endif
     LOGI("BleBandController", "BLE connection stopped");
+}
+
+bool BleBandController::requestImmediateConnection(bool reconnect) {
+    if (!enabled_.load()) return false;
+    if (connected_.load() && !reconnect) return true;
+    if (reconnect && connected_.load()) {
+        reconnect_requested_ = true;
+    } else {
+        search_requested_ = true;
+    }
+    connection_cv_.notify_all();
+    LOGI("BleBandController", "Immediate BLE band %s requested",
+         reconnect ? "reconnect" : "search");
+    return true;
 }
 
 bool BleBandController::sendAlert(uint8_t level) {
@@ -449,6 +468,15 @@ void BleBandController::connectionThreadFunc() {
     }
     bluez_bus_ = bus;
 
+    auto waitBeforeRetry = [this](std::chrono::milliseconds delay) {
+        std::unique_lock<std::mutex> lock(state_mutex_);
+        connection_cv_.wait_for(lock, delay, [this] {
+            return stop_requested_.load() || search_requested_.load() || reconnect_requested_.load();
+        });
+        search_requested_.exchange(false);
+        reconnect_requested_.exchange(false);
+    };
+
     while (!stop_requested_.load()) {
         std::string target_name = envOrDefault("EDGEFOCUS_BAND_NAME", "EdgefocusBand");
         std::string mac = envOrDefault("EDGEFOCUS_BAND_MAC", "");
@@ -468,13 +496,13 @@ void BleBandController::connectionThreadFunc() {
 
         if (paths.device.empty()) {
             LOGW("BleBandController", "BLE band not found, retrying");
-            std::this_thread::sleep_for(std::chrono::seconds(3));
+            waitBeforeRetry(std::chrono::seconds(3));
             continue;
         }
 
         if (!callDeviceMethod(bus, paths.device, "Connect", 15000)) {
             connected_ = false;
-            std::this_thread::sleep_for(std::chrono::seconds(3));
+            waitBeforeRetry(std::chrono::seconds(3));
             continue;
         }
 
@@ -482,7 +510,7 @@ void BleBandController::connectionThreadFunc() {
             connected_ = false;
             LOGW("BleBandController", "BLE services not resolved for %s", paths.device.c_str());
             callDeviceMethod(bus, paths.device, "Disconnect", 5000);
-            std::this_thread::sleep_for(std::chrono::seconds(3));
+            waitBeforeRetry(std::chrono::seconds(3));
             continue;
         }
 
@@ -491,7 +519,7 @@ void BleBandController::connectionThreadFunc() {
             connected_ = false;
             LOGW("BleBandController", "BLE 0x2A56 characteristic not found after connect");
             callDeviceMethod(bus, paths.device, "Disconnect", 5000);
-            std::this_thread::sleep_for(std::chrono::seconds(3));
+            waitBeforeRetry(std::chrono::seconds(3));
             continue;
         }
 
@@ -500,21 +528,25 @@ void BleBandController::connectionThreadFunc() {
         LOGI("BleBandController", "Connected to BLE band target (%s), char=%s",
              paths.device.c_str(), paths.characteristic.c_str());
 
-        while (!stop_requested_.load() && connected_.load()) {
+        while (!stop_requested_.load() && connected_.load() && !reconnect_requested_.load()) {
             BluezPaths current = findBandPaths(bus, mac, target_name);
             if (current.device.empty() ||
                 !waitForServicesResolved(bus, current.device, stop_requested_)) {
                 break;
             }
-            std::this_thread::sleep_for(std::chrono::seconds(3));
+            std::unique_lock<std::mutex> lock(state_mutex_);
+            connection_cv_.wait_for(lock, std::chrono::seconds(3), [this] {
+                return stop_requested_.load() || reconnect_requested_.load();
+            });
         }
 
+        const bool immediate_reconnect = reconnect_requested_.exchange(false);
         connected_ = false;
         writer_cv_.notify_one();
         callDeviceMethod(bus, paths.device, "Disconnect", 5000);
         if (!stop_requested_.load()) {
             LOGW("BleBandController", "BLE band connection lost, reconnecting");
-            std::this_thread::sleep_for(std::chrono::seconds(3));
+            if (!immediate_reconnect) waitBeforeRetry(std::chrono::seconds(3));
         }
     }
 #else

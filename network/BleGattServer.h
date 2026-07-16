@@ -18,6 +18,7 @@ namespace edgefocus {
 
 class AppContext;
 class GimbalMonitor;
+class DeviceManager;
 class PhoneFactBuffer;
 namespace session {
 class SessionOrchestrator;
@@ -33,7 +34,8 @@ public:
                   PhoneFactBuffer* phone_facts = nullptr,
                   session::SessionSnapshotPublisher* session_snapshots = nullptr,
                   power::WorkloadProfilePolicy* workload_policy = nullptr,
-                  gimbal::GimbalPrecheckController* gimbal_precheck = nullptr);
+                  gimbal::GimbalPrecheckController* gimbal_precheck = nullptr,
+                  DeviceManager* device_manager = nullptr);
     ~BleGattServer() override;
 
     bool init(AppContext& ctx) override;

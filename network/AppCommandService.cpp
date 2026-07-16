@@ -11,6 +11,7 @@
 #include "session/SessionSnapshotPublisher.h"
 #include "device/GimbalMonitor.h"
 #include "device/GimbalPrecheckController.h"
+#include "device/DeviceManager.h"
 #include "policy/NotificationRouter.h"
 
 #include <algorithm>
@@ -576,7 +577,8 @@ AppCommandService::AppCommandService(SystemStateStore& store, SQLiteStore& sqlit
                                      session::SessionSnapshotPublisher* session_snapshots,
                                      AppEventOutbox* event_outbox,
                                      power::WorkloadProfilePolicy* workload_policy,
-                                     gimbal::GimbalPrecheckController* gimbal_precheck)
+                                     gimbal::GimbalPrecheckController* gimbal_precheck,
+                                     DeviceManager* device_manager)
     : store_(store)
     , sqlite_store_(sqlite_store)
     , reminder_policy_(reminder_policy)
@@ -587,7 +589,8 @@ AppCommandService::AppCommandService(SystemStateStore& store, SQLiteStore& sqlit
     , session_snapshots_(session_snapshots)
     , event_outbox_(event_outbox)
     , workload_policy_(workload_policy)
-    , gimbal_precheck_(gimbal_precheck) {}
+    , gimbal_precheck_(gimbal_precheck)
+    , device_manager_(device_manager) {}
 
 AppCommandService::~AppCommandService() {
     if (gimbal_task_thread_.joinable()) {
@@ -795,6 +798,7 @@ std::string AppCommandService::handleCommand(const std::string& json_cmd) {
         if (cmd == "client_hello")             return handleClientHello(data, req_id);
         if (cmd == "event_ack")                return handleEventAck(data, req_id);
         if (cmd == "set_power_profile")         return handleSetPowerProfile(data, req_id);
+        if (cmd == "band_control")              return handleBandControl(data, req_id);
         if (cmd == "gimbal_nudge" || cmd == "gimbal_center" ||
             cmd == "gimbal_stop" || cmd == "gimbal_realign" ||
             cmd == "precheck_skip_auto_adjust" ||
@@ -868,6 +872,30 @@ std::string AppCommandService::handleSetPowerProfile(const json& data, int req_i
         {"power_profile_source", device.power_profile_source},
         {"manual_override_active", device.manual_override_active},
         {"power_epoch", device.power_epoch}
+    });
+}
+
+std::string AppCommandService::handleBandControl(const json& data, int req_id) {
+    if (!device_manager_) return makeError(req_id, "Band control unavailable");
+    const std::string action = lowerCopy(data.value("action", ""));
+    if (action != "scan_connect" && action != "reconnect") {
+        return makeError(req_id, "action must be scan_connect or reconnect");
+    }
+    const bool was_connected = device_manager_->isBandConnected();
+    const bool accepted = device_manager_->requestBandConnection(action == "reconnect");
+    if (!accepted) {
+        return makeResponse(req_id, {
+            {"accepted", false},
+            {"operation", action},
+            {"bracelet_connected", was_connected},
+            {"message", "Band connection service is disabled"}
+        });
+    }
+    return makeResponse(req_id, {
+        {"accepted", true},
+        {"operation", action},
+        {"bracelet_connected", device_manager_->isBandConnected()},
+        {"already_connected", was_connected && action == "scan_connect"}
     });
 }
 
@@ -1264,6 +1292,7 @@ std::string AppCommandService::handleClientHello(const json& data, int req_id) {
         "event_ack_v1", "event_dedupe_v1", "phone_heartbeat_v1",
         "external_power_v1", "power_profile_override_v1"});
     if (gimbal_precheck_) server_capabilities.push_back("gimbal_precheck_v1");
+    if (device_manager_) server_capabilities.push_back("band_proxy_control_v1");
     return makeResponse(req_id, {{"schema_version", "2.1"},
                                  {"reliable_push", reliable},
                                  {"phone_fresh_for_ms", 5000},

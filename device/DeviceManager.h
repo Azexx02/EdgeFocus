@@ -32,6 +32,8 @@ public:
     uint8_t lastBandAlertLevel() const { return ble_ctrl_.lastAlertLevel(); }
     std::array<uint8_t, 3> lastBandAlertFrame() const { return ble_ctrl_.lastAlertFrame(); }
     int soundPlayCount() const { return sound_ctrl_.playCount(); }
+    bool requestBandConnection(bool reconnect) { return ble_ctrl_.requestImmediateConnection(reconnect); }
+    bool isBandConnected() const { return ble_ctrl_.isConnected(); }
 
 private:
     void executeCommand(const InterventionCommand& cmd);

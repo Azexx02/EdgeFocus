@@ -254,7 +254,8 @@ int main(int argc, char* argv[]) {
                                                        &phone_facts,
                                                        &session_snapshots,
                                                        &workload_policy,
-                                                       gimbal_precheck);
+                                                       gimbal_precheck,
+                                                       &device_mgr);
     ctx.addModule(std::move(ble_server));
 
 #ifdef EDGEFOCUS_WITH_DEMO_HTTP

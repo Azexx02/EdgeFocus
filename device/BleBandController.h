@@ -17,6 +17,7 @@ public:
     ~BleBandController();
     void startConnection();
     void stopConnection();
+    bool requestImmediateConnection(bool reconnect);
     bool sendAlert(uint8_t level);
     bool isConnected() const { return connected_.load(); }
     bool isEnabled() const { return enabled_.load(); }
@@ -49,6 +50,9 @@ private:
     std::atomic<std::uint64_t> sent_sequence_{0};
     mutable std::mutex state_mutex_;
     std::condition_variable writer_cv_;
+    std::condition_variable connection_cv_;
+    std::atomic<bool> search_requested_{false};
+    std::atomic<bool> reconnect_requested_{false};
     std::optional<QueuedAlert> pending_alert_;
     std::uint64_t alert_sequence_{};
     std::array<uint8_t, 3> last_alert_frame_{{0, 0, 0}};

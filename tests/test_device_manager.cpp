@@ -190,6 +190,23 @@ void test_device_manager_does_not_overwrite_power_service_projection() {
     dev_mgr.shutdown(ctx);
 }
 
+void test_band_connection_loop_accepts_active_wake_requests() {
+    AppContext ctx;
+    SystemStateStore store;
+    DeviceManager dev_mgr(store);
+    dev_mgr.init(ctx);
+
+    assert(!dev_mgr.requestBandConnection(false));
+    auto device = store.snapshot().device;
+    device.ble_enabled = true;
+    store.updateDeviceStatus(device);
+    dev_mgr.runOnce(ctx);
+    assert(dev_mgr.requestBandConnection(false));
+    assert(dev_mgr.requestBandConnection(true));
+
+    dev_mgr.shutdown(ctx);
+}
+
 int main() {
     SoundController::setPlaybackEnabledForTests(false);
     test_device_manager_queue();
@@ -199,6 +216,7 @@ int main() {
     test_board_sound_action_is_disabled();
     test_sound_controller_generates_short_tone_wav();
     test_device_manager_does_not_overwrite_power_service_projection();
+    test_band_connection_loop_accepts_active_wake_requests();
     std::cout << "All DeviceManager tests passed!\n";
     return 0;
 }

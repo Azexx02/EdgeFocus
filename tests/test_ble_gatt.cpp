@@ -476,11 +476,12 @@ int main() {
     sqlite_store.init(ctx);
 
     DeviceManager dev_mgr(store);
+    dev_mgr.init(ctx);
     ReminderPolicy policy(store, sqlite_store, dev_mgr);
     policy.init(ctx);
     power::WorkloadProfilePolicy workload_policy;
     BleGattServer server(store, sqlite_store, policy, policy.getModeManager(),
-                         nullptr, nullptr, nullptr, nullptr, &workload_policy);
+                         nullptr, nullptr, nullptr, nullptr, &workload_policy, nullptr, &dev_mgr);
     server.init(ctx);
 
     // Test 1: get_device_status
@@ -1341,6 +1342,19 @@ int main() {
         assert(std::find(hello["data"]["server_capabilities"].begin(),
                          hello["data"]["server_capabilities"].end(),
                          "power_profile_override_v1") != hello["data"]["server_capabilities"].end());
+        assert(std::find(hello["data"]["server_capabilities"].begin(),
+                         hello["data"]["server_capabilities"].end(),
+                         "band_proxy_control_v1") != hello["data"]["server_capabilities"].end());
+
+        auto device = store.snapshot().device;
+        device.ble_enabled = true;
+        store.updateDeviceStatus(device);
+        dev_mgr.runOnce(ctx);
+        json band_search = parseResponse(server.handleCommand(
+            R"({"cmd":"band_control","id":2401,"data":{"action":"scan_connect"}})"));
+        assertSuccess(band_search, 2401);
+        assert(band_search["data"]["accepted"] == true);
+        assert(band_search["data"]["operation"] == "scan_connect");
 
         store.pushEvent(R"({"cmd":"push_alert","data":{"session_id":"ack_test","level":2,"phone_actions":["SCREEN","SOUND"]}})");
         json current = parseResponse(server.handleCommand(
@@ -1387,6 +1401,7 @@ int main() {
     }
 
     server.shutdown(ctx);
+    dev_mgr.shutdown(ctx);
     std::cout << "All BLE GATT Server tests passed!\n";
     return 0;
 }
