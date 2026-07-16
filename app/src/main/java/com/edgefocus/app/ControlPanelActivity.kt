@@ -12,6 +12,8 @@ import androidx.compose.ui.Modifier
 import com.edgefocus.app.presentation.ui.controlpanel.ControlPanelScreen
 import com.edgefocus.app.presentation.ui.theme.EdgeFocusTheme
 import com.edgefocus.app.presentation.shared.BlackScreenSaver
+import com.edgefocus.app.presentation.shared.shouldEnableBlackScreenSaver
+import com.edgefocus.app.data.TimerStateHolder
 import com.edgefocus.app.data.local.dao.SettingsDao
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -23,6 +25,9 @@ class ControlPanelActivity : ComponentActivity() {
     @Inject
     lateinit var settingsDao: SettingsDao
 
+    @Inject
+    lateinit var timerStateHolder: TimerStateHolder
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -32,9 +37,13 @@ class ControlPanelActivity : ComponentActivity() {
 
         setContent {
             val appSettings by settingsDao.getSettings().collectAsState(initial = null)
+            val timerState by timerStateHolder.state.collectAsState()
             EdgeFocusTheme {
                 BlackScreenSaver(
-                    enabled = appSettings?.screenSaverEnabled == true,
+                    enabled = shouldEnableBlackScreenSaver(
+                        settingEnabled = appSettings?.screenSaverEnabled == true,
+                        timerState = timerState.timerState
+                    ),
                     timeoutSeconds = appSettings?.screenSaverTimeoutSec ?: 120
                 ) {
                     Surface(

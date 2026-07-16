@@ -92,11 +92,20 @@ class ConnectionSupervisor @Inject constructor(
     suspend fun refreshHostState(): Result<com.edgefocus.app.data.ble.model.HostStateSnapshot> = runCatching {
         check(transport.rawConnectionState.value == ConnectionState.CONNECTED) { "主机未连接" }
         val current = _snapshot.value
+        val expectedEpoch = current.connectionEpoch
         check(current.hello != null) { "主机能力尚未协商" }
         val bytes = transport.getCurrentState().getOrThrow()
         val state = HostJsonCodec.parseState(String(bytes, Charsets.UTF_8))
         check(state.session.isApplicable) { "主机状态缺少必要字段" }
-        _snapshot.value = current.copy(hostState = state, error = null)
+        val latest = _snapshot.value
+        check(
+            transport.rawConnectionState.value == ConnectionState.CONNECTED &&
+                latest.phase == HostConnectionPhase.READY &&
+                latest.connectionEpoch == expectedEpoch
+        ) { "host_connection_changed" }
+        check(_snapshot.compareAndSet(latest, latest.copy(hostState = state, error = null))) {
+            "host_connection_changed"
+        }
         state
     }
 

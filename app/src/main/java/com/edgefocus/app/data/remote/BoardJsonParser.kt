@@ -279,15 +279,29 @@ object BoardJsonParser {
     }
 
     fun parseSessionState(data: JSONObject): BoardSessionState {
-        val hasRemainingMs = data.has("remaining_ms") && !data.isNull("remaining_ms")
+        val runtimeSession = data.optJSONObject("runtime_snapshot")?.optJSONObject("session")
+        val runtimeHasRemainingMs = runtimeSession?.let {
+            it.has("remaining_ms") && !it.isNull("remaining_ms")
+        } == true
+        val hasRemainingMs = runtimeHasRemainingMs ||
+            (data.has("remaining_ms") && !data.isNull("remaining_ms"))
         val hasTargetDurationMs = data.has("target_duration_ms") && !data.isNull("target_duration_ms")
-        val phase = BoardSessionPhase.fromWire(data.optString("session_phase").takeIf { it.isNotBlank() })
+        val phase = BoardSessionPhase.fromWire(
+            runtimeSession?.optString("phase")?.takeIf { it.isNotBlank() }
+                ?: data.optString("session_phase").takeIf { it.isNotBlank() }
+        )
         return BoardSessionState(
             success = data.optBoolean("success", true),
             alreadyActive = data.optBoolean("already_active", false),
-            sessionId = data.optString("session_id").takeIf { it.isNotBlank() },
-            active = data.optBoolean("active", false),
-            paused = data.optBoolean("paused", false),
+            sessionId = runtimeSession?.optString("id")?.takeIf { it.isNotBlank() }
+                ?: data.optString("session_id").takeIf { it.isNotBlank() },
+            active = runtimeSession?.optBoolean("active", data.optBoolean("active", false))
+                ?: data.optBoolean("active", false),
+            paused = if (runtimeSession != null) {
+                phase == BoardSessionPhase.PAUSED
+            } else {
+                data.optBoolean("paused", false)
+            },
             focusState = data.optInt("focus_state", 0),
             phoneSignal = data.optBoolean("phone_signal", false),
             phoneUsageState = data.optString("phone_usage_state", "unknown").ifBlank { "unknown" },
@@ -298,15 +312,21 @@ object BoardJsonParser {
             batteryCharging = data.optBoolean("battery_charging", false),
             powerSource = data.optJsonString("power_source") ?: "battery",
             powerProfile = PowerProfile.fromWire(data.optJsonString("power_profile")) ?: PowerProfile.GO,
-            elapsedMs = data.optLong("elapsed_ms", 0L),
-            remainingMs = data.optLong("remaining_ms", 0L),
+            elapsedMs = runtimeSession?.optLong("elapsed_ms", data.optLong("elapsed_ms", 0L))
+                ?: data.optLong("elapsed_ms", 0L),
+            remainingMs = runtimeSession?.optLong("remaining_ms", data.optLong("remaining_ms", 0L))
+                ?: data.optLong("remaining_ms", 0L),
             hasRemainingMs = hasRemainingMs,
             targetDurationMs = data.optLong("target_duration_ms", 0L),
             hasTargetDurationMs = hasTargetDurationMs,
             distractionCount = data.optInt("distraction_count", 0),
             reminderCount = data.optInt("reminder_count", 0),
             phoneDistractionCount = data.optInt("phone_distraction_count", 0),
-            calibrationCompleted = data.optBoolean("calibration_completed", false),
+            calibrationCompleted = if (runtimeSession != null) {
+                phase == BoardSessionPhase.FOCUSING || phase == BoardSessionPhase.PAUSED
+            } else {
+                data.optBoolean("calibration_completed", false)
+            },
             sessionPhase = phase,
             sessionStartSource = data.optJsonString("session_start_source"),
             precheck = parsePrecheck(data.optJSONObject("precheck")),

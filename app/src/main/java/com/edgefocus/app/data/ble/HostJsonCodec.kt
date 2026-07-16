@@ -136,6 +136,7 @@ object HostJsonCodec {
         val runtime = data.optJSONObject("runtime_snapshot")
         val runtimeSession = runtime?.optJSONObject("session")
         val runtimeDevice = runtime?.optJSONObject("device")
+        val outputCapability = data.optJSONObject("output_capability")
 
         val phase = parsePhase(
             runtimeSession?.nullableString("phase")
@@ -184,7 +185,8 @@ object HostJsonCodec {
                 profileSource = data.nullableString("power_profile_source"),
                 manualOverrideActive = data.optBoolean("manual_override_active", false)
             ),
-            braceletConnected = data.nullableBoolean("bracelet_connected")
+            braceletConnected = outputCapability?.nullableBoolean("band_available")
+                ?: data.nullableBoolean("bracelet_connected")
                 ?: runtimeDevice?.nullableBoolean("bracelet_connected"),
             rawJson = json
         )

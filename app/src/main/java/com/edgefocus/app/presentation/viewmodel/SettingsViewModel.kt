@@ -53,6 +53,14 @@ class SettingsViewModel @Inject constructor(
                 }
             }
         }
+        viewModelScope.launch {
+            while (true) {
+                if (connectionSupervisor.snapshot.value.isReady) {
+                    connectionSupervisor.refreshHostState()
+                }
+                delay(5_000L)
+            }
+        }
     }
 
     fun updatePomodoroDuration(duration: Int) {

@@ -227,6 +227,103 @@ class BoardJsonParserTest {
     }
 
     @Test
+    fun runtimeSnapshotPrecheckOverridesIdleCompatibilityProjection() {
+        val state = BoardJsonParser.parseSessionState(
+            """
+                {
+                  "status":"success",
+                  "data":{
+                    "success":true,
+                    "session_phase":"idle",
+                    "active":false,
+                    "remaining_ms":0,
+                    "target_duration_ms":0,
+                    "runtime_snapshot":{
+                      "session":{
+                        "id":"session_runtime_1",
+                        "phase":"PRECHECK",
+                        "active":false,
+                        "runtime_active":true,
+                        "elapsed_ms":0,
+                        "remaining_ms":1500000
+                      }
+                    }
+                  }
+                }
+            """.trimIndent()
+        )
+
+        assertEquals("session_runtime_1", state.sessionId)
+        assertEquals(BoardSessionPhase.PRECHECK, state.sessionPhase)
+        assertEquals(1_500_000L, state.remainingMs)
+        assertTrue(state.hasRemainingMs)
+        assertFalse(state.active)
+        assertFalse(state.calibrationCompleted)
+        assertTrue(state.representsActiveRuntime())
+    }
+
+    @Test
+    fun runtimeSnapshotFocusingOverridesStalePrecheckProjection() {
+        val state = BoardJsonParser.parseSessionState(
+            """
+                {
+                  "status":"success",
+                  "data":{
+                    "session_phase":"precheck",
+                    "paused":true,
+                    "calibration_completed":false,
+                    "runtime_snapshot":{
+                      "session":{
+                        "id":"session_runtime_2",
+                        "phase":"FOCUSING",
+                        "active":true,
+                        "runtime_active":true,
+                        "elapsed_ms":5000,
+                        "remaining_ms":1495000
+                      }
+                    }
+                  }
+                }
+            """.trimIndent()
+        )
+
+        assertEquals(BoardSessionPhase.FOCUSING, state.sessionPhase)
+        assertTrue(state.active)
+        assertFalse(state.paused)
+        assertTrue(state.calibrationCompleted)
+        assertEquals(5_000L, state.elapsedMs)
+        assertEquals(1_495_000L, state.remainingMs)
+    }
+
+    @Test
+    fun runtimeSnapshotIdleOverridesStalePausedProjection() {
+        val state = BoardJsonParser.parseSessionState(
+            """
+                {
+                  "status":"success",
+                  "data":{
+                    "session_phase":"paused",
+                    "paused":true,
+                    "runtime_snapshot":{
+                      "session":{
+                        "phase":"IDLE",
+                        "active":false,
+                        "runtime_active":false,
+                        "elapsed_ms":0,
+                        "remaining_ms":0
+                      }
+                    }
+                  }
+                }
+            """.trimIndent()
+        )
+
+        assertEquals(BoardSessionPhase.IDLE, state.sessionPhase)
+        assertFalse(state.paused)
+        assertEquals(BoardSessionPhase.IDLE, state.effectivePhase())
+    }
+
+    @Test
     fun parseSessionStateIncludesStartSourceAndPrecheckControl() {
         val state = BoardJsonParser.parseSessionState(
             """

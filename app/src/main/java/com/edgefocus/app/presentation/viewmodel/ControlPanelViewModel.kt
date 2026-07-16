@@ -138,6 +138,15 @@ class ControlPanelViewModel @Inject constructor(
         }
 
         viewModelScope.launch {
+            while (true) {
+                if (connectionSupervisor.snapshot.value.isReady) {
+                    connectionSupervisor.refreshHostState()
+                }
+                delay(5_000L)
+            }
+        }
+
+        viewModelScope.launch {
             settingsRepository.getSettings().collect { settings ->
                 settings?.let {
                     val duration = it.pomodoroDuration.coerceIn(5, 120)

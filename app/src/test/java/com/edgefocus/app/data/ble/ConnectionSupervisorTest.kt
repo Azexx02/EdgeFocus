@@ -3,13 +3,17 @@ package com.edgefocus.app.data.ble
 import com.edgefocus.app.data.ble.model.HostConnectionPhase
 import com.edgefocus.app.data.remote.ConnectionState
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -50,12 +54,38 @@ class ConnectionSupervisorTest {
         assertEquals("state_missing_required_fields", supervisor.snapshot.value.error)
     }
 
+    @Test
+    fun `late state response cannot restore ready after disconnect`() = runTest {
+        val transport = FakeTransport()
+        val supervisor = ConnectionSupervisor(
+            transport,
+            CoroutineScope(StandardTestDispatcher(testScheduler))
+        )
+
+        supervisor.start()
+        transport.rawConnectionState.value = ConnectionState.CONNECTED
+        advanceUntilIdle()
+        assertEquals(HostConnectionPhase.READY, supervisor.snapshot.value.phase)
+
+        transport.stateGate = CompletableDeferred()
+        val refresh = async { supervisor.refreshHostState() }
+        runCurrent()
+        transport.rawConnectionState.value = ConnectionState.DISCONNECTED
+        runCurrent()
+        transport.stateGate?.complete(Unit)
+        runCurrent()
+
+        assertTrue(refresh.await().isFailure)
+        assertEquals(HostConnectionPhase.DISCONNECTED, supervisor.snapshot.value.phase)
+    }
+
     private class FakeTransport(
         private val stateResponse: String =
             """{"status":"success","data":{"session_phase":"idle","active":false,"external_power_state":"UNKNOWN"}}"""
     ) : HostConnectionTransport {
         override val rawConnectionState = MutableStateFlow(ConnectionState.DISCONNECTED)
         val calls = mutableListOf<String>()
+        var stateGate: CompletableDeferred<Unit>? = null
 
         override suspend fun clientHello(): Result<ByteArray> {
             calls += "hello"
@@ -67,6 +97,7 @@ class ConnectionSupervisorTest {
 
         override suspend fun getCurrentState(): Result<ByteArray> {
             calls += "state"
+            stateGate?.await()
             return Result.success(stateResponse.toByteArray())
         }
 

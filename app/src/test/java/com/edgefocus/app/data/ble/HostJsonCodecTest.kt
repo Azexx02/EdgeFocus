@@ -76,6 +76,15 @@ class HostJsonCodecTest {
     }
 
     @Test
+    fun `band availability wins when legacy bracelet fields conflict`() {
+        val result = HostJsonCodec.parseState(
+            """{"status":"success","data":{"session_phase":"idle","bracelet_connected":false,"runtime_snapshot":{"device":{"bracelet_connected":false}},"output_capability":{"band_available":true}}}"""
+        )
+
+        assertEquals(true, result.braceletConnected)
+    }
+
+    @Test
     fun `reliable event clamps remaining ttl`() {
         val event = HostJsonCodec.parseReliableEvent(
             """{"cmd":"push_alert","data":{"event_id":"evt_1","session_id":"session_1","created_at_ms":99,"ttl_ms":10000,"remaining_ttl_ms":12000}}"""
