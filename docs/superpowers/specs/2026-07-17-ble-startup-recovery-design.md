@@ -33,10 +33,21 @@
 
 1. 读取 Room `Settings.edgeFocusMacAddress`；若为空，再读取旧 SharedPreferences `edge_focus_mac` 并迁移到 Room。
 2. 将有效 MAC 写入 `BleManager.setTargetMac()`。
-3. 仅当 `useEdgeFocusBoard=true`、蓝牙开启、Android 版本所需 BLE 权限均已授予且当前不是用户主动断开状态时，发起已知 MAC 的显式连接。
+3. 更新共享的 `BleAutoConnectGate`，并仅在 Gate 允许时发起已知 MAC 的显式连接。
 4. 初始化默认设置必须先完成或与引导过程串行，避免默认记录插入与 MAC 读取竞争。
 
 协调器不拥有 GATT；实际连接仍由 `BleManager` 完成，业务 READY 仍由 `ConnectionSupervisor` 在 notification、`client_hello` 和 `get_current_state` 成功后发布。
+
+`BleAutoConnectGate` 是所有自动连接和重试路径的唯一权威门。它只有在以下条件同时满足时返回允许：
+
+- `useEdgeFocusBoard=true`；
+- 已保存有效目标 MAC；
+- 蓝牙适配器开启；
+- 当前 Android 版本需要的 `BLUETOOTH_SCAN/CONNECT` 与位置权限已经授予；
+- 持久化的 `userDisconnected=false`；
+- 当前没有 CONNECTING、CONNECTED 或 SCANNING 操作。
+
+协调器首次连接、`ConnectionSupervisor` 退避重试、权限回调、前台恢复和蓝牙开启事件都必须调用同一个 Gate，不得各自复制条件。Gate 拒绝时不调用 Android BLE API；拒绝原因作为可观测状态返回。
 
 ### 2. 权限与生命周期入口
 
@@ -47,23 +58,21 @@
 
 ### 3. 冷启动和断线重试
 
-`ConnectionSupervisor` 不再以 `hasBeenReady` 作为自动重连前提。只要：
-
-- 已保存目标 MAC；
-- 自动重连未被用户关闭；
-- 当前处于 DISCONNECTED/ERROR；
-
-就按现有 1、2、4、8、16、30 秒退避发起连接。连接请求返回“已发起”不等于成功；后续 GATT ERROR/DISCONNECTED 会开启下一轮退避。进入 READY 后清理错误和重试任务。
+`ConnectionSupervisor` 不再以 `hasBeenReady` 作为自动重连前提。当前处于 DISCONNECTED/ERROR 且共享 `BleAutoConnectGate` 允许时，按现有 1、2、4、8、16、30 秒退避发起连接。连接请求返回“已发起”不等于成功；后续 GATT ERROR/DISCONNECTED 会开启下一轮退避。进入 READY 后清理错误和重试任务。Gate 因权限、蓝牙、设置或用户断开而拒绝时，取消当前退避任务；相关条件恢复后由协调器重新唤醒。
 
 已知 MAC 优先显式直连，避免主机暂时没有出现在普通扫描结果中。手动扫描仍只展示名称匹配 EdgeFocus 的设备，并且不会偷偷自动选择非目标设备。
 
 ### 4. 用户主动断开
 
-`BleManager.disconnect()` 保持现有语义：关闭自动重连并清理 GATT。协调器和监督器都必须尊重该标志，不因 Activity 重建、前后台切换或权限回调重新连接。以下行为才重新启用自动连接：
+`BleManager.disconnect()` 保持清理 GATT 的职责；用户入口调用的主动断开还必须把 `userDisconnected=true` 写入专用 SharedPreferences。该标志跨进程重启和 APK 覆盖安装保留，卸载/清除数据才自然清除。协调器、Gate 和监督器都必须尊重该标志，不因 Activity 重建、进程重启、前后台切换或权限回调重新连接。
+
+以下明确的用户行为先持久化 `userDisconnected=false`，再重新启用自动连接：
 
 - 用户手动开始扫描；
 - 用户确认连接某台设备；
 - 用户点击明确的“重新连接主机”入口。
+
+切换 `useEdgeFocusBoard=false` 只关闭 Gate，不改写 `userDisconnected`；重新开启该设置时，若用户此前没有主动断开，可立即恢复自动连接。
 
 ## 主机设计
 
@@ -88,7 +97,7 @@
 
 ### 3. 防止重复注册
 
-所有注册状态在 `bluez_mutex_` 下更新。任一时刻每种注册最多一个异步调用。异步回调必须核对 shutdown 状态；迟到的成功/失败回调不得把已关闭服务恢复为 READY。
+所有注册状态在 `bluez_mutex_` 下更新。任一时刻每种注册最多一个异步调用。每次 Advertisement 注册分配严格递增的 generation，并把该 generation 绑定到异步回调上下文。Release、显式取消、shutdown 或开始更新一代注册时都推进/失效旧 generation。异步回调只有在 generation 仍等于当前期望值且未 shutdown 时才能更新 registering/registered/`bluez_ready_`；旧回调只释放自身资源，不得覆盖新状态或取消恢复任务。
 
 ## 状态与时序
 
@@ -122,6 +131,8 @@
 - 无 MAC：不连接任何设备。
 - 权限缺失：不连接；授权回调后立即重试。
 - 用户主动断开：前后台切换和权限回调都不重连。
+- 用户主动断开后进程重启或覆盖安装：持久化 Gate 仍拒绝自动连接。
+- `useEdgeFocusBoard=false`、蓝牙关闭或权限缺失：所有自动重试路径均被同一 Gate 阻止。
 - 从未 READY 的首次连接失败：仍进入退避重试。
 - CONNECTING/CONNECTED/SCANNING：重复触发入口不产生第二次连接。
 - 原有协议、PRECHECK、屏保与手环状态测试继续通过。
@@ -130,6 +141,7 @@
 
 - Application 成功、Advertisement 首次失败：只重试 Advertisement，最终 READY。
 - Advertisement Release：安排重注册并恢复 READY。
+- Advertisement 注册回调与 Release 竞态：旧 generation 回调不得恢复 READY。
 - shutdown 后迟到回调：不重试、不恢复 READY。
 - StopNotify 清理 phone connected/Outbox subscribed，且不破坏会话状态。
 - 重复 `runOnce()` 不产生并发重复注册。
