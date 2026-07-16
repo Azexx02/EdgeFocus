@@ -23,6 +23,7 @@ import com.edgefocus.app.data.remote.PowerProfile
 import com.edgefocus.app.data.remote.PushAlert
 import com.edgefocus.app.data.remote.PushEventHandler
 import com.edgefocus.app.data.session.StartTransactionPolicy
+import com.edgefocus.app.data.session.BoardSyncLaunchPolicy
 import com.edgefocus.app.domain.model.FocusState
 import com.edgefocus.app.domain.model.SessionType
 import com.edgefocus.app.domain.model.TimerState
@@ -135,11 +136,8 @@ class TimerStateHolder @Inject constructor(
 
     init {
         scope.launch {
-            state.map {
-                it.sessionPhase == BoardSessionPhase.PRECHECK &&
-                    (it.preparationState == BoardPreparationState.READY ||
-                        it.preparationState == BoardPreparationState.DEGRADED)
-            }.distinctUntilChanged().collect { previewReady ->
+            state.map { it.timerState == TimerState.PRECHECK }
+                .distinctUntilChanged().collect { previewReady ->
                 if (previewReady) startPreviewLoop() else stopPreviewLoop()
             }
         }
@@ -746,10 +744,8 @@ class TimerStateHolder @Inject constructor(
 
     fun refreshCameraPreview() {
         if (!bleManager.isConnected() || !connectionSupervisor.snapshot.value.isReady) return
-        if (_state.value.preparationState != BoardPreparationState.READY &&
-            _state.value.preparationState != BoardPreparationState.DEGRADED
-        ) return
-        val requestSessionId = _state.value.sessionId ?: return
+        if (_state.value.timerState != TimerState.PRECHECK) return
+        val requestSessionId = _state.value.sessionId
         scope.launch {
             bleManager.getCameraPreviewImage().onSuccess { data ->
                 runCatching {
@@ -781,7 +777,7 @@ class TimerStateHolder @Inject constructor(
                 connectionSupervisor.snapshot.value.isReady &&
                 bleManager.isConnected()
             ) {
-                val requestSessionId = _state.value.sessionId ?: break
+                val requestSessionId = _state.value.sessionId
                 bleManager.getCameraPreviewImage().onSuccess { data ->
                     runCatching {
                         BoardJsonParser.parseCameraPreview(String(data, Charsets.UTF_8))
@@ -804,14 +800,12 @@ class TimerStateHolder @Inject constructor(
         scope.launch { bleManager.cancelPreviewRequests() }
     }
 
-    private fun isCurrentPrecheckSession(requestSessionId: String): Boolean =
-        _state.value.sessionPhase == BoardSessionPhase.PRECHECK &&
-            _state.value.sessionId == requestSessionId
+    private fun isCurrentPrecheckSession(requestSessionId: String?): Boolean =
+        _state.value.timerState == TimerState.PRECHECK &&
+            (requestSessionId == null || _state.value.sessionId == requestSessionId)
 
     private fun isPreviewReady(): Boolean =
-        _state.value.sessionPhase == BoardSessionPhase.PRECHECK &&
-            (_state.value.preparationState == BoardPreparationState.READY ||
-                _state.value.preparationState == BoardPreparationState.DEGRADED)
+        _state.value.timerState == TimerState.PRECHECK
 
     private fun invalidatePendingStart() {
         startOperationEpoch.incrementAndGet()
@@ -1254,9 +1248,13 @@ class TimerStateHolder @Inject constructor(
 
     // ==================== 板端同步 ====================
 
+    @Synchronized
     private fun startBoardSync() {
-        if (!connectionSupervisor.snapshot.value.isReady) return
-        boardSyncJob?.cancel()
+        if (!BoardSyncLaunchPolicy.shouldLaunch(
+                protocolReady = connectionSupervisor.snapshot.value.isReady,
+                currentJobActive = boardSyncJob?.isActive == true
+            )
+        ) return
         boardSyncJob = scope.launch {
             while ((_state.value.timerState == TimerState.RUNNING ||
                    _state.value.timerState == TimerState.PRECHECK ||
@@ -1277,6 +1275,7 @@ class TimerStateHolder @Inject constructor(
         }
     }
 
+    @Synchronized
     private fun stopBoardSync() {
         boardSyncJob?.cancel()
         boardSyncJob = null

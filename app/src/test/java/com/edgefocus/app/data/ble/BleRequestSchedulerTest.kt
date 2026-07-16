@@ -64,4 +64,32 @@ class BleRequestSchedulerTest {
 
         assertTrue(preview.await().isFailure)
     }
+
+    @Test
+    fun `preview is not starved by a sustained state backlog`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val scheduler = BleRequestScheduler(CoroutineScope(dispatcher))
+        val executed = mutableListOf<String>()
+
+        val preview = async(dispatcher) {
+            scheduler.execute(HostRequestPriority.P4_PREVIEW) {
+                executed += "preview"
+                Result.success(byteArrayOf(4))
+            }
+        }
+        val states = (1..5).map { index ->
+            async(dispatcher) {
+                scheduler.execute(HostRequestPriority.P2_STATE) {
+                    executed += "state$index"
+                    Result.success(byteArrayOf(2))
+                }
+            }
+        }
+
+        advanceUntilIdle()
+
+        assertEquals("preview", executed[2])
+        assertTrue(preview.await().isSuccess)
+        states.forEach { assertTrue(it.await().isSuccess) }
+    }
 }

@@ -36,6 +36,7 @@ class BleRequestScheduler(
     )
     private val sequence = AtomicLong(0)
     private val wake = Channel<Unit>(Channel.CONFLATED)
+    private var consecutiveNonPreviewRequests = 0
 
     init {
         scope.launch {
@@ -76,11 +77,42 @@ class BleRequestScheduler(
 
     private suspend fun drain() {
         while (true) {
-            val request = queueMutex.withLock { queue.poll() } ?: return
+            val request = queueMutex.withLock { pollNextLocked() } ?: return
             if (request.result.isCancelled) continue
             val result = runCatching { request.operation() }
                 .getOrElse { Result.failure(it) }
             request.result.complete(result)
         }
+    }
+
+    private fun pollNextLocked(): QueuedRequest? {
+        if (queue.isEmpty()) return null
+        val hasCriticalWork = queue.any {
+            it.priority == HostRequestPriority.P0_CRITICAL ||
+                it.priority == HostRequestPriority.P1_PHONE_HEARTBEAT
+        }
+        val agedPreview = if (consecutiveNonPreviewRequests >= MAX_NON_PREVIEW_BURST && !hasCriticalWork) {
+            queue.asSequence()
+                .filter { it.priority == HostRequestPriority.P4_PREVIEW }
+                .minByOrNull { it.sequence }
+        } else {
+            null
+        }
+        val request = if (agedPreview != null) {
+            queue.remove(agedPreview)
+            agedPreview
+        } else {
+            queue.poll()
+        }
+        if (request.priority == HostRequestPriority.P4_PREVIEW) {
+            consecutiveNonPreviewRequests = 0
+        } else {
+            consecutiveNonPreviewRequests++
+        }
+        return request
+    }
+
+    private companion object {
+        const val MAX_NON_PREVIEW_BURST = 2
     }
 }

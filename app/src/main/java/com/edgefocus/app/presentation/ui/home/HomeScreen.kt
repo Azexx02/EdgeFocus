@@ -324,14 +324,15 @@ private fun HomePrecheckPage(
 ) {
     val preparationReady = uiState.preparationState == BoardPreparationState.READY ||
         uiState.preparationState == BoardPreparationState.DEGRADED
-    Column(
-        modifier = modifier
-            .fillMaxWidth()
-            .verticalScroll(rememberScrollState())
-            .padding(top = 16.dp, bottom = 24.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
+    Box(modifier = modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(top = 16.dp, bottom = 132.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
         Text("开始前预检", style = MaterialTheme.typography.headlineMedium)
         Text(
             when (uiState.preparationState) {
@@ -382,23 +383,36 @@ private fun HomePrecheckPage(
             TextButton(onClick = viewModel::stopGimbal, enabled = preparationReady) { Text("停止云台") }
         }
 
-        uiState.boardErrorMessage?.let {
-            Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            OutlinedButton(onClick = viewModel::skipPrecheckAutoAdjust, enabled = preparationReady) { Text("跳过自动调整") }
-            TactileButton(
-                onClick = viewModel::confirmPrecheck,
-                containerColor = MaterialTheme.colorScheme.primary,
-                contentColor = Color.White,
-                enabled = preparationReady
-            ) {
-                Icon(Icons.Default.PlayArrow, contentDescription = null)
-                Spacer(modifier = Modifier.width(6.dp))
-                Text("确认并开始")
+            uiState.boardErrorMessage?.let {
+                Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
             }
         }
-        TextButton(onClick = viewModel::stopTimer) { Text("取消本次专注") }
+
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .background(MaterialTheme.colorScheme.background)
+                .padding(top = 8.dp, bottom = 4.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                OutlinedButton(onClick = viewModel::skipPrecheckAutoAdjust, enabled = preparationReady) {
+                    Text("跳过自动调整")
+                }
+                TactileButton(
+                    onClick = viewModel::confirmPrecheck,
+                    containerColor = MaterialTheme.colorScheme.primary,
+                    contentColor = Color.White,
+                    enabled = preparationReady
+                ) {
+                    Icon(Icons.Default.PlayArrow, contentDescription = null)
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("确认并开始")
+                }
+            }
+            TextButton(onClick = viewModel::stopTimer) { Text("取消本次专注") }
+        }
     }
 }
 

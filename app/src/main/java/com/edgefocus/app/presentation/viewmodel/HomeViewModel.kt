@@ -221,7 +221,7 @@ class HomeViewModel @Inject constructor(
     }
 
     fun skipPrecheckAutoAdjust() {
-        runPrecheckCommand { precheckController.skipAutoAdjustAndContinue() }
+        runPrecheckCommand { precheckController.skipAutoAdjust() }
     }
 
     fun nudgeGimbal(direction: String) {

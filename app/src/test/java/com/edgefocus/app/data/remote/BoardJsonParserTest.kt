@@ -6,8 +6,20 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.json.JSONObject
 
 class BoardJsonParserTest {
+    @Test
+    fun `empty structured precheck guidance is not exposed as raw json`() {
+        val state = BoardJsonParser.parseSessionState(
+            JSONObject(
+                """{"runtime_snapshot":{"session":{"phase":"PRECHECK","preparation_state":"READY"}},"precheck_guidance":{"distance_hint":"","pose_hint":"","frame_quality_reason":"","ready":false}}"""
+            )
+        )
+
+        assertNull(state.precheckGuidance)
+    }
+
 
     @Test
     fun buildSessionControlStartIncludesTargetDuration() {
@@ -681,5 +693,36 @@ class BoardJsonParserTest {
         assertEquals(60, data.getInt("total_duration"))
         assertEquals(55, data.getInt("focus_duration"))
         assertEquals("app_local", data.getString("source"))
+    }
+
+    @Test
+    fun parseSessionStateFallsBackToRuntimeGimbalWhenPrecheckGimbalIsMissing() {
+        val response = """
+            {
+              "status":"success",
+              "data":{
+                "precheck":{"camera":{"required":true}},
+                "runtime_snapshot":{
+                  "session":{"id":"session_1","phase":"PRECHECK","preparation_state":"READY"},
+                  "gimbal":{
+                    "available":true,
+                    "degraded":false,
+                    "health_status":"ready",
+                    "angle_x":315.0,
+                    "angle_y":353.0
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+
+        val state = BoardJsonParser.parseSessionState(response)
+        val gimbal = state.precheck?.gimbal
+
+        assertTrue(gimbal!!.enabled)
+        assertTrue(gimbal.online)
+        assertTrue(gimbal.safe)
+        assertEquals(315.0, gimbal.angleX!!, 0.001)
+        assertEquals(353.0, gimbal.angleY!!, 0.001)
     }
 }

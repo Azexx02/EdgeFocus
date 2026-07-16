@@ -3,6 +3,7 @@ package com.edgefocus.app.domain.precheck
 import com.edgefocus.app.data.TimerStateHolder
 import com.edgefocus.app.data.ble.ConnectionSupervisor
 import com.edgefocus.app.data.ble.HostJsonCodec
+import com.edgefocus.app.data.ble.model.HostSessionPhase
 import com.edgefocus.app.data.remote.BleManager
 import com.edgefocus.app.data.remote.BoardPreparationState
 import com.edgefocus.app.data.session.ProtocolCheckpointStore
@@ -10,7 +11,6 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeout
-import com.edgefocus.app.data.ble.model.HostSessionPhase
 
 @Singleton
 class PrecheckController @Inject constructor(
@@ -35,12 +35,7 @@ class PrecheckController @Inject constructor(
         continueSession().getOrThrow()
     }
 
-    suspend fun skipAutoAdjustAndContinue(): Result<Unit> = runCatching {
-        if (timerStateHolder.state.value.precheck?.gimbal != null) {
-            send("precheck_skip_auto_adjust").getOrThrow()
-        }
-        continueSession().getOrThrow()
-    }
+    suspend fun skipAutoAdjust(): Result<Unit> = send("precheck_skip_auto_adjust")
 
     private suspend fun send(command: String, direction: String? = null): Result<Unit> = runCatching {
         check(connectionSupervisor.snapshot.value.isReady) { "主机尚未就绪" }

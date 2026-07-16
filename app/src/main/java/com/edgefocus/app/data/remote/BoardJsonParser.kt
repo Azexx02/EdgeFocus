@@ -317,7 +317,9 @@ object BoardJsonParser {
     }
 
     fun parseSessionState(data: JSONObject): BoardSessionState {
-        val runtimeSession = data.optJSONObject("runtime_snapshot")?.optJSONObject("session")
+        val runtimeSnapshot = data.optJSONObject("runtime_snapshot")
+        val runtimeSession = runtimeSnapshot?.optJSONObject("session")
+        val runtimeGimbal = runtimeSnapshot?.optJSONObject("gimbal")
         val runtimeHasRemainingMs = runtimeSession?.let {
             it.has("remaining_ms") && !it.isNull("remaining_ms")
         } == true
@@ -378,12 +380,11 @@ object BoardJsonParser {
             operationId = runtimeSession?.optString("operation_id")
                 ?.takeIf { it.isNotBlank() && it != "null" },
             sessionStartSource = data.optJsonString("session_start_source"),
-            precheck = parsePrecheck(data.optJSONObject("precheck")),
+            precheck = parsePrecheck(data.optJSONObject("precheck"), runtimeGimbal),
             precheckControl = parsePrecheckControl(data.optJSONObject("precheck_control")),
             outputCapability = parseOutputCapability(data.optJSONObject("output_capability")),
             reminder = data.optJsonString("reminder"),
-            precheckGuidance = data.optJsonString("precheck_guidance")
-                ?: data.optJSONObject("precheck")?.optJSONObject("camera")?.optJsonString("guidance"),
+            precheckGuidance = parsePrecheckGuidance(data),
             cameraPreview = parseCameraPreviewObject(data.optJSONObject("camera_preview"))
                 ?: parseCameraPreviewObject(
                     data.optJSONObject("precheck")
@@ -493,16 +494,16 @@ object BoardJsonParser {
         )
     }
 
-    private fun parsePrecheck(json: JSONObject?): BoardPrecheck? {
-        if (json == null) return null
+    private fun parsePrecheck(json: JSONObject?, runtimeGimbal: JSONObject?): BoardPrecheck? {
+        if (json == null && runtimeGimbal == null) return null
         return BoardPrecheck(
-            camera = json.optJSONObject("camera")?.let {
+            camera = json?.optJSONObject("camera")?.let {
                 PrecheckCamera(
                     required = it.optBoolean("required", false),
                     guidance = it.optJSONObject("guidance")?.toString()
                 )
             },
-            gimbal = json.optJSONObject("gimbal")?.let {
+            gimbal = json?.optJSONObject("gimbal")?.let {
                 PrecheckGimbal(
                     enabled = it.optBoolean("enabled", false),
                     online = it.optBoolean("online", false),
@@ -510,8 +511,40 @@ object BoardJsonParser {
                     angleX = it.optDoubleOrNull("angle_x"),
                     angleY = it.optDoubleOrNull("angle_y")
                 )
+            } ?: runtimeGimbal?.let { gimbal ->
+                val available = gimbal.optBoolean("available", false)
+                val healthStatus = gimbal.optString("health_status").trim().lowercase()
+                PrecheckGimbal(
+                    enabled = available,
+                    online = available && healthStatus !in setOf("not_started", "offline", "failed"),
+                    safe = available && !gimbal.optBoolean("degraded", false) && healthStatus == "ready",
+                    angleX = gimbal.optDoubleOrNull("angle_x"),
+                    angleY = gimbal.optDoubleOrNull("angle_y")
+                )
             }
         )
+    }
+
+    private fun parsePrecheckGuidance(data: JSONObject): String? {
+        val direct = data.opt("precheck_guidance")
+        if (direct is String && direct.isNotBlank()) return direct
+
+        val guidance = (direct as? JSONObject)
+            ?: data.optJSONObject("precheck")
+                ?.optJSONObject("camera")
+                ?.optJSONObject("guidance")
+            ?: return null
+        val primaryHint = listOf(
+            guidance.optString("distance_hint"),
+            guidance.optString("pose_hint"),
+            guidance.optString("frame_quality_reason")
+        ).firstOrNull { it.isNotBlank() }
+        if (primaryHint != null) return primaryHint
+
+        val hasOtherText = guidance.keys().asSequence().any { key ->
+            guidance.opt(key) is String && guidance.optString(key).isNotBlank()
+        }
+        return guidance.toString().takeIf { hasOtherText }
     }
 
     private fun parsePrecheckControl(json: JSONObject?): PrecheckControl? {

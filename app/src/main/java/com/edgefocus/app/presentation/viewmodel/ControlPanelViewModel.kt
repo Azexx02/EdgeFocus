@@ -400,7 +400,7 @@ class ControlPanelViewModel @Inject constructor(
     }
 
     fun skipCalibration() {
-        runPrecheckCommand { precheckController.skipAutoAdjustAndContinue() }
+        runPrecheckCommand { precheckController.skipAutoAdjust() }
     }
 
     fun refreshCameraPreview() {

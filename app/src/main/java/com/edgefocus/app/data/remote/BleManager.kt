@@ -53,6 +53,9 @@ class BleManager @Inject constructor(
     companion object {
         private const val TAG = "BleManager"
         private const val WRITE_TIMEOUT_MS = 5000L
+        private const val CONTROL_RESPONSE_TIMEOUT_MS = 12_000L
+        private const val PREVIEW_RESPONSE_TIMEOUT_MS = 20_000L
+        private const val SESSION_CONTROL_RESPONSE_TIMEOUT_MS = 30_000L
         private const val MAX_LOG_CONTENT_CHARS = 1024
         private const val REQUESTED_MTU = 517
         private const val BLUETOOTH_STATUS_SUCCESS = 0
@@ -686,7 +689,23 @@ class BleManager @Inject constructor(
             return writeDataOnly(data)
         }
 
-        val requestId = org.json.JSONObject(String(requestBytes, Charsets.UTF_8)).optInt("id")
+        val requestJson = org.json.JSONObject(String(requestBytes, Charsets.UTF_8))
+        val requestId = requestJson.optInt("id")
+        val command = requestJson.optString("cmd")
+        val sessionAction = requestJson.optJSONObject("data")?.optString("action")
+        val isStaleConnectionProbe = command == "client_hello" || command == "get_current_state"
+        val responseTimeoutMs = when {
+            // A lost start ACK is reconciled from get_current_state by
+            // TimerStateHolder. Keep this wait short so its 30 s transaction
+            // deadline still has time to observe PRECHECK/RUNNING on the board.
+            command == "session_control" && sessionAction == "start" -> WRITE_TIMEOUT_MS
+            command == "session_control" -> SESSION_CONTROL_RESPONSE_TIMEOUT_MS
+            command == "get_camera_preview_image" -> PREVIEW_RESPONSE_TIMEOUT_MS
+            command.startsWith("precheck_") || command.startsWith("gimbal_") ->
+                CONTROL_RESPONSE_TIMEOUT_MS
+            isStaleConnectionProbe -> WRITE_TIMEOUT_MS
+            else -> CONTROL_RESPONSE_TIMEOUT_MS
+        }
         logBle("SEND", String(requestBytes, Charsets.UTF_8))
         BleWritePolicy.validateRequestSize(requestBytes.size, negotiatedMtu)?.let { error ->
             logBle("ERROR", error)
@@ -702,7 +721,7 @@ class BleManager @Inject constructor(
                     ?: return Result.failure(IllegalStateException("Write characteristic not available"))
             }
 
-            val responseResult = withTimeoutOrNull(WRITE_TIMEOUT_MS) {
+            val responseResult = withTimeoutOrNull(responseTimeoutMs) {
                 suspendCancellableCoroutine<Result<ByteArray>> { cont ->
                     synchronized(writeLock) {
                         pendingWriteCallback?.invoke(false)
@@ -737,7 +756,24 @@ class BleManager @Inject constructor(
                 }
             }
 
-            responseResult ?: Result.failure(Exception("BLE response timed out"))
+            if (responseResult == null) {
+                // BlueZ can restart its GATT application without Android reporting a
+                // link-layer disconnect. In that case writes still succeed, but the old
+                // characteristic subscription can never produce another response. Treat
+                // the first complete-response timeout as a stale GATT connection so the
+                // existing connection supervisor can reconnect and rediscover services.
+                if (isStaleConnectionProbe) {
+                    failGattInitialization(gatt, "BLE response timed out")
+                } else {
+                    Log.w(
+                        TAG,
+                        "Control response timed out; keeping GATT for state reconciliation: $command"
+                    )
+                }
+                Result.failure(Exception("BLE response timed out"))
+            } else {
+                responseResult
+            }
         } catch (e: Exception) {
             synchronized(writeLock) {
                 pendingResponseCallbacks.remove(requestId)
@@ -1049,7 +1085,10 @@ class BleManager @Inject constructor(
     @SuppressLint("MissingPermission")
     override suspend fun updatePreferences(preferences: Map<String, Any?>): Result<ByteArray> {
         val root = BoardJsonParser.buildUpdatePreferences(preferences)
-        return sendDataAndAwait(root.toString().toByteArray(Charsets.UTF_8))
+        return sendDataAndAwait(
+            root.toString().toByteArray(Charsets.UTF_8),
+            HostRequestPriority.P0_CRITICAL
+        )
     }
 
     @SuppressLint("MissingPermission")
@@ -1062,7 +1101,10 @@ class BleManager @Inject constructor(
         debug: Boolean?
     ): Result<ByteArray> {
         val root = BoardJsonParser.buildGimbalControl(action, xDeg, yDeg, speed, stepDeg, debug)
-        return sendDataAndAwait(root.toString().toByteArray(Charsets.UTF_8))
+        return sendDataAndAwait(
+            root.toString().toByteArray(Charsets.UTF_8),
+            HostRequestPriority.P0_CRITICAL
+        )
     }
 
     @SuppressLint("MissingPermission")
