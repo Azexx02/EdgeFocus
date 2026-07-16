@@ -50,6 +50,36 @@ bool SessionRuntime::prepare(std::string* error) {
     return true;
 }
 
+bool SessionRuntime::beginFormalSession(
+    const FormalStartContext& context, std::string* error) {
+    if (!prepared_ || stopped_) {
+        if (error) *error = "runtime is not prepared";
+        return false;
+    }
+    if (formal_started_) return true;
+
+    for (auto& entry : features_) {
+        if (!entry.prepared) continue;
+        PrepareResult result;
+        try {
+            result = entry.feature->beginFormalSession(context);
+        } catch (const std::exception& exception) {
+            result = PrepareResult::failure(exception.what());
+        } catch (...) {
+            result = PrepareResult::failure("unknown formal-start exception");
+        }
+        if (!result.ready && entry.required) {
+            if (error) {
+                *error = std::string(entry.feature->name()) + ": " + result.detail;
+            }
+            return false;
+        }
+        entry.degraded = entry.degraded || result.degraded || (!result.ready && !entry.required);
+    }
+    formal_started_ = true;
+    return true;
+}
+
 void SessionRuntime::enterPhase(Phase phase) {
     if (!prepared_ || stopped_) throw std::logic_error("runtime is not active");
     for (auto& entry : features_) {
@@ -76,6 +106,7 @@ void SessionRuntime::stop(StopReason reason) noexcept {
         iterator->prepared = false;
     }
     prepared_ = false;
+    formal_started_ = false;
     stopped_ = true;
     phase_ = Phase::Ending;
 }

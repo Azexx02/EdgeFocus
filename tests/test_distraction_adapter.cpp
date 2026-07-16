@@ -46,6 +46,9 @@ void test_phone_buffer_contract() {
     buffer.beginSession("s1");
     assert(!buffer.publish(fact("old", 1, 0, session::PhoneCategory::Entertainment), &error));
     assert(buffer.publish(fact("s1", 1, 100, session::PhoneCategory::Entertainment), &error));
+    auto duplicate = fact("s1", 1, 100, session::PhoneCategory::Entertainment);
+    duplicate.received_monotonic_ms = 900;
+    assert(buffer.publish(duplicate, &error));
     assert(!buffer.publish(fact("s1", 1, 101, session::PhoneCategory::GeneralOrUnknown), &error));
     assert(buffer.observation(1100).has_value());
     assert(!buffer.observation(1101).has_value());

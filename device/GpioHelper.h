@@ -24,6 +24,10 @@ public:
     // Sets the value of an opened output line
     static void setValue(const GpioLine& line, int value);
 
+    // Checked variants used by safety-critical platform services.
+    static bool trySetValue(const GpioLine& line, int value, std::string* error = nullptr);
+    static bool readValue(const GpioLine& line, int& value, std::string* error = nullptr);
+
     // Closes and releases the GPIO line
     static void closeLine(GpioLine& line);
 

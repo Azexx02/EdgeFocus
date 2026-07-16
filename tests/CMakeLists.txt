@@ -16,6 +16,22 @@ target_include_directories(test_session_runtime PRIVATE ${CMAKE_CURRENT_SOURCE_D
 target_link_libraries(test_session_runtime PRIVATE Threads::Threads)
 add_test(NAME test_session_runtime COMMAND test_session_runtime)
 
+add_executable(test_precheck_formal_boundary
+    test_precheck_formal_boundary.cpp
+    ../session/SessionSnapshotPublisher.cpp
+    ../session/SessionRuntime.cpp
+    ../session/SessionOrchestrator.cpp
+    ../session/LegacySessionProjectionFeature.cpp
+    ../app/AppContext.cpp
+    ../app/SystemStateStore.cpp
+    ../app/SessionController.cpp
+    ../app/Logger.cpp
+    ../storage/SQLiteStore.cpp
+    ../storage/ReportGenerator.cpp)
+target_include_directories(test_precheck_formal_boundary PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(test_precheck_formal_boundary PRIVATE Threads::Threads sqlite3_lib)
+add_test(NAME test_precheck_formal_boundary COMMAND test_precheck_formal_boundary)
+
 # ===========================================================================
 # 0b. Validated Distraction Core Tests
 #     Exact pure-logic tests migrated with the standalone C++ core.
@@ -39,6 +55,36 @@ add_executable(test_distraction_adapter
 target_include_directories(test_distraction_adapter PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(test_distraction_adapter PRIVATE edgefocus_distraction_core Threads::Threads)
 add_test(NAME test_distraction_adapter COMMAND test_distraction_adapter)
+
+# ===========================================================================
+# 0c. M33 Fan Control Core Tests
+#     Pure logic/protocol tests; no Linux, HAL, OpenAMP, or product runtime.
+# ===========================================================================
+add_executable(test_fan_control
+    ../platform/fan/tests/test_fan_control.cpp)
+target_link_libraries(test_fan_control PRIVATE edgefocus_fan_core)
+add_test(NAME test_fan_control COMMAND test_fan_control)
+
+add_executable(test_fan_protocol
+    ../platform/fan/tests/test_fan_protocol.cpp)
+target_link_libraries(test_fan_protocol PRIVATE edgefocus_fan_core)
+add_test(NAME test_fan_protocol COMMAND test_fan_protocol)
+
+add_executable(test_m33_fan_controller
+    ../platform/fan/tests/test_m33_fan_controller.cpp)
+target_link_libraries(test_m33_fan_controller PRIVATE edgefocus_m33_fan_app)
+add_test(NAME test_m33_fan_controller COMMAND test_m33_fan_controller)
+
+if(UNIX AND NOT APPLE)
+    add_executable(test_fan_bridge
+        ../platform/fan/tests/test_fan_bridge.cpp
+        ../platform/fan/bridge/FrameStreamDecoder.cpp
+        ../platform/fan/bridge/ThermalSource.cpp)
+    target_include_directories(test_fan_bridge PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../platform/fan/bridge)
+    target_link_libraries(test_fan_bridge PRIVATE edgefocus_fan_core)
+    add_test(NAME test_fan_bridge COMMAND test_fan_bridge)
+endif()
 
 # ===========================================================================
 # 1. Storage Layer Test (SQLiteStore + ReportGenerator)
@@ -125,6 +171,7 @@ add_executable(test_vision_result
     test_vision_result.cpp
     ../camera/CameraPipeline.cpp
     ../camera/PreviewFrameStore.cpp
+    ../session/SessionSnapshotPublisher.cpp
     ../vision/FrameQuality.cpp
     ../vision/ModelRegistry.cpp
     ../vision/PoseModelAdapter.cpp
@@ -179,6 +226,14 @@ target_include_directories(test_notification_router PRIVATE ${CMAKE_CURRENT_SOUR
 target_link_libraries(test_notification_router PRIVATE Threads::Threads)
 add_test(NAME test_notification_router COMMAND test_notification_router)
 
+add_executable(test_app_event_outbox
+    test_app_event_outbox.cpp
+    ../network/AppEventOutbox.cpp
+    ../policy/NotificationRouter.cpp)
+target_include_directories(test_app_event_outbox PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(test_app_event_outbox PRIVATE Threads::Threads nlohmann_json::nlohmann_json)
+add_test(NAME test_app_event_outbox COMMAND test_app_event_outbox)
+
 # ===========================================================================
 # 8. Demo HTTP Parser Test (video-only helper parsing)
 #    Tests: ASCII demo page request parsing, Content-Length buffering, bad headers.
@@ -200,6 +255,7 @@ endif()
 add_executable(test_ble_gatt
     test_ble_gatt.cpp
     ../network/AppCommandService.cpp
+    ../network/AppEventOutbox.cpp
     ../network/BleGattServer.cpp
     ../session/SessionSnapshotPublisher.cpp
     ../session/SessionRuntime.cpp
@@ -229,7 +285,8 @@ add_executable(test_ble_gatt
     ../app/Logger.cpp)
 target_include_directories(test_ble_gatt PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(test_ble_gatt PRIVATE
-    Threads::Threads sqlite3_lib nlohmann_json::nlohmann_json edgefocus_distraction_core)
+    Threads::Threads sqlite3_lib nlohmann_json::nlohmann_json
+    edgefocus_distraction_core edgefocus_power_core edgefocus_gimbal_session_core)
 add_test(NAME test_ble_gatt COMMAND test_ble_gatt)
 
 # ===========================================================================
@@ -241,6 +298,7 @@ add_test(NAME test_ble_gatt COMMAND test_ble_gatt)
 add_executable(test_integration
     test_integration.cpp
     ../network/AppCommandService.cpp
+    ../network/AppEventOutbox.cpp
     ../network/BleGattServer.cpp
     ../session/SessionSnapshotPublisher.cpp
     ../session/SessionRuntime.cpp
@@ -281,7 +339,8 @@ add_executable(test_integration
     ../app/Logger.cpp)
 target_include_directories(test_integration PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(test_integration PRIVATE
-    Threads::Threads sqlite3_lib nlohmann_json::nlohmann_json edgefocus_distraction_core)
+    Threads::Threads sqlite3_lib nlohmann_json::nlohmann_json
+    edgefocus_distraction_core edgefocus_power_core edgefocus_gimbal_session_core)
 add_test(NAME test_integration COMMAND test_integration)
 
 if(EDGEFOCUS_WITH_OPENCV AND EDGEFOCUS_WITH_STAI_MPU)
@@ -320,3 +379,62 @@ add_executable(test_gimbal_controller
 target_include_directories(test_gimbal_controller PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(test_gimbal_controller PRIVATE Threads::Threads)
 add_test(NAME test_gimbal_controller COMMAND test_gimbal_controller)
+
+add_executable(test_gimbal_protocol
+    ../platform/gimbal/tests/test_gimbal_protocol.cpp)
+target_link_libraries(test_gimbal_protocol PRIVATE edgefocus_gimbal_core)
+add_test(NAME test_gimbal_protocol COMMAND test_gimbal_protocol)
+
+add_executable(test_gimbal_state_machine
+    ../platform/gimbal/tests/test_gimbal_state_machine.cpp)
+target_link_libraries(test_gimbal_state_machine PRIVATE edgefocus_gimbal_core)
+add_test(NAME test_gimbal_state_machine COMMAND test_gimbal_state_machine)
+
+add_executable(test_gimbal_hardware_service
+    ../platform/gimbal/tests/test_gimbal_hardware_service.cpp
+    ../app/AppContext.cpp)
+target_include_directories(test_gimbal_hardware_service PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(test_gimbal_hardware_service PRIVATE
+    edgefocus_gimbal_service Threads::Threads)
+add_test(NAME test_gimbal_hardware_service COMMAND test_gimbal_hardware_service)
+
+add_executable(test_gimbal_oneway_stop_diagnostic
+    ../platform/gimbal/tests/test_gimbal_oneway_stop_diagnostic.cpp)
+target_link_libraries(test_gimbal_oneway_stop_diagnostic PRIVATE
+    edgefocus_gimbal_oneway_diagnostic)
+add_test(NAME test_gimbal_oneway_stop_diagnostic
+    COMMAND test_gimbal_oneway_stop_diagnostic)
+
+add_executable(test_stusb4500_status
+    ../platform/power/tests/test_stusb4500_status.cpp)
+target_link_libraries(test_stusb4500_status PRIVATE edgefocus_power_core)
+add_test(NAME test_stusb4500_status COMMAND test_stusb4500_status)
+
+add_executable(test_workload_profile_policy
+    ../platform/power/tests/test_workload_profile_policy.cpp)
+target_link_libraries(test_workload_profile_policy PRIVATE edgefocus_power_core)
+add_test(NAME test_workload_profile_policy COMMAND test_workload_profile_policy)
+
+add_executable(test_power_source_service
+    ../platform/power/tests/test_power_source_service.cpp
+    ../app/AppContext.cpp)
+target_include_directories(test_power_source_service PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(test_power_source_service PRIVATE
+    edgefocus_power_service Threads::Threads)
+add_test(NAME test_power_source_service COMMAND test_power_source_service)
+
+add_executable(test_vision_cadence_policy test_vision_cadence_policy.cpp)
+target_include_directories(test_vision_cadence_policy PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+add_test(NAME test_vision_cadence_policy COMMAND test_vision_cadence_policy)
+
+add_executable(test_gimbal_precheck test_gimbal_precheck.cpp)
+target_include_directories(test_gimbal_precheck PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_compile_definitions(test_gimbal_precheck PRIVATE
+    EDGEFOCUS_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/..")
+target_link_libraries(test_gimbal_precheck PRIVATE edgefocus_gimbal_session_core)
+add_test(NAME test_gimbal_precheck COMMAND test_gimbal_precheck)
+
+add_executable(test_gimbal_tracking test_gimbal_tracking.cpp)
+target_include_directories(test_gimbal_tracking PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(test_gimbal_tracking PRIVATE edgefocus_gimbal_session_core)
+add_test(NAME test_gimbal_tracking COMMAND test_gimbal_tracking)

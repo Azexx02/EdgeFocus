@@ -86,7 +86,8 @@ void test_action_queue_issue_band_updates_device_status() {
     assert(frame[0] == 0x01);
     assert(frame[1] == 0x01);
     assert(frame[2] == 0x01);
-    assert(snap.band_last_write_status.find("disconnected") != std::string::npos ||
+    assert(snap.band_last_write_status.find("waiting for connection") != std::string::npos ||
+           snap.band_last_write_status.find("disconnected") != std::string::npos ||
            snap.band_last_write_status.find("diagnostic-only") != std::string::npos ||
            snap.band_last_write_status == "");
 
@@ -160,39 +161,31 @@ void test_sound_controller_generates_short_tone_wav() {
 #endif
 }
 
-void test_power_profile_follows_charging_state() {
+void test_device_manager_does_not_overwrite_power_service_projection() {
     AppContext ctx;
     SystemStateStore store;
     DeviceManager dev_mgr(store);
     dev_mgr.init(ctx);
 
     auto snap = store.snapshot().device;
-    assert(snap.battery_percent == 67);
-    assert(snap.battery_charging == false);
-    assert(snap.power_profile == PowerProfile::GO);
-    assert(snap.power_source == "battery");
-
-    snap.battery_charging = true;
-    snap.battery_percent = -1;
-    snap.power_source = "battery";
+    snap.external_power_state = "PRESENT";
+    snap.external_power_present = true;
+    snap.external_power_sample_age_ms = 125;
+    snap.power_profile = PowerProfile::HOME;
+    snap.power_profile_source = "manual";
+    snap.manual_override_active = true;
+    snap.power_epoch = 7;
     store.updateDeviceStatus(snap);
     dev_mgr.runOnce(ctx);
 
     snap = store.snapshot().device;
-    assert(snap.battery_percent == 67);
-    assert(snap.battery_charging == true);
+    assert(snap.external_power_state == "PRESENT");
+    assert(snap.external_power_present == true);
+    assert(snap.external_power_sample_age_ms == 125);
     assert(snap.power_profile == PowerProfile::HOME);
-    assert(snap.power_source == "external");
-
-    snap.battery_charging = false;
-    snap.power_source = "external";
-    store.updateDeviceStatus(snap);
-    dev_mgr.runOnce(ctx);
-
-    snap = store.snapshot().device;
-    assert(snap.battery_charging == false);
-    assert(snap.power_profile == PowerProfile::GO);
-    assert(snap.power_source == "battery");
+    assert(snap.power_profile_source == "manual");
+    assert(snap.manual_override_active);
+    assert(snap.power_epoch == 7);
 
     dev_mgr.shutdown(ctx);
 }
@@ -205,7 +198,7 @@ int main() {
     test_sound_controller_disabled_is_fast_and_unavailable();
     test_board_sound_action_is_disabled();
     test_sound_controller_generates_short_tone_wav();
-    test_power_profile_follows_charging_state();
+    test_device_manager_does_not_overwrite_power_service_projection();
     std::cout << "All DeviceManager tests passed!\n";
     return 0;
 }

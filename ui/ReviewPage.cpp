@@ -15,9 +15,6 @@ void ReviewPage::render(FrameBuffer& fb, const SystemSnapshot& snap) {
     cap_font.scale = 2;
     fb.drawText(20, 10, "LEARN_OS", Color::primary(), cap_font);
 
-    int bat_pct = snap.device.battery_percent >= 0 ? snap.device.battery_percent : 100;
-    fb.drawIconBattery(W - 36, 10, 20, 12, bat_pct, Color::textSecondary());
-
     const auto& report = snap.last_report;
 
     // --- Stats Card ---

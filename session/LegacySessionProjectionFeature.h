@@ -15,6 +15,7 @@ public:
 
     const char* name() const noexcept override { return "legacy_session_projection"; }
     PrepareResult prepare(const SessionContext& context) override;
+    PrepareResult beginFormalSession(const FormalStartContext& context) override;
     void enterPhase(Phase phase) override;
     void stop(StopReason reason) noexcept override;
     FeatureHealth health() const override;
@@ -27,7 +28,8 @@ private:
     SQLiteStore& sqlite_store_;
     SessionContext context_;
     FeatureHealth health_;
-    bool active_{};
+    bool prepared_{};
+    bool formal_started_{};
 };
 
 }  // namespace session

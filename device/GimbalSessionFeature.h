@@ -1,35 +1,52 @@
 #pragma once
 
+#include "device/GimbalPrecheckController.h"
+#include "device/GimbalVisualTracker.h"
 #include "session/ISessionFeature.h"
+#include "session/SessionSnapshotPublisher.h"
 
-namespace edgefocus {
+#include <atomic>
+#include <chrono>
+#include <cstdint>
+#include <functional>
+#include <mutex>
+#include <thread>
 
-class GimbalMonitor;
-class SystemStateStore;
-namespace session {
-class SessionSnapshotPublisher;
-}
+namespace edgefocus::gimbal {
 
 class GimbalSessionFeature final : public session::ISessionFeature {
 public:
-    GimbalSessionFeature(GimbalMonitor& monitor,
-                         SystemStateStore& store,
-                         session::SessionSnapshotPublisher& snapshots);
+    using Clock = std::function<std::int64_t()>;
+    using Sleeper = std::function<void(std::chrono::milliseconds)>;
 
-    const char* name() const noexcept override { return "gimbal"; }
+    GimbalSessionFeature(GimbalPrecheckController& controller,
+                         GimbalVisualTracker& tracker,
+                         session::SessionSnapshotPublisher& snapshots,
+                         Clock clock = {}, Sleeper sleeper = {});
+    ~GimbalSessionFeature() override;
+
+    const char* name() const noexcept override { return "gimbal_precheck"; }
     session::PrepareResult prepare(const session::SessionContext& context) override;
     void enterPhase(session::Phase phase) override;
     void stop(session::StopReason reason) noexcept override;
     session::FeatureHealth health() const override;
 
 private:
-    void publish(session::Phase phase);
+    static std::int64_t defaultClockMs();
+    void workerLoop();
+    void publish(std::int64_t now_ms);
+    void setHealth(bool available, bool degraded, std::string status, std::string detail = {});
 
-    GimbalMonitor& monitor_;
-    SystemStateStore& store_;
+    GimbalPrecheckController& controller_;
+    GimbalVisualTracker& tracker_;
     session::SessionSnapshotPublisher& snapshots_;
+    Clock clock_;
+    Sleeper sleeper_;
+    std::thread worker_;
+    std::atomic<bool> running_{false};
+    std::atomic<session::Phase> phase_{session::Phase::Idle};
+    mutable std::mutex health_mutex_;
     session::FeatureHealth health_;
-    bool active_{};
 };
 
-}  // namespace edgefocus
+}  // namespace edgefocus::gimbal

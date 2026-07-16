@@ -20,6 +20,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parent
 SDK_ENV = "/opt/st/stm32mp2/5.0.3-snapshot/environment-setup-cortexa35-ostl-linux"
+REMOTE_DEPS = "/home/hu/.cache/edgefocus-deps"
 
 
 def run(command: list[str], *, dry_run: bool = False) -> None:
@@ -29,8 +30,10 @@ def run(command: list[str], *, dry_run: bool = False) -> None:
 
 
 def source_archive(destination: Path) -> None:
-    excluded_dirs = {".git", "build", "build-arm", ".superpowers", "__pycache__"}
-    excluded_suffixes = {".obj", ".pdb", ".lib", ".exe", ".zip"}
+    excluded_dirs = {
+        ".git", "build", "build-arm", ".superpowers", "_workspace", "__pycache__"
+    }
+    excluded_suffixes = {".obj", ".pdb", ".lib", ".exe", ".zip", ".mp4"}
     with zipfile.ZipFile(destination, "w", zipfile.ZIP_DEFLATED) as archive:
         for path in ROOT.rglob("*"):
             relative = path.relative_to(ROOT)
@@ -47,6 +50,37 @@ def sha256(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def sync_demo_media(board: str, *, dry_run: bool = False) -> None:
+    """Atomically copy only changed demo media/trace artifacts."""
+    demo_root = ROOT / "assets" / "demo"
+    artifacts = sorted(demo_root.glob("p[0-9][0-9].mp4"))
+    artifacts += sorted((demo_root / "no_npu" / "segments").glob("r[0-9][0-9].mp4"))
+    artifacts += sorted((demo_root / "no_npu" / "segments").glob("r[0-9][0-9].trace.json"))
+    if not artifacts:
+        return
+    run(["ssh", "-o", "BatchMode=yes", board,
+         "mkdir -p /opt/edgefocus/assets/demo"], dry_run=dry_run)
+    for path in artifacts:
+        relative = path.relative_to(demo_root).as_posix()
+        remote = f"/opt/edgefocus/assets/demo/{relative}"
+        remote_parent = str(Path(remote).parent).replace("\\", "/")
+        run(["ssh", "-o", "BatchMode=yes", board,
+             f"mkdir -p {shlex.quote(remote_parent)}"], dry_run=dry_run)
+        digest = sha256(path)
+        check = subprocess.run(
+            ["ssh", "-o", "BatchMode=yes", board,
+             f"test -f {shlex.quote(remote)} && sha256sum {shlex.quote(remote)}"],
+            check=False, capture_output=True, text=True) if not dry_run else None
+        if check and check.returncode == 0 and check.stdout.split(maxsplit=1)[0] == digest:
+            print(f"= unchanged demo artifact {relative}")
+            continue
+        temporary = remote + ".uploading"
+        run(["scp", str(path), f"{board}:{temporary}"], dry_run=dry_run)
+        run(["ssh", "-o", "BatchMode=yes", board,
+             f"test \"$(sha256sum {shlex.quote(temporary)} | cut -d' ' -f1)\" = {digest} && "
+             f"mv -f {shlex.quote(temporary)} {shlex.quote(remote)}"], dry_run=dry_run)
 
 
 def main() -> int:
@@ -70,12 +104,25 @@ def main() -> int:
 
         run(["scp", str(archive), f"{args.compiler}:{compiler_root}.zip"], dry_run=args.dry_run)
         compile_command = (
-            f"set -e; mkdir -p {compiler_root}; cd {compiler_root}; "
+            f"set -e; mkdir -p {compiler_root} {REMOTE_DEPS}; "
+            f"if ! test -f {REMOTE_DEPS}/sqlite3/sqlite3.c; then "
+            "sqlite_src=$(find /tmp /home/hu -path '*/_deps/sqlite3-src/sqlite3.c' -print -quit); "
+            "test -n \"$sqlite_src\"; cp -a \"$(dirname \"$sqlite_src\")\" "
+            f"{REMOTE_DEPS}/sqlite3; fi; "
+            f"if ! test -f {REMOTE_DEPS}/json/single_include/nlohmann/json.hpp; then "
+            "json_src=$(find /tmp /home/hu -path '*/_deps/json-src/single_include/nlohmann/json.hpp' -print -quit); "
+            "test -n \"$json_src\"; json_root=${json_src%/single_include/nlohmann/json.hpp}; "
+            f"cp -a \"$json_root\" {REMOTE_DEPS}/json; fi; "
+            f"cd {compiler_root}; "
             f"unzip -q {compiler_root}.zip; source {SDK_ENV}; "
             "cmake -S . -B build-arm -DCMAKE_BUILD_TYPE=Release "
             "-DEDGEFOCUS_WITH_OPENCV=ON -DEDGEFOCUS_WITH_STAI_MPU=ON "
-            "-DEDGEFOCUS_WITH_DEMO_HTTP=ON; "
-            "cmake --build build-arm --target focus_app -j4; "
+            "-DEDGEFOCUS_WITH_DEMO_HTTP=ON "
+            f"-DFETCHCONTENT_SOURCE_DIR_SQLITE3={REMOTE_DEPS}/sqlite3 "
+            f"-DFETCHCONTENT_SOURCE_DIR_JSON={REMOTE_DEPS}/json; "
+            # Build every test target as a compile-time contract check. The
+            # binaries are ARM artifacts, so runtime tests execute on-board.
+            "cmake --build build-arm -j4; "
             "DESTDIR=$PWD/stage cmake --install build-arm; "
             "tar -C stage/usr/local -czf focus_app_release.tar.gz ."
         )
@@ -95,22 +142,37 @@ def main() -> int:
             f"test -x {board_release}/bin/focus_app; "
             f"test -f {board_release}/models/distraction/yolo11n_pose_256_float.nb; "
             f"test -f {board_release}/models/distraction/prone_mlp_v1.json; "
+            f"test -f {board_release}/config/gimbal-board.json; "
             f"cp -a /opt/edgefocus/focus_app {board_release}/rollback/focus_app; "
             f"cp -a /opt/edgefocus/models {board_release}/rollback/models; "
+            f"cp -a /etc/systemd/system/focus_app.service {board_release}/rollback/focus_app.service; "
+            f"if test -d /opt/edgefocus/config; then cp -a /opt/edgefocus/config {board_release}/rollback/config; fi; "
+            f"if test -d /opt/edgefocus/assets; then cp -a /opt/edgefocus/assets {board_release}/rollback/assets; fi; "
             "systemctl stop focus_app; "
             f"install -m 755 {board_release}/bin/focus_app /opt/edgefocus/focus_app; "
             "mkdir -p /opt/edgefocus/models/distraction; "
             f"cp -a {board_release}/models/distraction/. /opt/edgefocus/models/distraction/; "
+            "mkdir -p /opt/edgefocus/config; "
+            f"cp -a {board_release}/config/. /opt/edgefocus/config/; "
+            "mkdir -p /opt/edgefocus/assets/demo; "
+            f"cp -a {board_release}/assets/demo/. /opt/edgefocus/assets/demo/; "
+            "sed -i '/^Environment=EDGEFOCUS_DISABLE_GIMBAL=1$/d' /etc/systemd/system/focus_app.service; "
+            "systemctl daemon-reload; "
             "if systemctl start focus_app && sleep 4 && "
             "systemctl is-active --quiet focus_app && "
             f"curl -fsS --max-time 3 http://127.0.0.1:{args.demo_port}/api/demo/state; then "
             "true; else "
             f"install -m 755 {board_release}/rollback/focus_app /opt/edgefocus/focus_app; "
             f"cp -a {board_release}/rollback/models/. /opt/edgefocus/models/; "
+            f"if test -d {board_release}/rollback/config; then cp -a {board_release}/rollback/config/. /opt/edgefocus/config/; fi; "
+            f"if test -d {board_release}/rollback/assets; then cp -a {board_release}/rollback/assets/. /opt/edgefocus/assets/; fi; "
+            f"cp -a {board_release}/rollback/focus_app.service /etc/systemd/system/focus_app.service; "
+            "systemctl daemon-reload; "
             "systemctl start focus_app; exit 1; fi; "
             "systemctl is-active focus_app"
         )
         run(["ssh", "-o", "BatchMode=yes", args.board, deploy_command], dry_run=args.dry_run)
+        sync_demo_media(args.board, dry_run=args.dry_run)
 
     print(f"deployed release {release} to {args.board}")
     return 0

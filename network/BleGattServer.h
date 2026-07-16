@@ -1,5 +1,6 @@
 #pragma once
 #include "network/AppCommandService.h"
+#include "network/AppEventOutbox.h"
 #include "app/Module.h"
 #include "app/SystemStateStore.h"
 #include "storage/SQLiteStore.h"
@@ -30,7 +31,9 @@ public:
                   GimbalMonitor* gimbal_monitor = nullptr,
                   session::SessionOrchestrator* session_orchestrator = nullptr,
                   PhoneFactBuffer* phone_facts = nullptr,
-                  session::SessionSnapshotPublisher* session_snapshots = nullptr);
+                  session::SessionSnapshotPublisher* session_snapshots = nullptr,
+                  power::WorkloadProfilePolicy* workload_policy = nullptr,
+                  gimbal::GimbalPrecheckController* gimbal_precheck = nullptr);
     ~BleGattServer() override;
 
     bool init(AppContext& ctx) override;
@@ -46,7 +49,10 @@ public:
         bool push,
         std::size_t chunk_size);
 
-    void setPhoneConnected(bool connected) { phone_connected_.store(connected); }
+    void setPhoneConnected(bool connected) {
+        phone_connected_.store(connected);
+        event_outbox_.setSubscribed(connected);
+    }
 
 #if defined(__linux__) && defined(EDGEFOCUS_WITH_BLUEZ)
     std::string bluezRxValueSnapshot();
@@ -60,6 +66,7 @@ public:
 private:
     SystemStateStore& store_;
     SQLiteStore& sqlite_store_;
+    AppEventOutbox event_outbox_;
     AppCommandService app_commands_;
 
     std::atomic<bool> phone_connected_{false};

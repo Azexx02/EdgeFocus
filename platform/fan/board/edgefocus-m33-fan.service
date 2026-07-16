@@ -1,0 +1,17 @@
+[Unit]
+Description=EdgeFocus M33 fan controller loader
+After=systemd-modules-load.service
+Before=edgefocus-fan-bridge.service
+Conflicts=edgefocus-fan-fallback.service
+OnFailure=edgefocus-fan-fallback.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/edgefocus-fan-transition start --require-calibration
+ExecStop=/usr/local/sbin/edgefocus-fan-transition fallback
+TimeoutStartSec=40
+TimeoutStopSec=15
+
+[Install]
+WantedBy=sysinit.target

@@ -43,6 +43,11 @@ int GpioHelper::findLine(const std::string& name, char* chip_path, size_t chip_l
         }
         close(fd);
     }
+#else
+    (void)name;
+    (void)chip_path;
+    (void)chip_len;
+    (void)offset;
 #endif
     return -1;
 }
@@ -83,20 +88,62 @@ GpioLine GpioHelper::openLine(const std::string& name, bool output, int default_
     
     line.handle_fd = req.fd;
     LOGI("GpioHelper", "Opened GPIO %s on %s offset %u", name.c_str(), chip_path, offset);
+#else
+    (void)output;
+    (void)default_value;
 #endif
     return line;
 }
 
 void GpioHelper::setValue(const GpioLine& line, int value) {
+    (void)trySetValue(line, value, nullptr);
+}
+
+bool GpioHelper::trySetValue(const GpioLine& line, int value, std::string* error) {
 #ifdef __linux__
-    if (line.handle_fd < 0) return;
+    if (line.handle_fd < 0) {
+        if (error) *error = "invalid GPIO handle: " + line.name;
+        return false;
+    }
 
     struct gpiohandle_data data;
     memset(&data, 0, sizeof(data));
     data.values[0] = value ? 1 : 0;
     if (ioctl(line.handle_fd, GPIOHANDLE_SET_LINE_VALUES_IOCTL, &data) < 0) {
         LOGE("GpioHelper", "Failed to set GPIO value for %s", line.name.c_str());
+        if (error) *error = "failed to set GPIO: " + line.name;
+        return false;
     }
+    if (error) error->clear();
+    return true;
+#else
+    (void)line;
+    (void)value;
+    if (error) *error = "GPIO unavailable on this platform";
+    return false;
+#endif
+}
+
+bool GpioHelper::readValue(const GpioLine& line, int& value, std::string* error) {
+#ifdef __linux__
+    if (line.handle_fd < 0) {
+        if (error) *error = "invalid GPIO handle: " + line.name;
+        return false;
+    }
+    struct gpiohandle_data data;
+    memset(&data, 0, sizeof(data));
+    if (ioctl(line.handle_fd, GPIOHANDLE_GET_LINE_VALUES_IOCTL, &data) < 0) {
+        if (error) *error = "failed to read GPIO: " + line.name;
+        return false;
+    }
+    value = data.values[0] ? 1 : 0;
+    if (error) error->clear();
+    return true;
+#else
+    (void)line;
+    value = 0;
+    if (error) *error = "GPIO unavailable on this platform";
+    return false;
 #endif
 }
 
@@ -110,6 +157,8 @@ void GpioHelper::closeLine(GpioLine& line) {
         close(line.chip_fd);
         line.chip_fd = -1;
     }
+#else
+    (void)line;
 #endif
 }
 

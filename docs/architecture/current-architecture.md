@@ -18,6 +18,7 @@
 4. [`app-band-protocol-v2.1.md`](../integration/app-band-protocol-v2.1.md)（正式跨设备协议）。
 5. [`2026-07-14-focus-app-session-architecture.md`](../superpowers/specs/2026-07-14-focus-app-session-architecture.md)（会话架构设计依据）。
 6. [`2026-07-14-cross-device-demo-and-bluetooth-contract.md`](../superpowers/specs/2026-07-14-cross-device-demo-and-bluetooth-contract.md)（展示与可靠通信设计依据）。
+7. [`2026-07-16-main-gimbal-integration-design.md`](../superpowers/specs/2026-07-16-main-gimbal-integration-design.md)（当前正式云台搜索、追踪与安全停机依据）。
 
 如果旧阶段记录与最终产品基线冲突，以完整架构母文档为准；代码差异应作为收敛任务，不得把旧阶段状态重新写入海报或产品说明。
 
@@ -138,9 +139,11 @@ flowchart LR
 
 3. `GimbalSessionFeature`（正式能力，可局部降级）
    - 只消费正式视觉快照，不打开第二个摄像头。
-   - PRECHECK 先观察当前画面；未找到人物才执行最多 8 个经实测限位约束的方向点搜索。
-   - 找到人物立即 HOLD；整轮未找到则回中心并交出手动调节租约。
-   - FOCUSING 内根据人物/人脸目标执行闭环跟踪；PAUSED 保持安全姿态。
+   - G431 对齐成功后才启动搜索计时；PRECHECK 先观察当前画面，再执行 yaw ±45° / pitch ±20° 常规搜索；仍未找到时按 50° 垂直视场生成全俯仰恢复节点，搜索第 72 秒停止排新节点、第 75 秒绝对结束。
+   - Pose 快速触发后先读取实际角度并冻结；随后复用同一 `GimbalVisualTracker` 把肩部/上半身目标移入推理友好区域，连续两帧丢失则恢复原扫描节点。
+   - 居中后再次冻结并在 1.2 秒内采集三帧构图分数；至少两帧合格才 HOLD 并交出手动租约。超时或无目标时验证回参考中位后进入手动。
+   - FOCUSING 内根据 Pose 上半身目标执行闭环跟踪；PAUSED 只 HOLD 并清空旧追踪目标；Resume 从新视觉帧重新建立连续性。
+   - 健康结束时先验证回参考中位，再执行 `STOP → OK,STOP → motion_off` 校验并禁用；停止操作幂等，Ending/feature stop/析构不会重复发命令。故障结束跳过回中，安全停机优先。
    - UART、PD6、对齐或运行状态任一失败，PRECHECK 运动与后续跟踪能力共同降级；硬件服务维持 PD7 安全态并低频探测。连续健康后重新对齐，再按当前 phase 恢复搜索或 HOLD。
    - App 命令必须携带当前 `session_id` 与严格递增 `sequence`，且只在 PRECHECK 生效。
 
@@ -410,7 +413,7 @@ EDGEFOCUS_VISION_MODE=real
 2. **`SystemStateStore` 仍承担兼容总线。** 新领域状态优先进入类型化 snapshot/事件，不增加整对象读改写。
 3. **CameraPipeline 已迁到 typed runtime，提醒和部分设备仍依赖兼容投影。** 移除 `LegacySessionProjectionFeature` 前还需迁移剩余消费者。
 4. **AppCommandService 混合新旧响应。** 新 App 与本版板端按同一协议同步升级；电量/旧 `power_source` 不再兼容，Home/Go 只能通过显式 `set_power_profile` 修改。
-5. **屏幕/声音/云台代码仍可编译。** 当前通过入口和环境禁用，不能误注册回生产。
+5. **屏幕/声音遗留代码仍可编译。** 两者保持生产入口禁用；云台已是正式 optional session feature，只有 `EDGEFOCUS_DISABLE_GIMBAL=1` 紧急维修覆盖或运行时健康失败才固定相机降级。
 6. **Demo 媒体同步不应把回放当成真实推理证据。** 页面来源标签不可隐藏。
 
 ## 15. 新能力接入规则

@@ -103,18 +103,11 @@ std::string durationLabel(int minutes) {
     return buf;
 }
 
-int displayBatteryPercent(const DeviceStatus& device) {
-    return device.battery_percent >= 0 && device.battery_percent <= 100
-        ? device.battery_percent
-        : 67;
-}
-
 std::string powerStatusLabel(const DeviceStatus& device) {
-    char buf[32];
-    snprintf(buf, sizeof(buf), "Power %s %d%% %s",
+    char buf[48];
+    snprintf(buf, sizeof(buf), "Power %s / %s",
              device.power_profile == PowerProfile::HOME ? "HOME" : "GO",
-             displayBatteryPercent(device),
-             device.battery_charging ? "CHG" : "BAT");
+             device.external_power_state.c_str());
     return buf;
 }
 
@@ -209,7 +202,7 @@ void StatusPage::render(FrameBuffer& fb, const SystemSnapshot& snap) {
     // Normal backgrounds
     fb.clear(Color::bgDark());
 
-    // NOTE: Global header (Mode, Camera, Battery) is drawn by UIManager after this!
+    // NOTE: Global header (Mode, Camera, Power profile) is drawn by UIManager after this.
     // So we reserve the top 40px.
 
     if (internal_state_ == InternalState::READY) {

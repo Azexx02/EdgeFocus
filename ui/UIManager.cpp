@@ -259,17 +259,12 @@ void UIManager::renderGlobalHeader(const SystemSnapshot& snap) {
     Color cam_color = snap.device.camera_ok ? Color::primary() : Color::textSecondary();
     fb_.drawTextCentered(Rect(0, 12, W, 20), cam_str, cam_color, header_font);
 
-    // Right: power profile, battery percentage, charging marker.
-    char bat_buf[16];
-    const int battery_percent = snap.device.battery_percent >= 0 && snap.device.battery_percent <= 100
-        ? snap.device.battery_percent
-        : 67;
+    // Right: effective workload profile and external-power fact.
+    char power_buf[24];
     const char* profile = snap.device.power_profile == PowerProfile::HOME ? "HOME" : "GO";
-    snprintf(bat_buf, sizeof(bat_buf), "%s %d%%%s",
-             profile,
-             battery_percent,
-             snap.device.battery_charging ? "+" : "");
-    fb_.drawText(W - 68, 12, bat_buf, Color::textSecondary(), header_font);
+    snprintf(power_buf, sizeof(power_buf), "%s %s", profile,
+             snap.device.external_power_state.c_str());
+    fb_.drawText(W - 92, 12, power_buf, Color::textSecondary(), header_font);
 
     // Bottom divider line
     fb_.fillRect(Rect(0, HEADER_H - 1, W, 1), Color::divider());

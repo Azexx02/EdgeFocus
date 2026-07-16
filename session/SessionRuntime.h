@@ -22,6 +22,7 @@ public:
 
     void addFeature(std::unique_ptr<ISessionFeature> feature, bool required);
     bool prepare(std::string* error = nullptr);
+    bool beginFormalSession(const FormalStartContext& context, std::string* error = nullptr);
     void enterPhase(Phase phase);
     void stop(StopReason reason) noexcept;
 
@@ -29,6 +30,7 @@ public:
     Phase phase() const noexcept { return phase_; }
     bool prepared() const noexcept { return prepared_; }
     bool stopped() const noexcept { return stopped_; }
+    bool formalStarted() const noexcept { return formal_started_; }
     std::vector<std::string> degradedFeatures() const;
 
 private:
@@ -36,6 +38,7 @@ private:
     std::vector<FeatureEntry> features_;
     Phase phase_{Phase::Idle};
     bool prepared_{};
+    bool formal_started_{};
     bool stopped_{};
 };
 

@@ -252,10 +252,17 @@ std::string BleBandController::lastWriteStatus() const {
     return last_write_status_;
 }
 
+void BleBandController::setWriteStatus(const std::string& status) {
+    std::lock_guard<std::mutex> lock(state_mutex_);
+    last_write_status_ = status;
+}
+
 void BleBandController::startConnection() {
     if (enabled_.load()) return;
+    if (conn_thread_.joinable() || writer_thread_.joinable()) stopConnection();
     stop_requested_ = false;
     enabled_ = true;
+    writer_thread_ = std::thread(&BleBandController::writerThreadFunc, this);
 #ifdef __linux__
     conn_thread_ = std::thread(&BleBandController::connectionThreadFunc, this);
 #endif
@@ -263,11 +270,17 @@ void BleBandController::startConnection() {
 }
 
 void BleBandController::stopConnection() {
-    if (!enabled_.load()) return;
+    if (!enabled_.load() && !conn_thread_.joinable() && !writer_thread_.joinable()) return;
     stop_requested_ = true;
     enabled_ = false;
     connected_ = false;
+    writer_cv_.notify_all();
     if (conn_thread_.joinable()) conn_thread_.join();
+    if (writer_thread_.joinable()) writer_thread_.join();
+    {
+        std::lock_guard<std::mutex> lock(state_mutex_);
+        pending_alert_.reset();
+    }
 #if defined(__linux__) && defined(EDGEFOCUS_WITH_BLUEZ)
     if (bluez_bus_) {
         g_object_unref(static_cast<GDBusConnection*>(bluez_bus_));
@@ -282,23 +295,88 @@ bool BleBandController::sendAlert(uint8_t level) {
     uint8_t pattern = patternForLevel(clamped_level);
     last_alert_pattern_ = pattern;
     last_alert_level_ = clamped_level;
+    bool accepted = true;
     {
         std::lock_guard<std::mutex> lock(state_mutex_);
         last_alert_frame_ = {{0x01, pattern, clamped_level}};
+        if (pending_alert_ && pending_alert_->level > clamped_level) {
+            accepted = false;
+            last_write_status_ = "kept higher-priority pending alert";
+        } else {
+            QueuedAlert alert;
+            alert.sequence = ++alert_sequence_;
+            alert.pattern = pattern;
+            alert.level = clamped_level;
+            alert.expires_at = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+            pending_alert_ = alert;
+            last_write_status_ = connected_.load() ? "queued" : "queued: waiting for connection";
+        }
     }
-
-    if (!connected_.load()) {
-        std::lock_guard<std::mutex> lock(state_mutex_);
-        last_write_status_ = "skipped: disconnected";
-        LOGI("BleBandController", "BLE alert queued diagnostically (level=%d, pattern=0x%02x, disconnected)",
-             clamped_level, pattern);
-        return false;
-    }
-
-    bool ok = writeAlertFrame(pattern, clamped_level);
+    if (accepted) writer_cv_.notify_one();
     LOGI("BleBandController", "BLE alert %s (level=%d, pattern=0x%02x)",
-         ok ? "sent" : "failed", clamped_level, pattern);
-    return ok;
+         accepted ? "queued" : "coalesced", clamped_level, pattern);
+    return accepted;
+}
+
+void BleBandController::writerThreadFunc() {
+    while (!stop_requested_.load()) {
+        QueuedAlert alert;
+        {
+            std::unique_lock<std::mutex> lock(state_mutex_);
+            writer_cv_.wait_for(lock, std::chrono::milliseconds(250), [&] {
+                return stop_requested_.load() || (pending_alert_.has_value() && connected_.load());
+            });
+            if (stop_requested_.load()) break;
+            if (!pending_alert_) continue;
+            const auto now = std::chrono::steady_clock::now();
+            if (now >= pending_alert_->expires_at) {
+                last_write_status_ = "expired: alert ttl elapsed";
+                pending_alert_.reset();
+                continue;
+            }
+            if (!connected_.load()) continue;
+            alert = *pending_alert_;
+            pending_alert_.reset();
+            last_write_status_ = "sending";
+        }
+
+        const bool ok = writeAlertFrame(alert.pattern, alert.level);
+        if (ok) {
+            sent_sequence_.store(alert.sequence);
+            LOGI("BleBandController", "BLE alert sent (level=%d, pattern=0x%02x)",
+                 alert.level, alert.pattern);
+            continue;
+        }
+
+        if (!connected_.load()) {
+            std::lock_guard<std::mutex> lock(state_mutex_);
+            if (!pending_alert_ || alert.level >= pending_alert_->level) {
+                pending_alert_ = alert;
+                last_write_status_ = "queued: reconnect retry";
+            }
+            continue;
+        }
+
+        ++alert.failure_count;
+        const auto now = std::chrono::steady_clock::now();
+        if (now >= alert.expires_at || alert.failure_count >= 3) {
+            setWriteStatus(now >= alert.expires_at
+                ? "expired: alert ttl elapsed"
+                : "failed: retry budget exhausted");
+            continue;
+        }
+
+        const auto retry_delay = alert.failure_count == 1
+            ? std::chrono::milliseconds(500)
+            : std::chrono::milliseconds(1500);
+        std::unique_lock<std::mutex> lock(state_mutex_);
+        writer_cv_.wait_for(lock, retry_delay, [&] { return stop_requested_.load(); });
+        if (stop_requested_.load()) break;
+        if (!pending_alert_ || alert.level >= pending_alert_->level) {
+            pending_alert_ = alert;
+            last_write_status_ = connected_.load() ? "queued: retry" : "queued: reconnect retry";
+        }
+    }
 }
 
 bool BleBandController::writeAlertFrame(uint8_t pattern, uint8_t level) {
@@ -316,6 +394,7 @@ bool BleBandController::writeAlertFrame(uint8_t pattern, uint8_t level) {
     BluezPaths paths = findBandPaths(bus, mac, name);
     if (paths.characteristic.empty()) {
         connected_ = false;
+        writer_cv_.notify_one();
         std::lock_guard<std::mutex> lock(state_mutex_);
         last_write_status_ = "failed: 0x2A56 characteristic not found";
         return false;
@@ -334,7 +413,7 @@ bool BleBandController::writeAlertFrame(uint8_t pattern, uint8_t level) {
     GError* error = nullptr;
     GVariant* result = g_dbus_connection_call_sync(bus, kBluez, paths.characteristic.c_str(),
                                                    kGattCharInterface, "WriteValue", params, nullptr,
-                                                   G_DBUS_CALL_FLAGS_NONE, 5000, nullptr, &error);
+                                                   G_DBUS_CALL_FLAGS_NONE, 1000, nullptr, &error);
     std::lock_guard<std::mutex> lock(state_mutex_);
     if (!result) {
         last_write_status_ = std::string("failed: ") + (error ? error->message : "unknown");
@@ -417,10 +496,11 @@ void BleBandController::connectionThreadFunc() {
         }
 
         connected_ = true;
+        writer_cv_.notify_one();
         LOGI("BleBandController", "Connected to BLE band target (%s), char=%s",
              paths.device.c_str(), paths.characteristic.c_str());
 
-        while (!stop_requested_.load()) {
+        while (!stop_requested_.load() && connected_.load()) {
             BluezPaths current = findBandPaths(bus, mac, target_name);
             if (current.device.empty() ||
                 !waitForServicesResolved(bus, current.device, stop_requested_)) {
@@ -430,6 +510,7 @@ void BleBandController::connectionThreadFunc() {
         }
 
         connected_ = false;
+        writer_cv_.notify_one();
         callDeviceMethod(bus, paths.device, "Disconnect", 5000);
         if (!stop_requested_.load()) {
             LOGW("BleBandController", "BLE band connection lost, reconnecting");

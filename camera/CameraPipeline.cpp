@@ -1,6 +1,7 @@
 #include "CameraPipeline.h"
 #include "app/AppContext.h"
 #include "camera/PreviewFrameStore.h"
+#include "session/SessionSnapshotPublisher.h"
 
 #include <algorithm>
 #include <chrono>
@@ -145,12 +146,14 @@ struct CameraPipeline::Impl {
 CameraPipeline::CameraPipeline(
     Queue& output_queue,
     SystemStateStore& store,
-    PreviewFrameStore* preview_store)
+    PreviewFrameStore* preview_store,
+    session::SessionSnapshotPublisher* session_snapshots)
     : Module("CameraPipeline"),
       impl_(new Impl()),
       output_queue_(output_queue),
       store_(store),
-      preview_store_(preview_store) {}
+      preview_store_(preview_store),
+      session_snapshots_(session_snapshots) {}
 
 CameraPipeline::~CameraPipeline() = default;
 
@@ -235,9 +238,13 @@ bool CameraPipeline::readFrame(CameraFrame* frame) {
 
 void CameraPipeline::runOnce(AppContext& ctx) {
     SystemSnapshot snap = store_.snapshot();
+    const auto runtime = session_snapshots_ ? session_snapshots_->read()
+                                            : session::SessionSnapshot{};
+    const bool runtime_active = session_snapshots_ ? runtime.runtime_active
+                                                   : snap.session.active;
 
     // --- IDLE: session not active ---
-    if (!snap.session.active) {
+    if (!runtime_active) {
         if (camera_opened_) {
             closeCamera();
             camera_opened_ = false;
@@ -271,7 +278,8 @@ void CameraPipeline::runOnce(AppContext& ctx) {
     // PAUSED keeps the camera open and publishes at approximately 1 FPS. The
     // inference feature consumes those frames only for presence/quick resume;
     // they never enter the formal distraction episode.
-    const bool paused = snap.session.paused;
+    const bool paused = session_snapshots_ ? runtime.phase == session::Phase::Paused
+                                           : snap.session.paused;
     const int64_t capture_now_ms = nowMs();
     if (paused && capture_now_ms - last_paused_capture_ms_ < 1000) {
         std::this_thread::sleep_for(std::chrono::milliseconds(100));

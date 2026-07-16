@@ -1,0 +1,13 @@
+[Unit]
+Description=EdgeFocus fan startup health gate
+Requires=edgefocus-m33-fan.service edgefocus-fan-bridge.service
+After=edgefocus-m33-fan.service edgefocus-fan-bridge.service
+OnFailure=edgefocus-fan-fallback.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/edgefocus-fan-transition healthcheck
+TimeoutStartSec=15
+
+[Install]
+WantedBy=multi-user.target

@@ -38,8 +38,17 @@ bool PhoneFactBuffer::publish(const session::PhoneFact& fact, std::string* error
         if (error) *error = "inactive phone fact must not include category";
         return false;
     }
-    if (latest_ && fact.sequence <= latest_->sequence) {
-        if (error) *error = "duplicate or out-of-order phone sequence";
+    if (latest_ && fact.sequence == latest_->sequence) {
+        const bool same = fact.session_id == latest_->session_id &&
+                          fact.source_timestamp_ms == latest_->source_timestamp_ms &&
+                          fact.active == latest_->active &&
+                          fact.category == latest_->category &&
+                          fact.fresh_for_ms == latest_->fresh_for_ms;
+        if (!same && error) *error = "phone sequence conflicts with different content";
+        return same;
+    }
+    if (latest_ && fact.sequence < latest_->sequence) {
+        if (error) *error = "out-of-order phone sequence";
         return false;
     }
     if (latest_ && fact.received_monotonic_ms < latest_->received_monotonic_ms) {

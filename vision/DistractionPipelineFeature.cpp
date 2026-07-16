@@ -5,6 +5,7 @@
 #include "distraction/stai_pose_runtime.hpp"
 #include "distraction/temporal.hpp"
 #include "distraction/vision.hpp"
+#include "vision/VisionCadencePolicy.h"
 
 #include <algorithm>
 #include <chrono>
@@ -120,18 +121,22 @@ DistractionPipelineFeature::DistractionPipelineFeature(
     session::SessionSnapshotPublisher& snapshots,
     SystemStateStore& compatibility_store,
     std::string pose_model_path,
-    std::string prone_model_path)
+    std::string prone_model_path,
+    bool publish_compatibility,
+    const power::WorkloadProfilePolicy* workload_policy)
     : frames_(frames),
       phone_facts_(phone_facts),
       snapshots_(snapshots),
       compatibility_store_(compatibility_store),
+      workload_policy_(workload_policy),
       pose_model_path_(pose_model_path.empty()
                            ? configuredPath("EDGEFOCUS_POSE_MODEL", "models/distraction/yolo11n_pose_256_float.nb")
                            : std::move(pose_model_path)),
       prone_model_path_(prone_model_path.empty()
                             ? configuredPath("EDGEFOCUS_PRONE_MODEL", "models/distraction/prone_mlp_v1.json")
                             : std::move(prone_model_path)),
-      impl_(std::make_unique<Impl>()) {}
+      impl_(std::make_unique<Impl>()),
+      publish_compatibility_(publish_compatibility) {}
 
 DistractionPipelineFeature::~DistractionPipelineFeature() {
     stop(session::StopReason::ProcessShutdown);
@@ -160,10 +165,9 @@ void DistractionPipelineFeature::setHealth(
 session::PrepareResult DistractionPipelineFeature::prepare(const session::SessionContext& context) {
     if (running_.load()) return session::PrepareResult::failure("pipeline already running");
     context_ = context;
-    phone_facts_.beginSession(context.session_id);
-    assessment_engine_.beginSession(context.session_id);
+    formal_started_ = false;
     phase_.store(session::Phase::Idle);
-    last_paused_inference_ms_ = 0;
+    last_scheduled_inference_ms_ = 0;
     last_inference_frame_ms_ = 0;
     inference_fps_ = 0.0;
 
@@ -174,8 +178,6 @@ session::PrepareResult DistractionPipelineFeature::prepare(const session::Sessio
             distraction::load_portable_mlp_json(prone_model_path_, true));
         impl_->previous_box.reset();
     } catch (const std::exception& error) {
-        phone_facts_.endSession();
-        assessment_engine_.endSession();
         setHealth(false, true, "prepare_failed", error.what());
         return session::PrepareResult::failure(error.what());
     }
@@ -185,12 +187,31 @@ session::PrepareResult DistractionPipelineFeature::prepare(const session::Sessio
     setHealth(true, false, "ready");
     return session::PrepareResult::success();
 #else
-    phone_facts_.endSession();
-    assessment_engine_.endSession();
     const std::string detail = "focus_app requires OpenCV and STAI MPU for the production pipeline";
     setHealth(false, true, "not_compiled", detail);
     return session::PrepareResult::failure(detail);
 #endif
+}
+
+session::PrepareResult DistractionPipelineFeature::beginFormalSession(
+    const session::FormalStartContext& /*formal_start*/) {
+    std::lock_guard<std::mutex> lock(processing_mutex_);
+    if (!running_.load()) return session::PrepareResult::failure("pipeline is not running");
+    if (formal_started_) return session::PrepareResult::success();
+    while (frames_.tryPop().has_value()) {
+    }
+    phone_facts_.beginSession(context_.session_id);
+    assessment_engine_.beginSession(context_.session_id);
+    assessment_engine_.resetContinuity();
+#if defined(EDGEFOCUS_WITH_OPENCV) && defined(EDGEFOCUS_WITH_STAI_MPU)
+    impl_->previous_box.reset();
+    if (impl_->prone) impl_->prone->reset();
+#endif
+    last_scheduled_inference_ms_ = 0;
+    last_inference_frame_ms_ = 0;
+    inference_fps_ = 0.0;
+    formal_started_ = true;
+    return session::PrepareResult::success();
 }
 
 void DistractionPipelineFeature::enterPhase(session::Phase phase) {
@@ -211,8 +232,11 @@ void DistractionPipelineFeature::stop(session::StopReason /*reason*/) noexcept {
     std::lock_guard<std::mutex> lock(processing_mutex_);
     while (frames_.tryPop().has_value()) {
     }
-    phone_facts_.endSession();
-    assessment_engine_.endSession();
+    if (formal_started_) {
+        phone_facts_.endSession();
+        assessment_engine_.endSession();
+        formal_started_ = false;
+    }
 #if defined(EDGEFOCUS_WITH_OPENCV) && defined(EDGEFOCUS_WITH_STAI_MPU)
     impl_->previous_box.reset();
     impl_->prone.reset();
@@ -227,6 +251,20 @@ session::FeatureHealth DistractionPipelineFeature::health() const {
     return health_;
 }
 
+void DistractionPipelineFeature::resetContinuity() {
+    std::lock_guard<std::mutex> lock(processing_mutex_);
+    assessment_engine_.resetContinuity();
+    while (frames_.tryPop().has_value()) {
+    }
+#if defined(EDGEFOCUS_WITH_OPENCV) && defined(EDGEFOCUS_WITH_STAI_MPU)
+    impl_->previous_box.reset();
+    if (impl_->prone) impl_->prone->reset();
+#endif
+    last_inference_frame_ms_ = 0;
+    last_scheduled_inference_ms_ = 0;
+    inference_fps_ = 0.0;
+}
+
 void DistractionPipelineFeature::workerLoop() {
     while (running_.load()) {
         auto frame = frames_.tryPop();
@@ -234,15 +272,24 @@ void DistractionPipelineFeature::workerLoop() {
             std::this_thread::sleep_for(std::chrono::milliseconds(8));
             continue;
         }
+        while (auto newer = frames_.tryPop()) {
+            frame = std::move(newer);
+        }
         const auto phase = phase_.load();
         if (phase != session::Phase::Precheck && phase != session::Phase::Focusing &&
             phase != session::Phase::Paused) {
             continue;
         }
-        if (phase == session::Phase::Paused) {
-            if (frame->timestamp_ms - last_paused_inference_ms_ < 1000) continue;
-            last_paused_inference_ms_ = frame->timestamp_ms;
+        const auto profile = workload_policy_
+                                 ? workload_policy_->snapshot().effective_profile
+                                 : power::WorkloadProfile::Home;
+        const auto interval_ms = vision::inferenceIntervalMs(phase, profile);
+        if (last_scheduled_inference_ms_ > 0 &&
+            frame->timestamp_ms >= last_scheduled_inference_ms_ &&
+            frame->timestamp_ms - last_scheduled_inference_ms_ < interval_ms) {
+            continue;
         }
+        last_scheduled_inference_ms_ = frame->timestamp_ms;
         try {
             std::lock_guard<std::mutex> lock(processing_mutex_);
             processFrame(*frame, phase);
@@ -264,6 +311,8 @@ void DistractionPipelineFeature::processFrame(const CameraFrame& frame, session:
     session::VisualSnapshot visual;
     visual.evidence_timestamp_ms = frame.timestamp_ms;
     visual.frame_id = static_cast<std::uint64_t>(std::max<std::int64_t>(0, frame.timestamp_ms));
+    visual.media_timestamp_ms = frame.media_timestamp_ms;
+    visual.source = frame.source;
     const auto inference_started_ms = monotonicMs();
 
     if (frame_quality(image) >= 0.20) {
@@ -291,6 +340,19 @@ void DistractionPipelineFeature::processFrame(const CameraFrame& frame, session:
             impl_->previous_box = subject->normalized_box;
             presence = EvidenceValue{frame.timestamp_ms, 1.0, true, 500};
             visual.presence = 1.0;
+            visual.subject_box = session::VisualBoxSnapshot{
+                subject->normalized_box.x1,
+                subject->normalized_box.y1,
+                subject->normalized_box.x2,
+                subject->normalized_box.y2};
+            visual.subject_confidence = subject->detection.confidence;
+            visual.keypoints.reserve(subject->detection.keypoints.size());
+            for (const auto& point : subject->detection.keypoints) {
+                visual.keypoints.push_back(session::VisualKeypointSnapshot{
+                    std::clamp(point.x / std::max(1, image.cols), 0.0, 1.0),
+                    std::clamp(point.y / std::max(1, image.rows), 0.0, 1.0),
+                    point.confidence});
+            }
             if (phase != session::Phase::Paused) {
                 const auto features = distraction::extract_keypoint_features58(
                     subject->detection, image.cols, image.rows, 0.62, 0.25);
@@ -317,19 +379,20 @@ void DistractionPipelineFeature::processFrame(const CameraFrame& frame, session:
     }
     last_inference_frame_ms_ = frame.timestamp_ms;
     visual.inference_fps = inference_fps_;
-    snapshots_.updateVisual(visual, frame.timestamp_ms);
-    const auto phone_snapshot = phone_facts_.snapshot(frame.timestamp_ms);
-    snapshots_.updatePhone(phone_snapshot, frame.timestamp_ms);
+    const auto phone_snapshot = formal_started_
+                                    ? phone_facts_.snapshot(frame.timestamp_ms)
+                                    : session::PhoneSnapshot{};
+    std::optional<session::DistractionAssessment> assessment;
 
-    if (phase == session::Phase::Focusing) {
-        const auto assessment = assessment_engine_.update(
+    if (phase == session::Phase::Focusing && formal_started_) {
+        assessment = assessment_engine_.update(
             frame.timestamp_ms,
             presence,
             prone,
             phone_facts_.observation(frame.timestamp_ms));
-        snapshots_.updateAssessment(assessment, frame.timestamp_ms);
-        publishCompatibility(assessment, phone_snapshot);
+        if (publish_compatibility_) publishCompatibility(*assessment, phone_snapshot);
     }
+    snapshots_.updateEvidence(visual, phone_snapshot, assessment, frame.timestamp_ms);
 #else
     (void)frame;
     (void)phase;

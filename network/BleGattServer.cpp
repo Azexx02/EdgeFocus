@@ -150,12 +150,15 @@ BleGattServer::BleGattServer(SystemStateStore& store, SQLiteStore& sqlite_store,
                              GimbalMonitor* gimbal_monitor,
                              session::SessionOrchestrator* session_orchestrator,
                              PhoneFactBuffer* phone_facts,
-                             session::SessionSnapshotPublisher* session_snapshots)
+                             session::SessionSnapshotPublisher* session_snapshots,
+                             power::WorkloadProfilePolicy* workload_policy,
+                             gimbal::GimbalPrecheckController* gimbal_precheck)
     : Module("BleGattServer")
     , store_(store)
     , sqlite_store_(sqlite_store)
     , app_commands_(store, sqlite_store, reminder_policy, mode_mgr, gimbal_monitor,
-                    session_orchestrator, phone_facts, session_snapshots) {}
+                    session_orchestrator, phone_facts, session_snapshots, &event_outbox_,
+                    workload_policy, gimbal_precheck) {}
 
 BleGattServer::~BleGattServer() = default;
 
@@ -169,9 +172,14 @@ bool BleGattServer::init(AppContext& /*ctx*/) {
     }
 
     store_.setPushCallback([this](const std::string& event_json) {
-        if (!phone_connected_.load()) return;
-        LOGI("BleGattServer", "Push event via callback: %s", event_json.c_str());
-        notifyBluez(event_json);
+        const auto queued = event_outbox_.enqueue(
+            event_json, store_.snapshot().session.session_id, monotonicMs());
+        if (queued.critical) {
+            if (queued.send_once && phone_connected_.load()) notifyBluez(queued.payload);
+            for (const auto& payload : event_outbox_.due(monotonicMs())) notifyBluez(payload);
+            return;
+        }
+        if (phone_connected_.load()) notifyBluez(event_json);
     });
     LOGI("BleGattServer", "BLE GATT Server initialized");
     return true;
@@ -185,10 +193,14 @@ void BleGattServer::runOnce(AppContext& /*ctx*/) {
     while (g_main_context_iteration(nullptr, FALSE)) {
     }
 #endif
+    for (const auto& payload : event_outbox_.due(monotonicMs())) {
+        notifyBluez(payload);
+    }
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 }
 
 void BleGattServer::shutdown(AppContext& /*ctx*/) {
+    event_outbox_.setSubscribed(false);
     shutdownBluez();
     LOGI("BleGattServer", "BLE GATT Server shutdown");
 }
@@ -620,14 +632,25 @@ bool BleGattServer::bluezRxNotifyingSnapshot() {
 }
 
 void BleGattServer::bluezSetNotifying(bool notifying) {
-    std::lock_guard<std::mutex> lock(bluez_mutex_);
-    rx_notifying_ = notifying;
-    phone_connected_.store(notifying);
+    {
+        std::lock_guard<std::mutex> lock(bluez_mutex_);
+        rx_notifying_ = notifying;
+        phone_connected_.store(notifying);
+    }
+    event_outbox_.setSubscribed(notifying);
     if (!notifying) {
         PhoneUsageSignal sig;
         sig.active = false;
         sig.timestamp_ms = monotonicMs();
         store_.setPhoneSignal(sig);
+        return;
+    }
+    auto response = nlohmann::json::parse(
+        app_commands_.handleCommand(R"({"cmd":"get_current_state","id":0})"),
+        nullptr,
+        false);
+    if (!response.is_discarded() && response.contains("data")) {
+        notifyBluez(nlohmann::json{{"cmd", "push_state"}, {"data", response["data"]}}.dump());
     }
 }
 
@@ -679,6 +702,7 @@ void BleGattServer::shutdownBluez() {
     bluez_next_retry_ms_ = 0;
     rx_notifying_ = false;
     phone_connected_.store(false);
+    event_outbox_.setSubscribed(false);
     PhoneUsageSignal sig;
     sig.active = false;
     sig.timestamp_ms = monotonicMs();

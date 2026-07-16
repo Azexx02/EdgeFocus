@@ -123,25 +123,23 @@ void ReminderPolicy::runOnce(AppContext& /*ctx*/) {
         std::vector<DeviceAction> board_actions;
         std::vector<std::string> phone_actions;
         std::vector<NotificationChannel> attempted_channels;
-        std::vector<NotificationChannel> phone_delivered_channels;
         board_actions.reserve(actions.size());
         phone_actions.reserve(actions.size());
         attempted_channels.reserve(actions.size());
-        phone_delivered_channels.reserve(actions.size());
         for (const auto& action : actions) {
             attempted_channels.push_back(action.channel);
             if (isPhoneRoute(snap.preferences, action.channel)) {
                 phone_actions.push_back(notificationChannelName(action.channel));
-                phone_delivered_channels.push_back(action.channel);
             } else {
                 board_actions.push_back(action);
             }
         }
         const int attempted_mask = notificationChannelsToMask(attempted_channels);
-        const int phone_delivered_mask = notificationChannelsToMask(phone_delivered_channels);
         DeviceStatus device_status = snap.device;
         device_status.last_attempted_channels_mask = attempted_mask;
-        device_status.last_delivered_channels_mask = phone_delivered_mask;
+        // Delivery is confirmed asynchronously: board channels update after the
+        // hardware action completes, and App-routed channels update on event_ack.
+        device_status.last_delivered_channels_mask = 0;
         store_.updateDeviceStatus(device_status);
         for (const auto& action : board_actions) {
             device_mgr_.issueAction(action);

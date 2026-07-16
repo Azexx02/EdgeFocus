@@ -1,4 +1,5 @@
 #include "AppCommandService.h"
+#include "network/AppEventOutbox.h"
 
 #include "app/Logger.h"
 #include "app/SessionController.h"
@@ -9,6 +10,7 @@
 #include "session/SessionOrchestrator.h"
 #include "session/SessionSnapshotPublisher.h"
 #include "device/GimbalMonitor.h"
+#include "device/GimbalPrecheckController.h"
 #include "policy/NotificationRouter.h"
 
 #include <algorithm>
@@ -87,7 +89,8 @@ json stableSessionSnapshotData(const session::SessionSnapshot& value) {
         {"session", {
             {"id", value.context.session_id},
             {"phase", session::phase_name(value.phase)},
-            {"active", value.runtime_active},
+            {"active", value.formal_active},
+            {"runtime_active", value.runtime_active},
             {"elapsed_ms", value.elapsed_ms},
             {"remaining_ms", value.remaining_ms}
         }},
@@ -111,6 +114,21 @@ json stableSessionSnapshotData(const session::SessionSnapshot& value) {
             {"level", level},
             {"reasons", value.assessment.reasons},
             {"would_remind", value.assessment.would_remind}
+        }},
+        {"gimbal", {
+            {"state", value.gimbal.state},
+            {"available", value.gimbal.health.available},
+            {"degraded", value.gimbal.health.degraded},
+            {"health_status", value.gimbal.health.status},
+            {"angle_x", value.gimbal.angle_x ? json(*value.gimbal.angle_x) : json(nullptr)},
+            {"angle_y", value.gimbal.angle_y ? json(*value.gimbal.angle_y) : json(nullptr)},
+            {"manual_lease", value.gimbal.manual_lease},
+            {"search_generation", value.gimbal.search_generation},
+            {"waypoint_index", value.gimbal.waypoint_index},
+            {"subject_found", value.gimbal.subject_found},
+            {"recoverable", value.gimbal.recoverable},
+            {"fault_latched_reason", value.gimbal.fault_latched_reason},
+            {"detail", value.gimbal.detail}
         }},
         {"degraded_features", value.degraded_features}
     };
@@ -140,16 +158,20 @@ bool gimbalReady(const SystemSnapshot& snap) {
            (snap.device.gimbal_online && snap.device.gimbal_safe);
 }
 
-int displayBatteryPercent(const DeviceStatus& device) {
-    return device.battery_percent >= 0 && device.battery_percent <= 100 ? device.battery_percent : 67;
-}
-
 const char* powerProfileWire(PowerProfile profile) {
     return profile == PowerProfile::HOME ? "home" : "go";
 }
 
-PowerProfile powerProfileFromCharging(bool charging) {
-    return charging ? PowerProfile::HOME : PowerProfile::GO;
+json externalPowerPresentWire(const DeviceStatus& device) {
+    return device.external_power_present
+        ? json(*device.external_power_present)
+        : json(nullptr);
+}
+
+json externalPowerSampleAgeWire(const DeviceStatus& device) {
+    return device.external_power_sample_age_ms >= 0
+        ? json(device.external_power_sample_age_ms)
+        : json(nullptr);
 }
 
 json sessionStateData(const SystemSnapshot& snap, bool gimbal_precheck_available = false) {
@@ -169,10 +191,12 @@ json sessionStateData(const SystemSnapshot& snap, bool gimbal_precheck_available
         {"phone_usage_state", phoneUsageStateToWire(snap.behavior_context.phone_usage_state)},
         {"phone_distraction_level", snap.behavior_context.phone_distraction_level},
         {"camera_ok", snap.device.camera_ok},
-        {"battery_percent", displayBatteryPercent(snap.device)},
-        {"battery_charging", snap.device.battery_charging},
-        {"power_source", snap.device.power_source},
+        {"external_power_state", snap.device.external_power_state},
+        {"external_power_present", externalPowerPresentWire(snap.device)},
+        {"external_power_sample_age_ms", externalPowerSampleAgeWire(snap.device)},
         {"power_profile", powerProfileWire(snap.device.power_profile)},
+        {"power_profile_source", snap.device.power_profile_source},
+        {"manual_override_active", snap.device.manual_override_active},
         {"frame_quality_ready", frameQualityReady(snap)},
         {"gimbal_ready", gimbalReady(snap)},
         {"elapsed_ms", snap.session.elapsed_ms},
@@ -327,12 +351,6 @@ NotificationMode notificationModeFromLegacySystemMode(int mode) {
         : NotificationMode::NORMAL;
 }
 
-PowerProfile powerProfileFromLegacySystemMode(int mode) {
-    return mode == static_cast<int>(SystemMode::HOME)
-        ? PowerProfile::HOME
-        : PowerProfile::GO;
-}
-
 SystemMode systemModeFromNotificationMode(NotificationMode mode) {
     return mode == NotificationMode::SILENT ? SystemMode::SILENT : SystemMode::NORMAL;
 }
@@ -342,13 +360,6 @@ NotificationMode parseNotificationModeOrDefault(const std::string& value,
     const auto normalized = lowerCopy(value);
     if (normalized == "normal") return NotificationMode::NORMAL;
     if (normalized == "silent") return NotificationMode::SILENT;
-    return fallback;
-}
-
-PowerProfile parsePowerProfileOrDefault(const std::string& value, PowerProfile fallback) {
-    const auto normalized = lowerCopy(value);
-    if (normalized == "home") return PowerProfile::HOME;
-    if (normalized == "go") return PowerProfile::GO;
     return fallback;
 }
 
@@ -461,6 +472,7 @@ Preferences sanitizePreferences(Preferences prefs) {
     prefs.away_timeout_min = clampMinutes(prefs.away_timeout_min, kMinAwayTimeoutMin, kMaxAwayTimeoutMin);
     prefs.default_focus_duration_min = clampFocusDurationMin(prefs.default_focus_duration_min);
     prefs.sound_volume = clampFloat(prefs.sound_volume, 0.0f, 1.0f);
+    prefs.gimbal_enabled = false;
     return prefs;
 }
 
@@ -561,7 +573,10 @@ AppCommandService::AppCommandService(SystemStateStore& store, SQLiteStore& sqlit
                                      GimbalMonitor* gimbal_monitor,
                                      session::SessionOrchestrator* session_orchestrator,
                                      PhoneFactBuffer* phone_facts,
-                                     session::SessionSnapshotPublisher* session_snapshots)
+                                     session::SessionSnapshotPublisher* session_snapshots,
+                                     AppEventOutbox* event_outbox,
+                                     power::WorkloadProfilePolicy* workload_policy,
+                                     gimbal::GimbalPrecheckController* gimbal_precheck)
     : store_(store)
     , sqlite_store_(sqlite_store)
     , reminder_policy_(reminder_policy)
@@ -569,7 +584,10 @@ AppCommandService::AppCommandService(SystemStateStore& store, SQLiteStore& sqlit
     , gimbal_monitor_(gimbal_monitor)
     , session_orchestrator_(session_orchestrator)
     , phone_facts_(phone_facts)
-    , session_snapshots_(session_snapshots) {}
+    , session_snapshots_(session_snapshots)
+    , event_outbox_(event_outbox)
+    , workload_policy_(workload_policy)
+    , gimbal_precheck_(gimbal_precheck) {}
 
 AppCommandService::~AppCommandService() {
     if (gimbal_task_thread_.joinable()) {
@@ -666,10 +684,6 @@ void AppCommandService::loadPreferences() {
         sqlite_store_.getPreference("notification_mode",
             notificationModeToString(notificationModeFromLegacySystemMode(prefs.system_mode))),
         notificationModeFromLegacySystemMode(prefs.system_mode));
-    prefs.power_profile = parsePowerProfileOrDefault(
-        sqlite_store_.getPreference("power_profile",
-            powerProfileToString(powerProfileFromLegacySystemMode(prefs.system_mode))),
-        powerProfileFromLegacySystemMode(prefs.system_mode));
     prefs.system_mode = static_cast<int>(systemModeFromNotificationMode(prefs.notification_mode));
     prefs.away_timeout_min = parseIntOrDefault(sqlite_store_.getPreference("away_timeout_min", std::to_string(prefs.away_timeout_min)),
                                                prefs.away_timeout_min);
@@ -694,9 +708,9 @@ void AppCommandService::loadPreferences() {
     // persisted legacy "board" routes and expose App-owned output instead.
     prefs.screen_output_route = "phone";
     prefs.sound_output_route = "phone";
-    prefs.gimbal_enabled = parseIntOrDefault(
-        sqlite_store_.getPreference("gimbal_enabled", prefs.gimbal_enabled ? "1" : "0"),
-        prefs.gimbal_enabled ? 1 : 0) != 0;
+    // Gimbal hardware is intentionally disabled for this release. Persisted
+    // legacy preferences must not reactivate the monitor or serial control.
+    prefs.gimbal_enabled = false;
     prefs = sanitizePreferences(prefs);
     if (const char* disabled = std::getenv("EDGEFOCUS_DISABLE_LCD")) {
         const auto value = lowerCopy(disabled);
@@ -723,7 +737,6 @@ void AppCommandService::loadPreferences() {
     DeviceStatus device = store_.snapshot().device;
     device.system_mode = systemModeFromNotificationMode(prefs.notification_mode);
     device.notification_mode = prefs.notification_mode;
-    device.power_profile = powerProfileFromCharging(device.battery_charging);
     store_.updateDeviceStatus(device);
 
     SessionInfo session = store_.snapshot().session;
@@ -779,6 +792,15 @@ std::string AppCommandService::handleCommand(const std::string& json_cmd) {
         if (cmd == "get_gimbal_status")      return handleGetGimbalStatus(req_id);
         if (cmd == "gimbal_control")         return handleGimbalControl(data, req_id);
         if (cmd == "get_camera_preview_image") return handleGetCameraPreviewImage(req_id);
+        if (cmd == "client_hello")             return handleClientHello(data, req_id);
+        if (cmd == "event_ack")                return handleEventAck(data, req_id);
+        if (cmd == "set_power_profile")         return handleSetPowerProfile(data, req_id);
+        if (cmd == "gimbal_nudge" || cmd == "gimbal_center" ||
+            cmd == "gimbal_stop" || cmd == "gimbal_realign" ||
+            cmd == "precheck_skip_auto_adjust" ||
+            cmd == "precheck_confirm_position") {
+            return handleGimbalPrecheckCommand(cmd, data, req_id);
+        }
     } catch (const json::exception& e) {
         return makeError(req_id, std::string("Invalid command data: ") + e.what());
     } catch (const std::exception& e) {
@@ -790,19 +812,15 @@ std::string AppCommandService::handleCommand(const std::string& json_cmd) {
 
 std::string AppCommandService::handleGetDeviceStatus(int req_id) {
     auto snap = store_.snapshot();
-    json battery_percent = displayBatteryPercent(snap.device);
-    json battery_voltage_mv = snap.device.battery_voltage_mv >= 0
-        ? json(snap.device.battery_voltage_mv)
-        : json(nullptr);
     json data = {
-        {"battery_available", snap.device.battery_percent >= 0 || snap.device.battery_voltage_mv >= 0},
-        {"battery_percent", battery_percent},
-        {"battery_voltage_mv", battery_voltage_mv},
-        {"battery_charging", snap.device.battery_charging},
-        {"power_source", snap.device.power_source},
+        {"external_power_state", snap.device.external_power_state},
+        {"external_power_present", externalPowerPresentWire(snap.device)},
+        {"external_power_sample_age_ms", externalPowerSampleAgeWire(snap.device)},
         {"system_mode", static_cast<int>(snap.device.system_mode)},
         {"notification_mode", notificationModeToString(snap.device.notification_mode)},
         {"power_profile", powerProfileToString(snap.device.power_profile)},
+        {"power_profile_source", snap.device.power_profile_source},
+        {"manual_override_active", snap.device.manual_override_active},
         {"camera_ok", snap.device.camera_ok},
         {"bracelet_connected", snap.device.bracelet_connected},
         {"board_screen_available", snap.device.board_screen_available},
@@ -816,6 +834,99 @@ std::string AppCommandService::handleGetDeviceStatus(int req_id) {
     return makeResponse(req_id, data);
 }
 
+void AppCommandService::applyManualPowerProfile(power::WorkloadProfile profile) {
+    if (!workload_policy_) {
+        throw std::runtime_error("power profile service unavailable");
+    }
+    workload_policy_->setManualOverride(profile);
+    const auto power = workload_policy_->snapshot();
+    auto device = store_.snapshot().device;
+    device.power_profile = power.effective_profile == power::WorkloadProfile::Home
+        ? PowerProfile::HOME
+        : PowerProfile::GO;
+    device.power_profile_source = power::profileSourceName(power.source);
+    device.manual_override_active = power.manual_override_active;
+    device.power_epoch = power.power_epoch;
+    store_.updateDeviceStatus(device);
+}
+
+std::string AppCommandService::handleSetPowerProfile(const json& data, int req_id) {
+    if (!data.contains("power_profile") || !data["power_profile"].is_string()) {
+        throw std::invalid_argument("power_profile must be home or go");
+    }
+    const auto requested = lowerCopy(data["power_profile"].get<std::string>());
+    if (requested == "home") {
+        applyManualPowerProfile(power::WorkloadProfile::Home);
+    } else if (requested == "go") {
+        applyManualPowerProfile(power::WorkloadProfile::Go);
+    } else {
+        throw std::invalid_argument("power_profile must be home or go");
+    }
+    const auto device = store_.snapshot().device;
+    return makeResponse(req_id, {
+        {"power_profile", powerProfileToString(device.power_profile)},
+        {"power_profile_source", device.power_profile_source},
+        {"manual_override_active", device.manual_override_active},
+        {"power_epoch", device.power_epoch}
+    });
+}
+
+std::string AppCommandService::handleGimbalPrecheckCommand(
+    const std::string& command, const json& data, int req_id) {
+    if (!gimbal_precheck_ || !session_orchestrator_) {
+        return makeError(req_id, "Gimbal PRECHECK feature disabled");
+    }
+    if (session_orchestrator_->phase() != session::Phase::Precheck) {
+        return makeError(req_id, "Gimbal control is only available during PRECHECK");
+    }
+    if (!data.contains("session_id") || !data["session_id"].is_string()) {
+        return makeError(req_id, "session_id is required");
+    }
+    if (!data.contains("sequence") || !data["sequence"].is_number_unsigned()) {
+        return makeError(req_id, "sequence must be a positive unsigned integer");
+    }
+    const auto session_id = data["session_id"].get<std::string>();
+    const auto sequence = data["sequence"].get<std::uint64_t>();
+    const auto now_ms = monotonicMs();
+    gimbal::CommandResult result;
+    if (command == "precheck_skip_auto_adjust") {
+        result = gimbal_precheck_->skipAuto(session_id, sequence, now_ms);
+    } else if (command == "gimbal_nudge") {
+        if (!data.contains("direction") || !data["direction"].is_string()) {
+            return makeError(req_id, "direction must be UP, DOWN, LEFT or RIGHT");
+        }
+        const auto direction = lowerCopy(data["direction"].get<std::string>());
+        gimbal::NudgeDirection parsed;
+        if (direction == "left") parsed = gimbal::NudgeDirection::Left;
+        else if (direction == "right") parsed = gimbal::NudgeDirection::Right;
+        else if (direction == "up") parsed = gimbal::NudgeDirection::Up;
+        else if (direction == "down") parsed = gimbal::NudgeDirection::Down;
+        else return makeError(req_id, "direction must be UP, DOWN, LEFT or RIGHT");
+        result = gimbal_precheck_->nudge(session_id, sequence, parsed, now_ms);
+    } else if (command == "gimbal_center") {
+        result = gimbal_precheck_->center(session_id, sequence, now_ms);
+    } else if (command == "gimbal_stop") {
+        result = gimbal_precheck_->stopMotion(session_id, sequence, now_ms);
+    } else if (command == "gimbal_realign") {
+        result = gimbal_precheck_->realign(session_id, sequence, now_ms);
+    } else {
+        result = gimbal_precheck_->confirmPosition(session_id, sequence, now_ms);
+    }
+    if (!result.success) {
+        return makeError(req_id, result.error.empty() ? "Gimbal command failed" : result.error);
+    }
+    const auto status = gimbal_precheck_->snapshot();
+    return makeResponse(req_id, {
+        {"accepted", true},
+        {"state", gimbal::precheckStateName(status.state)},
+        {"manual_lease", status.manual_lease},
+        {"search_generation", status.generation},
+        {"waypoint_index", status.waypoint_index},
+        {"subject_found", status.subject_found},
+        {"detail", status.detail}
+    });
+}
+
 std::string AppCommandService::handleGetCurrentState(int req_id) {
     auto snap = store_.snapshot();
     const bool gimbal_precheck_available = gimbalPrecheckAvailable(snap, gimbal_monitor_);
@@ -824,6 +935,9 @@ std::string AppCommandService::handleGetCurrentState(int req_id) {
     data["precheck_guidance"] = precheckGuidanceData(snap);
     if (session_snapshots_) {
         data["runtime_snapshot"] = stableSessionSnapshotData(session_snapshots_->read());
+    }
+    if (event_outbox_) {
+        data["event_delivery"] = event_outbox_->snapshot(monotonicMs());
     }
     return makeResponse(req_id, data);
 }
@@ -959,10 +1073,12 @@ std::string AppCommandService::handleSessionControlV2(const json& data, int req_
     if (action == "start") {
         const bool already_active = session_orchestrator_->active();
         const int target_min = targetDurationMinutesFromPayload(data, before.preferences);
-        session::SourceMode source_mode = session::SourceMode::LiveCamera;
         const std::string source = lowerCopy(data.value("source_mode", "live_camera"));
-        if (source == "recorded_input") source_mode = session::SourceMode::RecordedInput;
-        result = session_orchestrator_->start({minutesToMs(target_min), source_mode});
+        if (source != "live_camera") {
+            return makeError(req_id, "App sessions only support live_camera");
+        }
+        result = session_orchestrator_->start(
+            {minutesToMs(target_min), session::SourceMode::LiveCamera});
         auto after = store_.snapshot();
         json response = sessionStateData(after, gimbalPrecheckAvailable(after, gimbal_monitor_));
         response["success"] = result.success;
@@ -981,15 +1097,30 @@ std::string AppCommandService::handleSessionControlV2(const json& data, int req_
     } else if (action == "resume") {
         result = session_orchestrator_->resume();
     } else if (action == "end") {
-        const auto target_duration_ms = before.session.target_duration_ms;
-        result = session_orchestrator_->end(session::StopReason::Completed);
+        const auto runtime_before = session_snapshots_
+                                        ? session_snapshots_->read()
+                                        : session::SessionSnapshot{};
+        const bool was_formal = session_snapshots_ ? runtime_before.formal_active
+                                                   : before.session.active;
+        const auto target_duration_ms = session_snapshots_
+                                            ? runtime_before.context.target_duration_ms
+                                            : before.session.target_duration_ms;
+        result = session_orchestrator_->end(
+            was_formal ? session::StopReason::Completed : session::StopReason::Cancelled);
         const auto ended_snapshot = store_.snapshot();
         const auto& report = ended_snapshot.last_report;
-        if (result.success && !report.session_id.empty()) {
+        const bool report_matches = result.success && was_formal &&
+            !report.session_id.empty() && result.context &&
+            report.session_id == result.context->session_id;
+        if (report_matches) {
             const json push_data = sessionReportData(report, target_duration_ms, "user_ended");
             store_.pushEvent(makePush("push_session_end", push_data));
         }
-        json response = sessionReportData(report, target_duration_ms, "user_ended");
+        json response = report_matches
+                            ? sessionReportData(report, target_duration_ms, "user_ended")
+                            : json{{"formal_session_started", was_formal},
+                                   {"cancelled_precheck", result.success && !was_formal},
+                                   {"report_available", false}};
         response["success"] = result.success;
         if (session_snapshots_) {
             response["runtime_snapshot"] = stableSessionSnapshotData(session_snapshots_->read());
@@ -1015,6 +1146,9 @@ std::string AppCommandService::handleSessionControlV2(const json& data, int req_
 }
 
 std::string AppCommandService::handleUpdatePreferences(const json& data, int req_id) {
+    if (data.contains("power_profile")) {
+        throw std::invalid_argument("use set_power_profile to change Home/Go mode");
+    }
     Preferences prefs = store_.snapshot().preferences;
 
     if (data.contains("system_mode")) {
@@ -1023,7 +1157,6 @@ std::string AppCommandService::handleUpdatePreferences(const json& data, int req
             throw std::invalid_argument("invalid system_mode");
         }
         prefs.notification_mode = notificationModeFromLegacySystemMode(mode);
-        prefs.power_profile = powerProfileFromLegacySystemMode(mode);
     }
     if (data.contains("notification_mode")) {
         if (!data["notification_mode"].is_string()) {
@@ -1034,20 +1167,11 @@ std::string AppCommandService::handleUpdatePreferences(const json& data, int req
             prefs.notification_mode);
         prefs.notification_mode = parsed;
     }
-    if (data.contains("power_profile")) {
-        if (!data["power_profile"].is_string()) {
-            throw std::invalid_argument("power_profile must be string");
-        }
-        prefs.power_profile = parsePowerProfileOrDefault(
-            data["power_profile"].get<std::string>(),
-            prefs.power_profile);
-    }
     prefs.system_mode = static_cast<int>(systemModeFromNotificationMode(prefs.notification_mode));
     mode_mgr_.setMode(systemModeFromNotificationMode(prefs.notification_mode));
     DeviceStatus ds = store_.snapshot().device;
     ds.system_mode = systemModeFromNotificationMode(prefs.notification_mode);
     ds.notification_mode = prefs.notification_mode;
-    ds.power_profile = powerProfileFromCharging(ds.battery_charging);
     store_.updateDeviceStatus(ds);
     if (data.contains("away_timeout_min")) {
         prefs.away_timeout_min = clampMinutes(
@@ -1080,16 +1204,16 @@ std::string AppCommandService::handleUpdatePreferences(const json& data, int req
     // re-enabled by an old App or stale preference record.
     prefs.screen_output_route = "phone";
     prefs.sound_output_route = "phone";
-    if (data.contains("gimbal_enabled")) {
-        prefs.gimbal_enabled = data["gimbal_enabled"].get<bool>();
+    if (data.contains("gimbal_enabled") && data["gimbal_enabled"].get<bool>()) {
+        LOGW("AppCommandService", "Ignoring gimbal_enabled=true while gimbal is disabled");
     }
+    prefs.gimbal_enabled = false;
     prefs = sanitizePreferences(prefs);
 
     store_.updatePreferences(prefs);
 
     sqlite_store_.savePreference("system_mode", std::to_string(prefs.system_mode));
     sqlite_store_.savePreference("notification_mode", notificationModeToString(prefs.notification_mode));
-    sqlite_store_.savePreference("power_profile", powerProfileToString(prefs.power_profile));
     sqlite_store_.savePreference("away_timeout_min", std::to_string(prefs.away_timeout_min));
     sqlite_store_.savePreference("default_focus_duration_min", std::to_string(prefs.default_focus_duration_min));
     sqlite_store_.savePreference("sound_volume", std::to_string(prefs.sound_volume));
@@ -1102,7 +1226,6 @@ std::string AppCommandService::handleUpdatePreferences(const json& data, int req
     json resp = {
         {"system_mode", prefs.system_mode},
         {"notification_mode", notificationModeToString(prefs.notification_mode)},
-        {"power_profile", powerProfileToString(prefs.power_profile)},
         {"away_timeout_min", prefs.away_timeout_min},
         {"default_focus_duration_min", prefs.default_focus_duration_min},
         {"sound_volume", prefs.sound_volume},
@@ -1125,20 +1248,83 @@ std::string AppCommandService::handleReminderAck(const json& /*data*/, int req_i
     return makeResponse(req_id, resp);
 }
 
+std::string AppCommandService::handleClientHello(const json& data, int req_id) {
+    if (!event_outbox_) return makeError(req_id, "reliable event transport unavailable");
+    std::vector<std::string> capabilities;
+    if (data.contains("capabilities")) {
+        if (!data["capabilities"].is_array()) {
+            return makeError(req_id, "capabilities must be an array");
+        }
+        for (const auto& item : data["capabilities"]) {
+            if (item.is_string()) capabilities.push_back(item.get<std::string>());
+        }
+    }
+    const bool reliable = event_outbox_->negotiate(capabilities);
+    json server_capabilities = json::array({
+        "event_ack_v1", "event_dedupe_v1", "phone_heartbeat_v1",
+        "external_power_v1", "power_profile_override_v1"});
+    if (gimbal_precheck_) server_capabilities.push_back("gimbal_precheck_v1");
+    return makeResponse(req_id, {{"schema_version", "2.1"},
+                                 {"reliable_push", reliable},
+                                 {"phone_fresh_for_ms", 5000},
+                                 {"server_capabilities", server_capabilities}});
+}
+
+std::string AppCommandService::handleEventAck(const json& data, int req_id) {
+    if (!event_outbox_) return makeError(req_id, "reliable event transport unavailable");
+    const std::string event_id = data.value("event_id", "");
+    const std::string session_id = data.value("session_id", "");
+    const std::string stage = lowerCopy(data.value("stage", ""));
+    if (event_id.empty() || session_id.empty() || stage.empty()) {
+        return makeError(req_id, "event_id, session_id and stage are required");
+    }
+    const auto now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    const auto result = event_outbox_->acknowledge(event_id, session_id, stage, now_ms);
+    if ((result.status == "accepted" || result.status == "duplicate") &&
+        result.delivered_channels_mask != 0) {
+        auto snap = store_.snapshot();
+        auto device = snap.device;
+        device.last_delivered_channels_mask |= result.delivered_channels_mask;
+        store_.updateDeviceStatus(device);
+    }
+    if (result.status == "accepted" && stage == "user_ack") {
+        reminder_policy_.onUserAck(now_ms);
+    }
+    return makeResponse(req_id, {{"ack_status", result.status},
+                                 {"event_id", result.event_id},
+                                 {"stage", result.stage}});
+}
+
 std::string AppCommandService::handlePhoneSync(const json& data, int req_id) {
     auto parsed = parsePhoneSyncPayload(data);
 
     auto snap = store_.snapshot();
 
     if (phone_facts_) {
+        const auto runtime = session_snapshots_
+                                 ? session_snapshots_->read()
+                                 : session::SessionSnapshot{};
+        if (session_snapshots_ && runtime.runtime_active && !runtime.formal_active) {
+            return makeResponse(req_id, {
+                {"accepted", false},
+                {"error_code", "formal_session_not_started"},
+                {"message", "phone facts are accepted after PRECHECK confirmation"},
+                {"session_id", runtime.context.session_id}
+            });
+        }
         session::PhoneFact fact;
-        fact.session_id = snap.session.session_id;
+        const std::string active_session_id =
+            session_snapshots_ && runtime.formal_active
+                ? runtime.context.session_id
+                : snap.session.session_id;
+        fact.session_id = data.value("session_id", active_session_id);
         fact.sequence = data.value("sequence", ++phone_sequence_);
         fact.received_monotonic_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count();
         fact.source_timestamp_ms = data.value("timestamp_ms", fact.received_monotonic_ms);
         fact.active = parsed.active;
-        fact.fresh_for_ms = std::max<int64_t>(100, data.value("fresh_for_ms", 1000));
+        fact.fresh_for_ms = 5000;
         if (parsed.active) {
             if (parsed.usage_state == PhoneUsageState::LEARNING) {
                 fact.category = session::PhoneCategory::Learning;
@@ -1153,6 +1339,8 @@ std::string AppCommandService::handlePhoneSync(const json& data, int req_id) {
         json response = {
             {"accepted", accepted},
             {"sequence", fact.sequence},
+            {"last_accepted_sequence", phone_facts_->snapshot(fact.received_monotonic_ms).sequence},
+            {"fresh_for_ms", fact.fresh_for_ms},
             {"category_source", "app_raw_fact"},
             {"distraction_level_ignored", data.contains("distraction_level")}
         };
@@ -1272,11 +1460,12 @@ std::string AppCommandService::handleGetConsoleData(int req_id) {
             {"session_phase", sessionPhaseToString(deriveSessionPhase(snap.session))}
         }},
         {"device", {
-            {"battery_percent", displayBatteryPercent(snap.device)},
-            {"battery_voltage_mv", snap.device.battery_voltage_mv},
-            {"battery_charging", snap.device.battery_charging},
-            {"power_source", snap.device.power_source},
+            {"external_power_state", snap.device.external_power_state},
+            {"external_power_present", externalPowerPresentWire(snap.device)},
+            {"external_power_sample_age_ms", externalPowerSampleAgeWire(snap.device)},
             {"power_profile", powerProfileWire(snap.device.power_profile)},
+            {"power_profile_source", snap.device.power_profile_source},
+            {"manual_override_active", snap.device.manual_override_active},
             {"system_mode", static_cast<int>(snap.device.system_mode)},
             {"camera_ok", snap.device.camera_ok},
             {"bracelet_connected", snap.device.bracelet_connected},
@@ -1311,6 +1500,9 @@ std::string AppCommandService::handleGetConsoleData(int req_id) {
             {"phone_distraction_count", snap.today.phone_distraction_count}
         }}
     };
+    if (event_outbox_) {
+        data["event_delivery"] = event_outbox_->snapshot(monotonicMs());
+    }
     return makeResponse(req_id, data);
 }
 
@@ -1370,7 +1562,6 @@ std::string AppCommandService::handleGetPreferences(int req_id) {
     json resp = {
         {"system_mode", snap.preferences.system_mode},
         {"notification_mode", notificationModeToString(snap.preferences.notification_mode)},
-        {"power_profile", powerProfileToString(snap.preferences.power_profile)},
         {"away_timeout_min", snap.preferences.away_timeout_min},
         {"default_focus_duration_min", snap.preferences.default_focus_duration_min},
         {"sound_volume", snap.preferences.sound_volume},

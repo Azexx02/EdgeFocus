@@ -15,6 +15,7 @@ enum class PixelFormat : uint8_t {
 
 struct CameraFrame {
     int64_t timestamp_ms = 0;
+    int64_t media_timestamp_ms = 0;
     int width = 0;
     int height = 0;
     int channels = 0;

@@ -26,6 +26,9 @@ public:
     virtual ~ISessionFeature() = default;
     virtual const char* name() const noexcept = 0;
     virtual PrepareResult prepare(const SessionContext& context) = 0;
+    virtual PrepareResult beginFormalSession(const FormalStartContext& /*context*/) {
+        return PrepareResult::success();
+    }
     virtual void enterPhase(Phase phase) = 0;
     virtual void stop(StopReason reason) noexcept = 0;
     virtual FeatureHealth health() const = 0;

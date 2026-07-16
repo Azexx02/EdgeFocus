@@ -19,19 +19,6 @@ int maskForChannel(NotificationChannel channel) {
     }
 }
 
-void normalizePowerStatus(DeviceStatus& status) {
-    if (status.battery_percent < 0 || status.battery_percent > 100) {
-        status.battery_percent = 67;
-    }
-    status.power_profile = status.battery_charging ? PowerProfile::HOME : PowerProfile::GO;
-    if (status.battery_charging &&
-        (status.power_source.empty() || status.power_source == "unknown" || status.power_source == "battery")) {
-        status.power_source = "external";
-    } else if (!status.battery_charging &&
-               (status.power_source.empty() || status.power_source == "unknown" || status.power_source == "external")) {
-        status.power_source = "battery";
-    }
-}
 } // namespace
 
 DeviceManager::DeviceManager(SystemStateStore& store) : Module("DeviceManager"), store_(store) {}
@@ -44,7 +31,6 @@ bool DeviceManager::init(AppContext& /*ctx*/) {
                                     ScreenController::isAvailable();
     status.board_sound_available = snap.preferences.sound_output_route != "phone" &&
                                    SoundController::isAvailable();
-    normalizePowerStatus(status);
     store_.updateDeviceStatus(status);
     return true;
 }
@@ -77,6 +63,18 @@ void DeviceManager::runOnce(AppContext& /*ctx*/) {
         did_work = true;
     }
 
+    const auto band_sent_sequence = ble_ctrl_.sentSequence();
+    if (band_sent_sequence > last_band_sent_sequence_) {
+        last_band_sent_sequence_ = band_sent_sequence;
+        auto delivered = store_.snapshot().device;
+        delivered.last_delivered_channels_mask |= kNotificationChannelBandMask;
+        delivered.band_last_alert_level = ble_ctrl_.lastAlertLevel();
+        delivered.band_last_alert_pattern = ble_ctrl_.lastAlertPattern();
+        delivered.band_write_attempt_count = ble_ctrl_.writeAttemptCount();
+        delivered.band_last_write_status = ble_ctrl_.lastWriteStatus();
+        store_.updateDeviceStatus(delivered);
+    }
+
     // Update connection status only (never overwrite ble_enabled)
     static auto last_status_update = std::chrono::steady_clock::now();
     if (now - last_status_update > std::chrono::seconds(3)) {
@@ -92,21 +90,12 @@ void DeviceManager::runOnce(AppContext& /*ctx*/) {
                                         ScreenController::isAvailable();
         status.board_sound_available = snap.preferences.sound_output_route != "phone" &&
                                        SoundController::isAvailable();
-        normalizePowerStatus(status);
         store_.updateDeviceStatus(status);
     }
 
-    auto status = store_.snapshot().device;
-    auto normalized = status;
-    normalizePowerStatus(normalized);
-    if (normalized.battery_percent != status.battery_percent ||
-        normalized.battery_charging != status.battery_charging ||
-        normalized.power_source != status.power_source ||
-        normalized.power_profile != status.power_profile) {
-        store_.updateDeviceStatus(normalized);
-        status = normalized;
-    }
-    const int idle_ms = (!did_work && status.power_profile == PowerProfile::GO) ? 150 : 50;
+    // Communication and reminder delivery are safety-adjacent and are not
+    // down-sampled by Home/Go. Only the vision worker changes cadence.
+    const int idle_ms = did_work ? 10 : 50;
     std::this_thread::sleep_for(std::chrono::milliseconds(idle_ms));
 }
 
@@ -141,9 +130,7 @@ void DeviceManager::executeAction(const DeviceAction& action) {
         uint8_t alert_level = static_cast<uint8_t>(action.level);
         if (alert_level < 1) alert_level = 1;
         if (alert_level > 3) alert_level = 3;
-        if (ble_ctrl_.sendAlert(alert_level)) {
-            status.last_delivered_channels_mask |= channel_mask;
-        }
+        ble_ctrl_.sendAlert(alert_level);
     } else if (action.channel == NotificationChannel::SOUND) {
         if (store_.snapshot().preferences.sound_output_route != "phone") {
             sound_ctrl_.playReminderSound(store_.snapshot().preferences.sound_volume);
@@ -167,7 +154,6 @@ void DeviceManager::executeAction(const DeviceAction& action) {
     status.band_last_alert_pattern = ble_ctrl_.lastAlertPattern();
     status.band_write_attempt_count = ble_ctrl_.writeAttemptCount();
     status.band_last_write_status = ble_ctrl_.lastWriteStatus();
-    normalizePowerStatus(status);
     store_.updateDeviceStatus(status);
 }
 

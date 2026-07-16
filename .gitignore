@@ -1,8 +1,16 @@
 build*/
 Testing/
 *.db
+__pycache__/
+*.py[cod]
+output/
 
 # Local code workspace; do not track generated builds, deployment scratch, or notes.
 _workspace/
 .superpowers/
 .playwright-cli/
+
+# Exhibition media is deployed from the local workspace, not committed to Git.
+assets/demo/*.mp4
+assets/demo/**/*.mp4
+assets/demo/no_npu/prelog.trace.json

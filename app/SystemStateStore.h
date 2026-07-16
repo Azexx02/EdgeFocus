@@ -4,6 +4,7 @@
 #include <string>
 #include <functional>
 #include <cstdint>
+#include <optional>
 #include "behavior/FocusState.h"
 #include "behavior/EventDetector.h"
 #include "policy/InterventionCommand.h"
@@ -62,10 +63,12 @@ struct DeviceStatus {
     bool        camera_ok = false;
     bool        bracelet_connected = false;
     bool        ble_enabled = false;
-    int         battery_percent = 67;
-    int         battery_voltage_mv = -1;
-    bool        battery_charging = false;
-    std::string power_source = "battery";
+    std::string external_power_state = "UNKNOWN";
+    std::optional<bool> external_power_present;
+    int64_t     external_power_sample_age_ms = -1;
+    std::string power_profile_source = "auto_failsafe";
+    bool        manual_override_active = false;
+    uint64_t    power_epoch = 0;
     int         band_last_alert_level = 0;
     int         band_last_alert_pattern = 0;
     int         band_write_attempt_count = 0;
@@ -133,7 +136,6 @@ struct DemoOverride {
 struct Preferences {
     int         system_mode = 0;
     NotificationMode notification_mode = NotificationMode::NORMAL;
-    PowerProfile power_profile = PowerProfile::GO;
     int         away_timeout_min = 15;
     int         default_focus_duration_min = 25;
     float       sound_volume = 0.7f;
@@ -147,7 +149,7 @@ struct Preferences {
     // fields remain on the wire during App migration, but are fixed to phone.
     std::string screen_output_route = "phone";
     std::string sound_output_route = "phone";
-    bool        gimbal_enabled = true;
+    bool        gimbal_enabled = false;
 };
 
 struct SystemSnapshot {

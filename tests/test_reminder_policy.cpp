@@ -274,8 +274,9 @@ void test_phone_output_routes_do_not_execute_board_screen_or_sound() {
     auto snap = store.snapshot();
     assert(snap.device.last_attempted_channels_mask ==
            (kNotificationChannelScreenMask | kNotificationChannelSoundMask));
-    assert(snap.device.last_delivered_channels_mask ==
-           (kNotificationChannelScreenMask | kNotificationChannelSoundMask));
+    // App-owned screen/sound are only delivered after the phone ACKs the
+    // reliable event. Queuing the push is an attempt, not proof of delivery.
+    assert(snap.device.last_delivered_channels_mask == 0);
     assert(push.find("\"phone_actions\":[\"SCREEN\",\"SOUND\"]") != std::string::npos);
     assert(push.find("\"sound_volume\":0.42") != std::string::npos);
     assert(push.find("\"focus_state\"") == std::string::npos);

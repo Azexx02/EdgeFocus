@@ -6,6 +6,13 @@
 #include "policy/ReminderPolicy.h"
 #include "device/DeviceManager.h"
 #include "device/GimbalMonitor.h"
+#include "platform/power/WorkloadProfilePolicy.h"
+#include "device/GimbalPrecheckController.h"
+#include "session/SessionOrchestrator.h"
+#include "session/SessionRuntime.h"
+#include "session/SessionSnapshotPublisher.h"
+#include "behavior/PhoneFactBuffer.h"
+#include <algorithm>
 #include <iostream>
 #include <cassert>
 #include <cmath>
@@ -19,6 +26,40 @@
 
 using namespace edgefocus;
 using json = nlohmann::json;
+
+class FakePrecheckGimbalHardware final : public gimbal::IGimbalSessionHardware {
+public:
+    gimbal::Status status() const override { return state; }
+    gimbal::CommandResult enableAndAlign(int) override {
+        state.state = gimbal::State::Ready;
+        return {true};
+    }
+    gimbal::CommandResult stopAndDisable(int) override {
+        state.state = gimbal::State::Disabled;
+        return {true};
+    }
+    gimbal::CommandResult moveTo(double yaw, double pitch, int) override {
+        state.state = gimbal::State::Holding;
+        state.yaw_deg = yaw;
+        state.pitch_deg = pitch;
+        return {true};
+    }
+    gimbal::CommandResult moveToVerified(double yaw, double pitch,
+                                         int timeout_ms, double) override {
+        return moveTo(yaw, pitch, timeout_ms);
+    }
+    gimbal::CommandResult trackTo(double yaw, double pitch,
+                                  int timeout_ms) override {
+        return moveTo(yaw, pitch, timeout_ms);
+    }
+    gimbal::CommandResult hold(int) override {
+        state.state = gimbal::State::Holding;
+        return {true};
+    }
+    gimbal::CommandResult refreshAngle(int) override { return {true}; }
+    gimbal::CommandResult freezeAtCurrent(int) override { return {true}; }
+    gimbal::Status state{gimbal::State::Ready, false, false, true, {}, 0.0, 0.0};
+};
 
 std::string decodeBase64(const std::string& input) {
     static const std::string chars =
@@ -146,7 +187,7 @@ int main() {
         assertSuccess(resp, 2);
         assert(resp["data"]["system_mode"] == 1);
         assert(resp["data"]["notification_mode"] == "silent");
-        assert(resp["data"]["power_profile"] == "go");
+        assert(!resp["data"].contains("power_profile"));
         assert(std::fabs(resp["data"]["sound_volume"].get<double>() - 0.33) < 0.001);
         assert(resp["data"]["screen_output_route"] == "phone");
         assert(resp["data"]["sound_output_route"] == "phone");
@@ -197,8 +238,8 @@ int main() {
         std::cout << "  camera precheck shown while offline gimbal hidden: OK\n";
     }
 
-    // Test 0d: online but unsafe gimbal controls stay hidden because motion
-    // control is not available, while camera guidance remains visible.
+    // Test 0d: the production-disabled gimbal stays hidden even when stale
+    // diagnostics say that the controller was online but unsafe.
     {
         SystemStateStore unsafe_store;
         SQLiteStore unsafe_sqlite(":memory:");
@@ -227,7 +268,7 @@ int main() {
         json control_resp = parseResponse(unsafe_server.handleCommand(
             R"({"cmd":"gimbal_control","id":41,"data":{"action":"nudge_left","step_deg":3}})"));
         assert(control_resp["status"] == "error");
-        assert(control_resp["error"] == "Gimbal not ready for motion");
+        assert(control_resp["error"] == "Gimbal disabled");
 
         json end_resp = parseResponse(unsafe_server.handleCommand(
             R"({"cmd":"session_control","id":42,"data":{"action":"end"}})"));
@@ -238,7 +279,7 @@ int main() {
         std::cout << "  camera precheck shown while unsafe gimbal hidden: OK\n";
     }
 
-    // Test 0e: online and safe gimbal appears with ready state details.
+    // Test 0e: stale online/safe status cannot bypass the production feature gate.
     {
         SystemStateStore online_store;
         SQLiteStore online_sqlite(":memory:");
@@ -267,21 +308,17 @@ int main() {
             R"({"cmd":"session_control","id":43,"data":{"action":"start","target_duration_min":25}})"));
         assertSuccess(start_resp, 43);
         assert(start_resp["data"].contains("precheck"));
-        assert(start_resp["data"]["precheck"].contains("gimbal"));
-        assert(start_resp["data"]["precheck"]["gimbal"]["online"] == true);
+        assert(!start_resp["data"]["precheck"].contains("gimbal"));
 
         json current_resp = parseResponse(online_server.handleCommand(
             R"({"cmd":"get_current_state","id":44})"));
         assertSuccess(current_resp, 44);
-        assert(current_resp["data"]["precheck"].contains("gimbal"));
+        assert(!current_resp["data"]["precheck"].contains("gimbal"));
 
         json gimbal_ack = parseResponse(online_server.handleCommand(
             R"({"cmd":"gimbal_control","id":46,"data":{"action":"center_x"}})"));
-        assertSuccess(gimbal_ack, 46);
-        assert(gimbal_ack["data"]["accepted"] == true);
-        assert(gimbal_ack["data"]["state"] == "running");
-        assert(gimbal_ack["data"]["estimated_timeout_ms"] == 30000);
-        assert(gimbal_ack["data"]["task_id"].get<std::string>().find("gimbal_") == 0);
+        assert(gimbal_ack["status"] == "error");
+        assert(gimbal_ack["error"] == "Gimbal disabled");
 
         json end_resp = parseResponse(online_server.handleCommand(
             R"({"cmd":"session_control","id":45,"data":{"action":"end"}})"));
@@ -289,7 +326,7 @@ int main() {
 
         online_server.shutdown(online_ctx);
         online_sqlite.shutdown(online_ctx);
-        std::cout << "  precheck.gimbal shown when online: OK\n";
+        std::cout << "  stale online gimbal cannot bypass feature gate: OK\n";
     }
 
     // Test 0f: disabled gimbal never enters precheck and gimbal_control
@@ -340,6 +377,99 @@ int main() {
         std::cout << "  precheck.gimbal hidden when disabled: OK\n";
     }
 
+    // Test 0g: the new PRECHECK command surface is session-scoped and only
+    // advertised when a typed controller is actually wired.
+    {
+        SystemStateStore typed_store;
+        SQLiteStore typed_sqlite(":memory:");
+        AppContext typed_ctx;
+        typed_sqlite.init(typed_ctx);
+        DeviceManager typed_devices(typed_store);
+        ReminderPolicy typed_policy(typed_store, typed_sqlite, typed_devices);
+        typed_policy.init(typed_ctx);
+        session::SessionSnapshotPublisher typed_snapshots("typed-gimbal-test");
+        std::int64_t monotonic = 1000;
+        session::SessionOrchestrator typed_orchestrator(
+            typed_snapshots,
+            [](const session::SessionContext& context) {
+                return std::make_unique<session::SessionRuntime>(context);
+            },
+            [&] { return monotonic; },
+            [] { return std::int64_t{2000}; });
+        const auto started = typed_orchestrator.start(
+            {1500000, session::SourceMode::LiveCamera});
+        assert(started.success && started.context);
+
+        FakePrecheckGimbalHardware hardware;
+        gimbal::PrecheckConfig config;
+        config.search_waypoints = {{-5.0, 0.0}, {5.0, 0.0}};
+        config.center = gimbal::Waypoint{0.0, 0.0};
+        config.nudge_step_deg = 2.0;
+        gimbal::GimbalPrecheckController controller(hardware, config);
+        assert(controller.start(started.context->session_id, monotonic));
+        PhoneFactBuffer typed_phone_facts;
+
+        BleGattServer typed_server(
+            typed_store, typed_sqlite, typed_policy, typed_policy.getModeManager(),
+            nullptr, &typed_orchestrator, &typed_phone_facts, &typed_snapshots, nullptr, &controller);
+        typed_server.init(typed_ctx);
+        json precheck_state = parseResponse(typed_server.handleCommand(
+            R"({"cmd":"get_current_state","id":46})"));
+        assertSuccess(precheck_state, 46);
+        assert(precheck_state["data"]["runtime_snapshot"]["session"]["runtime_active"] == true);
+        assert(precheck_state["data"]["runtime_snapshot"]["session"]["active"] == false);
+        json premature_phone = parseResponse(typed_server.handleCommand(
+            R"({"cmd":"phone_sync","id":461,"data":{"is_in_use":true,"usage_state":"playing"}})"));
+        assertSuccess(premature_phone, 461);
+        assert(premature_phone["data"]["accepted"] == false);
+        assert(premature_phone["data"]["error_code"] == "formal_session_not_started");
+        json hello = parseResponse(typed_server.handleCommand(
+            R"({"cmd":"client_hello","id":47,"data":{"capabilities":[]}})"));
+        assertSuccess(hello, 47);
+        assert(std::find(hello["data"]["server_capabilities"].begin(),
+                         hello["data"]["server_capabilities"].end(),
+                         "gimbal_precheck_v1") != hello["data"]["server_capabilities"].end());
+
+        const auto skip_payload = std::string(
+            "{\"cmd\":\"precheck_skip_auto_adjust\",\"id\":48,\"data\":{"
+            "\"session_id\":\"") + started.context->session_id +
+            "\",\"sequence\":1}}";
+        json skipped = parseResponse(typed_server.handleCommand(skip_payload));
+        assertSuccess(skipped, 48);
+        assert(skipped["data"]["state"] == "manual");
+        assert(skipped["data"]["manual_lease"] == true);
+
+        const auto nudge_payload = std::string(
+            "{\"cmd\":\"gimbal_nudge\",\"id\":49,\"data\":{"
+            "\"session_id\":\"") + started.context->session_id +
+            "\",\"sequence\":2,\"direction\":\"RIGHT\"}}";
+        json nudged = parseResponse(typed_server.handleCommand(nudge_payload));
+        assertSuccess(nudged, 49);
+        assert(hardware.state.yaw_deg == 2.0);
+
+        assert(typed_orchestrator.confirmReady().success);
+        json wrong_phase = parseResponse(typed_server.handleCommand(nudge_payload));
+        assert(wrong_phase["status"] == "error");
+        assert(wrong_phase["error"] == "Gimbal control is only available during PRECHECK");
+
+        typed_orchestrator.end(session::StopReason::Cancelled);
+        monotonic += 1000;
+        const auto precheck_only = typed_orchestrator.start(
+            {1500000, session::SourceMode::LiveCamera});
+        assert(precheck_only.success);
+        json cancelled_precheck = parseResponse(typed_server.handleCommand(
+            R"({"cmd":"session_control","id":491,"data":{"action":"end"}})"));
+        assertSuccess(cancelled_precheck, 491);
+        assert(cancelled_precheck["data"]["success"] == true);
+        assert(cancelled_precheck["data"]["cancelled_precheck"] == true);
+        assert(cancelled_precheck["data"]["formal_session_started"] == false);
+        assert(!cancelled_precheck["data"].contains("session_id"));
+        controller.stop();
+        typed_server.shutdown(typed_ctx);
+        typed_sqlite.shutdown(typed_ctx);
+        std::cout << "  typed PRECHECK gimbal command surface: OK\n";
+    }
+
     SystemStateStore store;
     SQLiteStore sqlite_store(":memory:");
     AppContext ctx;
@@ -348,21 +478,22 @@ int main() {
     DeviceManager dev_mgr(store);
     ReminderPolicy policy(store, sqlite_store, dev_mgr);
     policy.init(ctx);
-    BleGattServer server(store, sqlite_store, policy, policy.getModeManager());
+    power::WorkloadProfilePolicy workload_policy;
+    BleGattServer server(store, sqlite_store, policy, policy.getModeManager(),
+                         nullptr, nullptr, nullptr, nullptr, &workload_policy);
     server.init(ctx);
 
     // Test 1: get_device_status
     {
         json resp = parseResponse(server.handleCommand(R"({"cmd":"get_device_status","id":1})"));
         assertSuccess(resp, 1);
-        assert(resp["data"].contains("battery_percent"));
-        assert(resp["data"].contains("battery_voltage_mv"));
-        assert(resp["data"]["battery_percent"] == 67);
-        assert(resp["data"]["battery_voltage_mv"].is_null());
-        assert(resp["data"].contains("battery_charging"));
-        assert(resp["data"]["battery_charging"] == false);
-        assert(resp["data"].contains("power_source"));
-        assert(resp["data"]["power_source"] == "battery");
+        assert(!resp["data"].contains("battery_percent"));
+        assert(!resp["data"].contains("battery_voltage_mv"));
+        assert(!resp["data"].contains("battery_charging"));
+        assert(!resp["data"].contains("power_source"));
+        assert(resp["data"]["external_power_state"] == "UNKNOWN");
+        assert(resp["data"]["external_power_present"].is_null());
+        assert(resp["data"]["external_power_sample_age_ms"].is_null());
         assert(resp["data"].contains("power_profile"));
         assert(resp["data"]["power_profile"] == "go");
         assert(resp["data"].contains("system_mode"));
@@ -388,11 +519,37 @@ int main() {
         assert(resp["data"].contains("elapsed_ms"));
         assert(resp["data"].contains("active"));
         assert(resp["data"].contains("session_id"));
-        assert(resp["data"]["battery_percent"] == 67);
-        assert(resp["data"]["battery_charging"] == false);
-        assert(resp["data"]["power_source"] == "battery");
+        assert(!resp["data"].contains("battery_percent"));
+        assert(!resp["data"].contains("battery_charging"));
+        assert(!resp["data"].contains("power_source"));
+        assert(resp["data"]["external_power_state"] == "UNKNOWN");
+        assert(resp["data"]["external_power_present"].is_null());
         assert(resp["data"]["power_profile"] == "go");
+        assert(resp["data"]["power_profile_source"] == "auto_failsafe");
+        assert(resp["data"]["manual_override_active"] == false);
         std::cout << "  get_current_state: OK\n";
+    }
+
+    // Test 2a: Home/Go is an explicit, non-persisted runtime override.
+    {
+        json resp = parseResponse(server.handleCommand(
+            R"({"cmd":"set_power_profile","id":201,"data":{"power_profile":"home"}})"));
+        assertSuccess(resp, 201);
+        assert(resp["data"]["power_profile"] == "home");
+        assert(resp["data"]["power_profile_source"] == "manual");
+        assert(resp["data"]["manual_override_active"] == true);
+
+        json status = parseResponse(server.handleCommand(
+            R"({"cmd":"get_device_status","id":203})"));
+        assertSuccess(status, 203);
+        assert(status["data"]["power_profile"] == "home");
+        assert(status["data"]["manual_override_active"] == true);
+
+        json reset = parseResponse(server.handleCommand(
+            R"({"cmd":"set_power_profile","id":204,"data":{"power_profile":"go"}})"));
+        assertSuccess(reset, 204);
+        assert(reset["data"]["power_profile"] == "go");
+        std::cout << "  explicit runtime power profile override: OK\n";
     }
 
     // Test 2b: public state payload keeps focus_state compatible and exposes
@@ -557,6 +714,7 @@ int main() {
         assert(push["cmd"] == "push_state");
         assert(push["data"]["session_phase"] == "paused");
         store.setPushCallback({});
+        assert(server.init(ctx));
         std::cout << "  session_control pause: OK\n";
     }
 
@@ -582,6 +740,7 @@ int main() {
         assert(push["cmd"] == "push_state");
         assert(push["data"]["session_phase"] == "focusing");
         store.setPushCallback({});
+        assert(server.init(ctx));
         std::cout << "  session_control resume: OK\n";
     }
 
@@ -627,11 +786,11 @@ int main() {
         assert(resp["data"]["sound_volume"] == 0.7f);
         assert(resp["data"]["screen_output_route"] == "phone");
         assert(resp["data"]["sound_output_route"] == "phone");
-        assert(resp["data"]["gimbal_enabled"] == true);
+        assert(resp["data"]["gimbal_enabled"] == false);
         assert(resp["data"]["normal_channels"] == json::array({"SCREEN", "BAND", "SOUND"}));
         assert(resp["data"]["silent_channels"] == json::array({"SCREEN", "BAND"}));
         assert(resp["data"]["notification_mode"] == "normal");
-        assert(resp["data"]["power_profile"] == "go");
+        assert(!resp["data"].contains("power_profile"));
         std::cout << "  get_preferences defaults: OK\n";
     }
 
@@ -641,7 +800,7 @@ int main() {
             R"({"cmd":"update_preferences","id":11,"data":{"notification_mode":"silent","default_focus_duration_min":35,"sound_volume":0.25,"normal_channels_mask":3,"silent_channels_mask":2}})"));
         assertSuccess(resp, 11);
         assert(resp["data"]["notification_mode"] == "silent");
-        assert(resp["data"]["power_profile"] == "go");
+        assert(!resp["data"].contains("power_profile"));
         assert(resp["data"]["default_focus_duration_min"] == 35);
         assert(resp["data"]["sound_volume"] == 0.25f);
         assert(policy.getModeManager().getMode() == SystemMode::SILENT);
@@ -666,6 +825,16 @@ int main() {
         assert(resp["status"] == "error");
         assert(resp["id"] == 111);
         std::cout << "  update_preferences invalid type: OK\n";
+    }
+
+    // Home/Go is a transient power policy override, not a persisted preference.
+    {
+        json resp = parseResponse(server.handleCommand(
+            R"({"cmd":"update_preferences","id":1110,"data":{"power_profile":"home"}})"));
+        assert(resp["status"] == "error");
+        assert(resp["id"] == 1110);
+        assert(resp["error"].get<std::string>().find("set_power_profile") != std::string::npos);
+        std::cout << "  update_preferences rejects power_profile: OK\n";
     }
 
     // Test 11b.1: update_preferences rejects unknown system_mode enum values.
@@ -739,9 +908,8 @@ int main() {
         assertSuccess(resp, 12);
         assert(resp["data"].contains("system_mode"));
         assert(resp["data"].contains("notification_mode"));
-        assert(resp["data"].contains("power_profile"));
+        assert(!resp["data"].contains("power_profile"));
         assert(resp["data"]["notification_mode"] == "silent");
-        assert(resp["data"]["power_profile"] == "go");
         assert(resp["data"].contains("sound_volume"));
         assert(resp["data"].contains("away_timeout_min"));
         assert(resp["data"].contains("default_focus_duration_min"));
@@ -948,7 +1116,7 @@ int main() {
         std::cout << "  gimbal_control nudge unavailable without monitor: OK\n";
     }
 
-    // Test 17c.1: raw gimbal diagnostics are not ordinary App calibration controls.
+    // Test 17c.1: production feature gate also blocks legacy raw diagnostics.
     {
         SystemStateStore diag_store;
         SQLiteStore diag_sqlite(":memory:");
@@ -970,11 +1138,11 @@ int main() {
         json diag_resp = parseResponse(diag_server.handleCommand(
             R"({"cmd":"gimbal_control","id":173,"data":{"action":"ping"}})"));
         assert(diag_resp["status"] == "error");
-        assert(diag_resp["error"] == "Gimbal diagnostic action requires debug=true");
+        assert(diag_resp["error"] == "Gimbal disabled");
 
         diag_server.shutdown(diag_ctx);
         diag_sqlite.shutdown(diag_ctx);
-        std::cout << "  gimbal diagnostics require debug flag: OK\n";
+        std::cout << "  production gate blocks legacy gimbal diagnostics: OK\n";
     }
 
     // Test 17d: get_camera_preview_image returns the latest low-bandwidth snapshot container.
@@ -1158,6 +1326,53 @@ int main() {
         assert(response["status"] == "error");
         assert(response["error"].get<std::string>().find("too large") != std::string::npos);
         std::cout << "  oversized BLE request rejected: OK\n";
+    }
+
+    // Test 24: capable Apps negotiate reliable critical pushes and ACK them idempotently.
+    {
+        server.setPhoneConnected(true);
+        json hello = parseResponse(server.handleCommand(
+            R"({"cmd":"client_hello","id":240,"data":{"capabilities":["event_ack_v1","event_dedupe_v1"]}})"));
+        assertSuccess(hello, 240);
+        assert(hello["data"]["reliable_push"] == true);
+        assert(std::find(hello["data"]["server_capabilities"].begin(),
+                         hello["data"]["server_capabilities"].end(),
+                         "external_power_v1") != hello["data"]["server_capabilities"].end());
+        assert(std::find(hello["data"]["server_capabilities"].begin(),
+                         hello["data"]["server_capabilities"].end(),
+                         "power_profile_override_v1") != hello["data"]["server_capabilities"].end());
+
+        store.pushEvent(R"({"cmd":"push_alert","data":{"session_id":"ack_test","level":2,"phone_actions":["SCREEN","SOUND"]}})");
+        json current = parseResponse(server.handleCommand(
+            R"({"cmd":"get_current_state","id":241})"));
+        assertSuccess(current, 241);
+        assert(current["data"].contains("event_delivery"));
+        const auto& events = current["data"]["event_delivery"]["events"];
+        assert(!events.empty());
+        std::string event_id;
+        for (const auto& event : events) {
+            if (event.value("session_id", "") == "ack_test") {
+                event_id = event["event_id"].get<std::string>();
+            }
+        }
+        assert(!event_id.empty());
+
+        const std::string ack_payload =
+            std::string("{\"cmd\":\"event_ack\",\"id\":242,\"data\":{\"event_id\":\"") +
+            event_id + "\",\"session_id\":\"ack_test\",\"stage\":\"received\"}}";
+        json ack = parseResponse(server.handleCommand(ack_payload));
+        assertSuccess(ack, 242);
+        assert(ack["data"]["ack_status"] == "accepted");
+        assert((store.snapshot().device.last_delivered_channels_mask &
+                kNotificationChannelScreenMask) != 0);
+        assert((store.snapshot().device.last_delivered_channels_mask &
+                kNotificationChannelSoundMask) != 0);
+
+        json duplicate = parseResponse(server.handleCommand(ack_payload));
+        assertSuccess(duplicate, 242);
+        assert(duplicate["data"]["ack_status"] == "duplicate");
+        server.setPhoneConnected(false);
+        std::cout << "  reliable critical push ACK: OK\n";
     }
 
     // Test 22: push callback registration

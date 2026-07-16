@@ -44,13 +44,15 @@ void SessionSnapshotPublisher::begin(const SessionContext& context, std::int64_t
         snapshot.context = context;
         snapshot.phase = Phase::Precheck;
         snapshot.runtime_active = true;
+        snapshot.formal_active = false;
         snapshot.remaining_ms = context.target_duration_ms;
         focusing_started_ms_ = 0;
         accumulated_focus_ms_ = 0;
     });
 }
 
-void SessionSnapshotPublisher::setPhase(Phase phase, std::int64_t now_ms) {
+void SessionSnapshotPublisher::setPhase(
+    Phase phase, std::int64_t now_ms, bool formal_start) {
     mutate(now_ms, [&](SessionSnapshot& snapshot) {
         const Phase previous = snapshot.phase;
         if (previous == Phase::Focusing && phase != Phase::Focusing &&
@@ -61,6 +63,9 @@ void SessionSnapshotPublisher::setPhase(Phase phase, std::int64_t now_ms) {
         if (phase == Phase::Focusing && previous != Phase::Focusing) {
             if (previous == Phase::Precheck) accumulated_focus_ms_ = 0;
             focusing_started_ms_ = now_ms;
+        }
+        if (formal_start && snapshot.runtime_active && phase == Phase::Focusing) {
+            snapshot.formal_active = true;
         }
         snapshot.phase = phase;
     });
@@ -92,6 +97,18 @@ void SessionSnapshotPublisher::updateAssessment(
     mutate(now_ms, [&](SessionSnapshot& snapshot) { snapshot.assessment = assessment; });
 }
 
+void SessionSnapshotPublisher::updateEvidence(
+    const VisualSnapshot& visual,
+    const PhoneSnapshot& phone,
+    const std::optional<DistractionAssessment>& assessment,
+    std::int64_t now_ms) {
+    mutate(now_ms, [&](SessionSnapshot& snapshot) {
+        snapshot.visual = visual;
+        snapshot.phone = phone;
+        if (assessment) snapshot.assessment = *assessment;
+    });
+}
+
 void SessionSnapshotPublisher::updateReminder(
     const ReminderSnapshot& reminder,
     std::int64_t now_ms) {
@@ -108,6 +125,7 @@ void SessionSnapshotPublisher::end(std::int64_t now_ms) {
     mutate(now_ms, [&](SessionSnapshot& snapshot) {
         snapshot.phase = Phase::Idle;
         snapshot.runtime_active = false;
+        snapshot.formal_active = false;
         snapshot.context = {};
         snapshot.visual = {};
         snapshot.phone = {};

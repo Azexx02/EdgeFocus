@@ -260,7 +260,8 @@ void test_snapshot_to_gatt_contract() {
     DeviceManager dev_mgr(store);
     ReminderPolicy policy(store, sqlite, dev_mgr);
     policy.init(ctx);
-    BleGattServer server(store, sqlite, policy, policy.getModeManager());
+    BleGattServer server(store, sqlite, policy, policy.getModeManager(),
+                         nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
     server.init(ctx);
 
     // Set up some state
@@ -288,7 +289,11 @@ void test_snapshot_to_gatt_contract() {
     dev.system_mode = SystemMode::SILENT;
     dev.camera_ok = true;
     dev.bracelet_connected = true;
-    dev.battery_percent = 85;
+    dev.external_power_state = "PRESENT";
+    dev.external_power_present = true;
+    dev.external_power_sample_age_ms = 85;
+    dev.power_profile = PowerProfile::HOME;
+    dev.power_profile_source = "auto_external";
     store.updateDeviceStatus(dev);
 
     store.updateReminder(CommandLevel::LEVEL_2, "test reminder", 1000);
@@ -298,7 +303,12 @@ void test_snapshot_to_gatt_contract() {
     // get_device_status
     {
         std::string resp = server.handleCommand("{\"cmd\":\"get_device_status\"}");
-        CHECK(resp.find("\"battery_percent\":85") != std::string::npos, "battery=85");
+        CHECK(resp.find("\"battery_") == std::string::npos, "battery fields removed");
+        CHECK(resp.find("\"power_source\"") == std::string::npos, "legacy power_source removed");
+        CHECK(resp.find("\"external_power_state\":\"PRESENT\"") != std::string::npos,
+              "external power present");
+        CHECK(resp.find("\"power_profile\":\"home\"") != std::string::npos,
+              "power profile home");
         CHECK(resp.find("\"system_mode\":1") != std::string::npos, "system_mode=1 (SILENT)");
         CHECK(resp.find("\"camera_ok\":true") != std::string::npos, "camera_ok=true");
         CHECK(resp.find("\"bracelet_connected\":true") != std::string::npos, "bracelet_connected=true");
@@ -516,7 +526,8 @@ void test_session_lifecycle() {
     DeviceManager dev_mgr(store);
     ReminderPolicy policy(store, sqlite, dev_mgr);
     policy.init(ctx);
-    BleGattServer server(store, sqlite, policy, policy.getModeManager());
+    BleGattServer server(store, sqlite, policy, policy.getModeManager(),
+                         nullptr, nullptr, nullptr, nullptr, nullptr, nullptr);
     server.init(ctx);
 
     // 1. Start session via BLE (new protocol: data nested, id echoed)

@@ -12,15 +12,18 @@ namespace edgefocus {
 
 class AppContext;
 class PreviewFrameStore;
+namespace session { class SessionSnapshotPublisher; }
 
 /// Camera capture module. Acquires frames and publishes them to a bounded queue.
-/// Session-aware: camera only opens when session.active is true.
+/// Runtime-aware: camera opens for PRECHECK and remains active through the
+/// formal session, while the legacy projection stays inactive during PRECHECK.
 class CameraPipeline : public Module {
 public:
     using Queue = BoundedQueue<CameraFrame>;
 
     CameraPipeline(Queue& output_queue, SystemStateStore& store,
-                   PreviewFrameStore* preview_store = nullptr);
+                   PreviewFrameStore* preview_store = nullptr,
+                   session::SessionSnapshotPublisher* session_snapshots = nullptr);
     ~CameraPipeline() override;
 
     bool init(AppContext& ctx) override;
@@ -42,6 +45,7 @@ private:
     Queue& output_queue_;
     SystemStateStore& store_;
     PreviewFrameStore* preview_store_{};
+    session::SessionSnapshotPublisher* session_snapshots_{};
     bool camera_opened_ = false;
     int64_t next_open_attempt_ms_ = 0;
     int64_t captured_frames_ = 0;

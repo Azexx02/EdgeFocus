@@ -7,6 +7,7 @@
 #include "device/BleBandController.h"
 #include "device/SoundController.h"
 #include <array>
+#include <cstdint>
 
 namespace edgefocus {
 
@@ -44,6 +45,7 @@ private:
     SystemStateStore& store_;
     int executed_command_count_ = 0;
     CommandLevel last_executed_level_ = CommandLevel::NONE;
+    std::uint64_t last_band_sent_sequence_ = 0;
 };
 
 } // namespace edgefocus

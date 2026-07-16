@@ -156,10 +156,6 @@ nlohmann::json makePushStateData(const SystemSnapshot& snap) {
     const std::string owner = snap.session.precheck_owner.empty()
         ? "board"
         : snap.session.precheck_owner;
-    const int battery_percent =
-        snap.device.battery_percent >= 0 && snap.device.battery_percent <= 100
-            ? snap.device.battery_percent
-            : 67;
     return {
         {"active", snap.session.active},
         {"paused", snap.session.paused},
@@ -174,10 +170,16 @@ nlohmann::json makePushStateData(const SystemSnapshot& snap) {
         {"phone_usage_state", phoneUsageStateToWire(snap.behavior_context.phone_usage_state)},
         {"phone_distraction_level", snap.behavior_context.phone_distraction_level},
         {"camera_ok", snap.device.camera_ok},
-        {"battery_percent", battery_percent},
-        {"battery_charging", snap.device.battery_charging},
-        {"power_source", snap.device.power_source},
+        {"external_power_state", snap.device.external_power_state},
+        {"external_power_present", snap.device.external_power_present
+            ? nlohmann::json(*snap.device.external_power_present)
+            : nlohmann::json(nullptr)},
+        {"external_power_sample_age_ms", snap.device.external_power_sample_age_ms >= 0
+            ? nlohmann::json(snap.device.external_power_sample_age_ms)
+            : nlohmann::json(nullptr)},
         {"power_profile", snap.device.power_profile == PowerProfile::HOME ? "home" : "go"},
+        {"power_profile_source", snap.device.power_profile_source},
+        {"manual_override_active", snap.device.manual_override_active},
         {"frame_quality_ready", frameQualityReady(snap)},
         {"gimbal_ready", gimbalReady(snap)},
         {"elapsed_ms", snap.session.elapsed_ms},

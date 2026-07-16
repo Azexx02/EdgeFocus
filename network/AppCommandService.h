@@ -4,6 +4,7 @@
 #include "storage/SQLiteStore.h"
 #include "policy/ReminderPolicy.h"
 #include "policy/ModeManager.h"
+#include "platform/power/WorkloadProfilePolicy.h"
 
 #include <nlohmann/json.hpp>
 #include <atomic>
@@ -18,9 +19,13 @@ namespace edgefocus {
 
 class GimbalMonitor;
 class PhoneFactBuffer;
+class AppEventOutbox;
 namespace session {
 class SessionOrchestrator;
 class SessionSnapshotPublisher;
+}
+namespace gimbal {
+class GimbalPrecheckController;
 }
 
 class AppCommandService {
@@ -30,7 +35,10 @@ public:
                       GimbalMonitor* gimbal_monitor = nullptr,
                       session::SessionOrchestrator* session_orchestrator = nullptr,
                       PhoneFactBuffer* phone_facts = nullptr,
-                      session::SessionSnapshotPublisher* session_snapshots = nullptr);
+                      session::SessionSnapshotPublisher* session_snapshots = nullptr,
+                      AppEventOutbox* event_outbox = nullptr,
+                      power::WorkloadProfilePolicy* workload_policy = nullptr,
+                      gimbal::GimbalPrecheckController* gimbal_precheck = nullptr);
     ~AppCommandService();
 
     void loadPreferences();
@@ -51,6 +59,9 @@ private:
     session::SessionOrchestrator* session_orchestrator_;
     PhoneFactBuffer* phone_facts_;
     session::SessionSnapshotPublisher* session_snapshots_;
+    AppEventOutbox* event_outbox_;
+    power::WorkloadProfilePolicy* workload_policy_;
+    gimbal::GimbalPrecheckController* gimbal_precheck_;
     std::atomic<uint64_t> phone_sequence_{0};
 
     std::string handleGetDeviceStatus(int req_id);
@@ -70,6 +81,12 @@ private:
     std::string handleGetGimbalStatus(int req_id);
     std::string handleGimbalControl(const json& data, int req_id);
     std::string handleGetCameraPreviewImage(int req_id);
+    std::string handleClientHello(const json& data, int req_id);
+    std::string handleEventAck(const json& data, int req_id);
+    std::string handleSetPowerProfile(const json& data, int req_id);
+    std::string handleGimbalPrecheckCommand(const std::string& command,
+                                            const json& data, int req_id);
+    void applyManualPowerProfile(power::WorkloadProfile profile);
     std::string startGimbalTask(const std::string& action,
                                 std::vector<std::pair<std::string, int>> commands,
                                 int req_id);

@@ -20,6 +20,7 @@ namespace edgefocus {
 
 class PhoneFactBuffer;
 class PreviewFrameStore;
+class BoardDemoRuntime;
 namespace session {
 class SessionOrchestrator;
 class SessionSnapshotPublisher;
@@ -148,11 +149,12 @@ inline DemoHttpParseStatus parseDemoHttpRequestBuffer(const std::string& raw,
 class DemoHttpServer : public Module {
 public:
     DemoHttpServer(SystemStateStore& store, SQLiteStore& sqlite_store,
-                   DeviceManager& device_mgr, GimbalMonitor& gimbal_monitor,
+                   DeviceManager& device_mgr, GimbalMonitor* gimbal_monitor,
                    session::SessionOrchestrator& sessions,
                    session::SessionSnapshotPublisher& snapshots,
                    PhoneFactBuffer& phone_facts,
                    PreviewFrameStore& preview_frames,
+                   BoardDemoRuntime& demo_runtime,
                    int port);
 
     bool init(AppContext& ctx) override;
@@ -172,21 +174,24 @@ private:
     json forcePhoneState(const json& data);
     json triggerReminder(const json& data);
     json setDemoCounts(const json& data);
-    json setPowerState(const json& data);
     json gimbalNudge(const json& data);
     json runtimeSnapshotJson() const;
     json handleRuntimeSession(const json& data);
+    json handleDemoMode(const json& data);
     json handleRuntimePhone(const json& data);
     std::string previewFrameResponse() const;
+    std::string recordedVideoResponse() const;
+    std::string replayTraceResponse() const;
 
     SystemStateStore& store_;
     SQLiteStore& sqlite_store_;
     DeviceManager& device_mgr_;
-    GimbalMonitor& gimbal_monitor_;
+    GimbalMonitor* gimbal_monitor_;
     session::SessionOrchestrator& sessions_;
     session::SessionSnapshotPublisher& snapshots_;
     PhoneFactBuffer& phone_facts_;
     PreviewFrameStore& preview_frames_;
+    BoardDemoRuntime& demo_runtime_;
     std::atomic<std::uint64_t> phone_sequence_{0};
     int port_ = 0;
     std::atomic<bool> running_{false};

@@ -28,7 +28,10 @@ SessionOrchestrator::SessionOrchestrator(
 
 SessionOrchestrator::~SessionOrchestrator() {
     std::lock_guard<std::mutex> lock(mutex_);
-    if (runtime_) runtime_->stop(StopReason::ProcessShutdown);
+    if (runtime_) {
+        runtime_->stop(StopReason::ProcessShutdown);
+        if (after_stop_hook_) after_stop_hook_();
+    }
 }
 
 SessionOrchestrator::Result SessionOrchestrator::start(const StartRequest& request) {
@@ -41,6 +44,15 @@ SessionOrchestrator::Result SessionOrchestrator::start(const StartRequest& reque
     if (request.target_duration_ms <= 0) {
         return {false, "target_duration_ms must be positive", std::nullopt};
     }
+    if (request.source_mode != SourceMode::LiveCamera) {
+        return {false, "formal sessions only support live_camera", std::nullopt};
+    }
+    if (before_start_hook_) {
+        std::string error;
+        if (!before_start_hook_(&error)) {
+            return {false, error.empty() ? "failed to acquire formal runtime" : error, std::nullopt};
+        }
+    }
 
     const auto monotonic_ms = monotonic_clock_();
     const auto wall_ms = wall_clock_();
@@ -52,28 +64,45 @@ SessionOrchestrator::Result SessionOrchestrator::start(const StartRequest& reque
     context.target_duration_ms = request.target_duration_ms;
 
     auto runtime = runtime_factory_(context);
-    if (!runtime) return {false, "runtime factory returned null", std::nullopt};
+    if (!runtime) {
+        if (after_stop_hook_) after_stop_hook_();
+        return {false, "runtime factory returned null", std::nullopt};
+    }
 
     std::string error;
     if (!runtime->prepare(&error)) {
+        if (after_stop_hook_) after_stop_hook_();
         return {false, std::move(error), std::nullopt};
     }
 
+    // Publish the session identity before features enter PRECHECK so their
+    // synchronous evidence/status updates cannot be wiped by a later begin().
+    snapshots_.begin(context, monotonic_ms);
+    if (runtime_changed_hook_) runtime_changed_hook_();
     try {
         runtime->enterPhase(Phase::Precheck);
     } catch (const std::exception& exception) {
         runtime->stop(StopReason::PrepareFailed);
+        snapshots_.end(monotonic_clock_());
+        if (runtime_changed_hook_) runtime_changed_hook_();
+        if (after_stop_hook_) after_stop_hook_();
         return {false, exception.what(), std::nullopt};
+    } catch (...) {
+        runtime->stop(StopReason::PrepareFailed);
+        snapshots_.end(monotonic_clock_());
+        if (runtime_changed_hook_) runtime_changed_hook_();
+        if (after_stop_hook_) after_stop_hook_();
+        return {false, "unknown precheck transition exception", std::nullopt};
     }
 
     runtime_ = std::move(runtime);
     phase_ = Phase::Precheck;
-    snapshots_.begin(context, monotonic_ms);
     snapshots_.setDegradedFeatures(runtime_->degradedFeatures(), monotonic_ms);
     return {true, {}, context};
 }
 
-SessionOrchestrator::Result SessionOrchestrator::transitionLocked(Phase expected, Phase next) {
+SessionOrchestrator::Result SessionOrchestrator::transitionLocked(
+    Phase expected, Phase next, std::optional<std::int64_t> transition_ms) {
     if (!runtime_ || phase_ != expected) {
         return {false,
                 std::string("invalid transition from ") + phase_name(phase_) + " to " +
@@ -90,6 +119,7 @@ SessionOrchestrator::Result SessionOrchestrator::transitionLocked(Phase expected
         runtime_.reset();
         phase_ = Phase::Idle;
         snapshots_.end(monotonic_clock_());
+        if (after_stop_hook_) after_stop_hook_();
         return {false, exception.what(), context};
     } catch (...) {
         const SessionContext context = runtime_->context();
@@ -99,17 +129,40 @@ SessionOrchestrator::Result SessionOrchestrator::transitionLocked(Phase expected
         runtime_.reset();
         phase_ = Phase::Idle;
         snapshots_.end(monotonic_clock_());
+        if (after_stop_hook_) after_stop_hook_();
         return {false, "unknown phase transition exception", context};
     }
     phase_ = next;
-    snapshots_.setPhase(next, monotonic_clock_());
+    snapshots_.setPhase(next, transition_ms.value_or(monotonic_clock_()),
+                        expected == Phase::Precheck && next == Phase::Focusing &&
+                            runtime_->formalStarted());
+    if (runtime_changed_hook_) runtime_changed_hook_();
     snapshots_.setDegradedFeatures(runtime_->degradedFeatures(), monotonic_clock_());
     return currentResultLocked();
 }
 
 SessionOrchestrator::Result SessionOrchestrator::confirmReady() {
     std::lock_guard<std::mutex> lock(mutex_);
-    return transitionLocked(Phase::Precheck, Phase::Focusing);
+    if (!runtime_ || phase_ != Phase::Precheck) {
+        return {false,
+                std::string("invalid transition from ") + phase_name(phase_) +
+                    " to FOCUSING",
+                std::nullopt};
+    }
+    const FormalStartContext formal_start{monotonic_clock_(), wall_clock_()};
+    std::string error;
+    if (!runtime_->beginFormalSession(formal_start, &error)) {
+        const SessionContext context = runtime_->context();
+        runtime_->stop(StopReason::PrepareFailed);
+        runtime_.reset();
+        phase_ = Phase::Idle;
+        snapshots_.end(monotonic_clock_());
+        if (runtime_changed_hook_) runtime_changed_hook_();
+        if (after_stop_hook_) after_stop_hook_();
+        return {false, std::move(error), context};
+    }
+    return transitionLocked(
+        Phase::Precheck, Phase::Focusing, formal_start.started_monotonic_ms);
 }
 
 SessionOrchestrator::Result SessionOrchestrator::pause() {
@@ -142,6 +195,8 @@ SessionOrchestrator::Result SessionOrchestrator::end(StopReason reason) {
     runtime_.reset();
     phase_ = Phase::Idle;
     snapshots_.end(monotonic_clock_());
+    if (runtime_changed_hook_) runtime_changed_hook_();
+    if (after_stop_hook_) after_stop_hook_();
     return {true, {}, context};
 }
 
@@ -158,6 +213,24 @@ Phase SessionOrchestrator::phase() const {
 bool SessionOrchestrator::active() const {
     std::lock_guard<std::mutex> lock(mutex_);
     return runtime_ != nullptr;
+}
+
+void SessionOrchestrator::setBeforeStartHook(BeforeStartHook hook) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (runtime_) throw std::logic_error("cannot replace before-start hook during a session");
+    before_start_hook_ = std::move(hook);
+}
+
+void SessionOrchestrator::setAfterStopHook(AfterStopHook hook) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (runtime_) throw std::logic_error("cannot replace after-stop hook during a session");
+    after_stop_hook_ = std::move(hook);
+}
+
+void SessionOrchestrator::setRuntimeChangedHook(RuntimeChangedHook hook) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (runtime_) throw std::logic_error("cannot replace runtime-change hook during a session");
+    runtime_changed_hook_ = std::move(hook);
 }
 
 }  // namespace edgefocus::session

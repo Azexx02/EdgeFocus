@@ -6,6 +6,7 @@
 #include "camera/CameraFrame.h"
 #include "session/ISessionFeature.h"
 #include "session/SessionSnapshotPublisher.h"
+#include "platform/power/WorkloadProfilePolicy.h"
 
 #include <atomic>
 #include <cstdint>
@@ -28,14 +29,19 @@ public:
         session::SessionSnapshotPublisher& snapshots,
         SystemStateStore& compatibility_store,
         std::string pose_model_path = {},
-        std::string prone_model_path = {});
+        std::string prone_model_path = {},
+        bool publish_compatibility = true,
+        const power::WorkloadProfilePolicy* workload_policy = nullptr);
     ~DistractionPipelineFeature() override;
 
     const char* name() const noexcept override { return "distraction_pipeline"; }
     session::PrepareResult prepare(const session::SessionContext& context) override;
+    session::PrepareResult beginFormalSession(
+        const session::FormalStartContext& context) override;
     void enterPhase(session::Phase phase) override;
     void stop(session::StopReason reason) noexcept override;
     session::FeatureHealth health() const override;
+    void resetContinuity();
 
 private:
     struct Impl;
@@ -53,6 +59,7 @@ private:
     PhoneFactBuffer& phone_facts_;
     session::SessionSnapshotPublisher& snapshots_;
     SystemStateStore& compatibility_store_;
+    const power::WorkloadProfilePolicy* workload_policy_{};
     std::string pose_model_path_;
     std::string prone_model_path_;
 
@@ -65,9 +72,11 @@ private:
     mutable std::mutex processing_mutex_;
     mutable std::mutex health_mutex_;
     session::FeatureHealth health_;
-    std::int64_t last_paused_inference_ms_{};
+    std::int64_t last_scheduled_inference_ms_{};
     std::int64_t last_inference_frame_ms_{};
     double inference_fps_{};
+    bool publish_compatibility_{true};
+    bool formal_started_{};
 };
 
 }  // namespace edgefocus

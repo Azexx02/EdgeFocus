@@ -49,6 +49,11 @@ struct SessionContext {
     std::int64_t target_duration_ms{};
 };
 
+struct FormalStartContext {
+    std::int64_t started_monotonic_ms{};
+    std::int64_t started_wall_ms{};
+};
+
 struct PhoneFact {
     std::string session_id;
     std::uint64_t sequence{};
@@ -56,7 +61,7 @@ struct PhoneFact {
     std::int64_t source_timestamp_ms{};
     bool active{};
     std::optional<PhoneCategory> category;
-    std::int64_t fresh_for_ms{1000};
+    std::int64_t fresh_for_ms{5000};
 };
 
 struct EpisodeSnapshot {
@@ -87,11 +92,29 @@ struct FeatureHealth {
     std::int64_t updated_at_ms{};
 };
 
+struct VisualBoxSnapshot {
+    double x1{};
+    double y1{};
+    double x2{};
+    double y2{};
+};
+
+struct VisualKeypointSnapshot {
+    double x{};
+    double y{};
+    double confidence{};
+};
+
 struct VisualSnapshot {
     std::optional<double> presence;
     std::optional<double> prone;
     std::int64_t evidence_timestamp_ms{};
     std::uint64_t frame_id{};
+    std::int64_t media_timestamp_ms{};
+    std::string source;
+    std::optional<VisualBoxSnapshot> subject_box;
+    std::vector<VisualKeypointSnapshot> keypoints;
+    double subject_confidence{};
     double inference_fps{};
     double inference_latency_ms{};
 };
@@ -116,10 +139,16 @@ struct ReminderSnapshot {
 struct GimbalSnapshot {
     std::string state{"idle"};
     FeatureHealth health;
-    double angle_x{};
-    double angle_y{};
+    std::optional<double> angle_x;
+    std::optional<double> angle_y;
     bool tracking{};
     bool manual_lease{};
+    std::uint64_t search_generation{};
+    std::uint32_t waypoint_index{};
+    bool subject_found{};
+    bool recoverable{};
+    std::string fault_latched_reason;
+    std::string detail;
 };
 
 struct SessionSnapshot {
@@ -130,6 +159,7 @@ struct SessionSnapshot {
     SessionContext context;
     Phase phase{Phase::Idle};
     bool runtime_active{};
+    bool formal_active{};
     std::int64_t elapsed_ms{};
     std::int64_t remaining_ms{};
     VisualSnapshot visual;
