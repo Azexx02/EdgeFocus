@@ -41,6 +41,14 @@ enum class StopReason : std::uint8_t {
     ProcessShutdown,
 };
 
+enum class StartPreparationState : std::uint8_t {
+    None,
+    Initializing,
+    Ready,
+    Degraded,
+    Failed,
+};
+
 struct SessionContext {
     std::string session_id;
     SourceMode source_mode{SourceMode::LiveCamera};
@@ -151,6 +159,14 @@ struct GimbalSnapshot {
     std::string detail;
 };
 
+struct StartPreparationSnapshot {
+    StartPreparationState state{StartPreparationState::None};
+    std::string operation_id;
+    std::uint64_t generation{};
+    std::string error;
+    std::int64_t failed_at_ms{};
+};
+
 struct SessionSnapshot {
     std::string schema_version{"2.0"};
     std::string boot_id;
@@ -168,6 +184,7 @@ struct SessionSnapshot {
     ReminderSnapshot reminder;
     GimbalSnapshot gimbal;
     std::vector<std::string> degraded_features;
+    StartPreparationSnapshot preparation;
 };
 
 inline const char* phase_name(Phase value) {
@@ -179,6 +196,17 @@ inline const char* phase_name(Phase value) {
         case Phase::Ending: return "ENDING";
     }
     return "IDLE";
+}
+
+inline const char* preparation_state_name(StartPreparationState value) {
+    switch (value) {
+        case StartPreparationState::None: return "NONE";
+        case StartPreparationState::Initializing: return "INITIALIZING";
+        case StartPreparationState::Ready: return "READY";
+        case StartPreparationState::Degraded: return "DEGRADED";
+        case StartPreparationState::Failed: return "FAILED";
+    }
+    return "NONE";
 }
 
 }  // namespace edgefocus::session

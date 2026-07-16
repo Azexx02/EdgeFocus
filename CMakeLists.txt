@@ -6,7 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 if(MSVC)
-    add_compile_options(/utf-8)
+    add_compile_options(/utf-8 /EHsc)
 endif()
 
 option(EDGEFOCUS_WITH_OPENCV "Build camera capture and CPU/STAI preprocessing with OpenCV" OFF)

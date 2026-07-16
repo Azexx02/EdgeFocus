@@ -13,7 +13,12 @@ public:
     explicit SessionSnapshotPublisher(std::string boot_id = {});
 
     SessionSnapshot read() const;
-    void begin(const SessionContext& context, std::int64_t now_ms);
+    void begin(const SessionContext& context, std::int64_t now_ms,
+               std::uint64_t start_generation = 0,
+               std::string operation_id = {});
+    void markPreparationComplete(bool degraded, std::int64_t now_ms);
+    void failPreparation(std::string error, std::int64_t now_ms,
+                         std::int64_t failed_at_wall_ms);
     void setPhase(Phase phase, std::int64_t now_ms, bool formal_start = false);
     void setDegradedFeatures(std::vector<std::string> features, std::int64_t now_ms);
     void updateVisual(const VisualSnapshot& visual, std::int64_t now_ms);

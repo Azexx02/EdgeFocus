@@ -34,7 +34,11 @@ void SessionSnapshotPublisher::updateTimingLocked(std::int64_t now_ms) {
         0, snapshot_.context.target_duration_ms - snapshot_.elapsed_ms);
 }
 
-void SessionSnapshotPublisher::begin(const SessionContext& context, std::int64_t now_ms) {
+void SessionSnapshotPublisher::begin(
+    const SessionContext& context,
+    std::int64_t now_ms,
+    std::uint64_t start_generation,
+    std::string operation_id) {
     mutate(now_ms, [&](SessionSnapshot& snapshot) {
         const std::string boot_id = snapshot.boot_id;
         const std::uint64_t next_sequence = snapshot.sequence;
@@ -46,6 +50,45 @@ void SessionSnapshotPublisher::begin(const SessionContext& context, std::int64_t
         snapshot.runtime_active = true;
         snapshot.formal_active = false;
         snapshot.remaining_ms = context.target_duration_ms;
+        snapshot.preparation.state = StartPreparationState::Initializing;
+        snapshot.preparation.operation_id = std::move(operation_id);
+        snapshot.preparation.generation = start_generation;
+        focusing_started_ms_ = 0;
+        accumulated_focus_ms_ = 0;
+    });
+}
+
+void SessionSnapshotPublisher::markPreparationComplete(
+    bool degraded, std::int64_t now_ms) {
+    mutate(now_ms, [&](SessionSnapshot& snapshot) {
+        snapshot.preparation.state = degraded
+            ? StartPreparationState::Degraded
+            : StartPreparationState::Ready;
+        snapshot.preparation.error.clear();
+        snapshot.preparation.failed_at_ms = 0;
+    });
+}
+
+void SessionSnapshotPublisher::failPreparation(
+    std::string error,
+    std::int64_t now_ms,
+    std::int64_t failed_at_wall_ms) {
+    mutate(now_ms, [&](SessionSnapshot& snapshot) {
+        const auto preparation = snapshot.preparation;
+        snapshot.phase = Phase::Idle;
+        snapshot.runtime_active = false;
+        snapshot.formal_active = false;
+        snapshot.context = {};
+        snapshot.visual = {};
+        snapshot.phone = {};
+        snapshot.assessment = {};
+        snapshot.reminder = {};
+        snapshot.gimbal = {};
+        snapshot.degraded_features.clear();
+        snapshot.preparation = preparation;
+        snapshot.preparation.state = StartPreparationState::Failed;
+        snapshot.preparation.error = std::move(error);
+        snapshot.preparation.failed_at_ms = failed_at_wall_ms;
         focusing_started_ms_ = 0;
         accumulated_focus_ms_ = 0;
     });
@@ -133,6 +176,7 @@ void SessionSnapshotPublisher::end(std::int64_t now_ms) {
         snapshot.reminder = {};
         snapshot.gimbal = {};
         snapshot.degraded_features.clear();
+        snapshot.preparation = {};
         focusing_started_ms_ = 0;
         accumulated_focus_ms_ = 0;
     });

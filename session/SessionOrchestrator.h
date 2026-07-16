@@ -4,11 +4,13 @@
 #include "session/SessionSnapshotPublisher.h"
 
 #include <cstdint>
+#include <condition_variable>
 #include <functional>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 
 namespace edgefocus::session {
 
@@ -24,12 +26,14 @@ public:
     struct StartRequest {
         std::int64_t target_duration_ms{};
         SourceMode source_mode{SourceMode::LiveCamera};
+        std::string operation_id;
     };
 
     struct Result {
         bool success{};
         std::string error;
         std::optional<SessionContext> context;
+        bool already_active{};
     };
 
     SessionOrchestrator(
@@ -53,9 +57,18 @@ public:
     bool active() const;
 
 private:
+    enum class Lifecycle : std::uint8_t {
+        Idle,
+        Starting,
+        Active,
+        Cleaning,
+    };
+
     Result transitionLocked(Phase expected, Phase next,
                             std::optional<std::int64_t> transition_ms = std::nullopt);
     Result currentResultLocked() const;
+    void runStartWorker(SessionContext context, std::uint64_t generation);
+    bool startCancelled(std::uint64_t generation) const;
 
     SessionSnapshotPublisher& snapshots_;
     RuntimeFactory runtime_factory_;
@@ -67,7 +80,14 @@ private:
     RuntimeChangedHook runtime_changed_hook_;
 
     mutable std::mutex mutex_;
+    std::condition_variable lifecycle_changed_;
     std::unique_ptr<SessionRuntime> runtime_;
+    std::optional<SessionContext> pending_context_;
+    std::thread start_worker_;
+    Lifecycle lifecycle_{Lifecycle::Idle};
+    std::uint64_t start_generation_{};
+    bool cancel_start_{};
+    bool shutdown_requested_{};
     Phase phase_{Phase::Idle};
 };
 

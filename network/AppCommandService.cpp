@@ -93,7 +93,14 @@ json stableSessionSnapshotData(const session::SessionSnapshot& value) {
             {"active", value.formal_active},
             {"runtime_active", value.runtime_active},
             {"elapsed_ms", value.elapsed_ms},
-            {"remaining_ms", value.remaining_ms}
+            {"remaining_ms", value.remaining_ms},
+            {"preparation_state", session::preparation_state_name(value.preparation.state)},
+            {"preparation_error", value.preparation.error.empty()
+                ? json(nullptr) : json(value.preparation.error)},
+            {"preparation_failed_at_ms", value.preparation.failed_at_ms},
+            {"start_generation", value.preparation.generation},
+            {"operation_id", value.preparation.operation_id.empty()
+                ? json(nullptr) : json(value.preparation.operation_id)}
         }},
         {"source", {{"mode", sourceModeWire(value.context.source_mode)}}},
         {"visual", {
@@ -1099,18 +1106,18 @@ std::string AppCommandService::handleSessionControlV2(const json& data, int req_
     session::SessionOrchestrator::Result result;
 
     if (action == "start") {
-        const bool already_active = session_orchestrator_->active();
         const int target_min = targetDurationMinutesFromPayload(data, before.preferences);
         const std::string source = lowerCopy(data.value("source_mode", "live_camera"));
         if (source != "live_camera") {
             return makeError(req_id, "App sessions only support live_camera");
         }
         result = session_orchestrator_->start(
-            {minutesToMs(target_min), session::SourceMode::LiveCamera});
+            {minutesToMs(target_min), session::SourceMode::LiveCamera,
+             data.value("operation_id", std::string{})});
         auto after = store_.snapshot();
         json response = sessionStateData(after, gimbalPrecheckAvailable(after, gimbal_monitor_));
         response["success"] = result.success;
-        response["already_active"] = already_active && result.success;
+        response["already_active"] = result.already_active;
         if (session_snapshots_) {
             response["runtime_snapshot"] = stableSessionSnapshotData(session_snapshots_->read());
         }

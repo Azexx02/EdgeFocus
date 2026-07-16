@@ -33,12 +33,24 @@
   "data": {
     "action": "start",
     "target_duration_min": 25,
-    "source_mode": "live_camera"
+    "source_mode": "live_camera",
+    "operation_id": "android-1784000000000-1"
   }
 }
 ```
 
-允许的后续动作保持为 `skip_precheck`、`pause`、`resume`、`end`。`start` 返回的 `runtime_snapshot.session.runtime_active=true` 表示 PRECHECK runtime 已建立，但此时 `runtime_snapshot.session.active=false`；只有确认进入 FOCUSING 后 `active=true`，正式计时、SQLite 和分神记录才开始。事件 ACK 必须携带当前 `session_id`。
+主机收到合法 `start` 后先同步发布 `PRECHECK + preparation_state=INITIALIZING` 并立即响应，摄像头、推理 runtime、演示资源和 PRECHECK feature 的实际准备在单一后台 worker 中完成。App 收到该响应即可打开预检页，但在准备态变成 `READY` 或 `DEGRADED` 前不得发送继续、云台或预览命令。
+
+`runtime_snapshot.session` 额外返回：
+
+- `preparation_state`：`NONE | INITIALIZING | READY | DEGRADED | FAILED`；
+- `operation_id`：原样回显本次 App 启动事务 ID；
+- `start_generation`：主机启动代次；
+- `preparation_error`、`preparation_failed_at_ms`：失败原因与墙钟时间。
+
+`start` 只发送一次。若直接响应丢失或超时，App 在协议连接重新达到 READY 后，以每秒一次 `get_current_state`、最多 30 秒核对 `operation_id` 和主机权威阶段；不得因本地剩余时间或首次响应缺少阶段而推断已经 FOCUSING。重复 `start` 只返回当前会话，不建立第二个 worker。
+
+允许的后续动作保持为 `skip_precheck`、`pause`、`resume`、`end`。`runtime_snapshot.session.runtime_active=true` 表示 PRECHECK runtime 已建立或正在建立，但此时 `runtime_snapshot.session.active=false`；只有确认进入 FOCUSING 后 `active=true`，正式计时、SQLite 和分神记录才开始。事件 ACK 必须携带当前 `session_id`。
 
 ## 3. 手机原始事实
 
@@ -102,6 +114,8 @@ App 应读取响应里的 `accepted`、`last_accepted_sequence` 与 `fresh_for_m
 ## 5. 分片重组
 
 超过单包上限的响应使用 `status=chunk`，推送使用 `cmd=push_chunk`。App 必须按同一消息的 `seq/total` 收齐并按序拼接，对 `data` 做 `base64_utf8` 解码后再解析原 JSON；只有完整重组后才能发送 `received` ACK。
+
+App 重组上限为：最多 4 个待组消息、每消息 8192 片、解码后 768 KiB、单片 128 字节、`chunk_id` 128 字符；元数据冲突或同序号内容冲突时丢弃整个消息。摄像头预览当前为 `GRAY8 + base64`（40×30），不是 JPEG；App 必须在后台解码并对 Base64 长度、解码字节数与图像尺寸做上限检查。
 
 ## 6. 手环输出
 

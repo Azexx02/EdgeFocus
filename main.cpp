@@ -282,9 +282,8 @@ int main(int argc, char* argv[]) {
     // Block until SIGINT/SIGTERM or any module stops
     ctx.waitForShutdown();
 
-    if (session_orchestrator.active()) {
-        session_orchestrator.end(session::StopReason::ProcessShutdown);
-    }
+    // Close the session admission gate before stopping runtime dependencies.
+    session_orchestrator.end(session::StopReason::ProcessShutdown);
     ctx.stopAll();
 #ifdef EDGEFOCUS_WITH_DEMO_HTTP
     session_orchestrator.setBeforeStartHook({});

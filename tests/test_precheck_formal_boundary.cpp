@@ -5,9 +5,11 @@
 #include "storage/SQLiteStore.h"
 
 #include <cassert>
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <thread>
 
 using namespace edgefocus;
 
@@ -52,6 +54,12 @@ int main() {
     auto second = orchestrator.start({60000, session::SourceMode::LiveCamera});
     assert(second.success);
     assert(!sqlite.sessionExists(second.context->session_id));
+    for (int attempt = 0; attempt < 200 &&
+         snapshots.read().preparation.state == session::StartPreparationState::Initializing;
+         ++attempt) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    assert(snapshots.read().preparation.state == session::StartPreparationState::Ready);
 
     monotonic = 600;
     wall = 6000;
