@@ -4,6 +4,7 @@ import com.edgefocus.app.data.TimerStateHolder
 import com.edgefocus.app.data.ble.ConnectionSupervisor
 import com.edgefocus.app.data.ble.HostJsonCodec
 import com.edgefocus.app.data.remote.BleManager
+import com.edgefocus.app.data.remote.BoardPreparationState
 import com.edgefocus.app.data.session.ProtocolCheckpointStore
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -43,6 +44,7 @@ class PrecheckController @Inject constructor(
 
     private suspend fun send(command: String, direction: String? = null): Result<Unit> = runCatching {
         check(connectionSupervisor.snapshot.value.isReady) { "主机尚未就绪" }
+        checkPreparationReady()
         val sessionId = timerStateHolder.state.value.sessionId
             ?.takeIf { it.isNotBlank() }
             ?: error("缺少 PRECHECK session_id")
@@ -55,6 +57,7 @@ class PrecheckController @Inject constructor(
     }
 
     private suspend fun continueSession(): Result<Unit> = runCatching {
+        checkPreparationReady()
         val response = bleManager.sessionControl("skip_precheck").getOrThrow()
         val accepted = HostJsonCodec.parseBusinessAcceptance(String(response, Charsets.UTF_8))
         check(accepted.accepted) { accepted.error ?: "主机未接受继续专注" }
@@ -67,5 +70,12 @@ class PrecheckController @Inject constructor(
             }
         }
         timerStateHolder.refreshBoardState()
+    }
+
+    private fun checkPreparationReady() {
+        val preparation = timerStateHolder.state.value.preparationState
+        check(preparation == BoardPreparationState.READY || preparation == BoardPreparationState.DEGRADED) {
+            timerStateHolder.state.value.preparationError ?: "EdgeFocus 正在准备预检，请稍候"
+        }
     }
 }

@@ -9,6 +9,7 @@ import com.edgefocus.app.data.local.entity.Session
 import com.edgefocus.app.data.remote.LocalSessionUpload
 import com.edgefocus.app.data.remote.PowerProfile
 import com.edgefocus.app.data.remote.BoardPrecheck
+import com.edgefocus.app.data.remote.BoardPreparationState
 import com.edgefocus.app.data.remote.CameraPreviewImage
 import com.edgefocus.app.data.remote.GimbalStatus
 import com.edgefocus.app.domain.model.SessionType
@@ -46,6 +47,8 @@ data class TimerUiState(
     val boardPowerProfile: PowerProfile = PowerProfile.GO,
     val externalPowerState: ExternalPowerState = ExternalPowerState.UNKNOWN,
     val precheck: BoardPrecheck? = null,
+    val preparationState: BoardPreparationState = BoardPreparationState.NONE,
+    val preparationError: String? = null,
     val cameraPreview: CameraPreviewImage? = null,
     val gimbalStatus: GimbalStatus? = null,
     val precheckGuidance: String? = null,
@@ -138,6 +141,8 @@ class HomeViewModel @Inject constructor(
                         boardBatteryCharging = sharedState.boardBatteryCharging,
                         boardPowerProfile = sharedState.boardPowerProfile,
                         precheck = sharedState.precheck,
+                        preparationState = sharedState.preparationState,
+                        preparationError = sharedState.preparationError,
                         cameraPreview = sharedState.cameraPreview,
                         gimbalStatus = sharedState.gimbalStatus,
                         precheckGuidance = sharedState.precheckGuidance,

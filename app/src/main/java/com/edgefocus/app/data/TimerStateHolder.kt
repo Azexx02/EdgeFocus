@@ -1,10 +1,14 @@
 package com.edgefocus.app.data
 
 import android.util.Log
+import android.os.SystemClock
+import com.edgefocus.app.data.ble.ConnectionSupervisor
+import com.edgefocus.app.data.ble.model.HostConnectionPhase
 import com.edgefocus.app.data.local.dao.SettingsDao
 import com.edgefocus.app.data.remote.AppEventLog
 import com.edgefocus.app.data.remote.BoardJsonParser
 import com.edgefocus.app.data.remote.BoardPrecheck
+import com.edgefocus.app.data.remote.BoardPreparationState
 import com.edgefocus.app.data.remote.BoardSessionPhase
 import com.edgefocus.app.data.remote.BoardSessionState
 import com.edgefocus.app.data.remote.effectivePhase
@@ -18,6 +22,7 @@ import com.edgefocus.app.data.remote.OutputCapability
 import com.edgefocus.app.data.remote.PowerProfile
 import com.edgefocus.app.data.remote.PushAlert
 import com.edgefocus.app.data.remote.PushEventHandler
+import com.edgefocus.app.data.session.StartTransactionPolicy
 import com.edgefocus.app.domain.model.FocusState
 import com.edgefocus.app.domain.model.SessionType
 import com.edgefocus.app.domain.model.TimerState
@@ -37,6 +42,8 @@ import kotlinx.coroutines.launch
 import org.json.JSONObject
 import javax.inject.Inject
 import javax.inject.Singleton
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 
 enum class SessionMode {
     LOCAL,
@@ -62,6 +69,8 @@ data class SharedTimerState(
     val boardSessionPaused: Boolean = false,
     val calibrationCompleted: Boolean = false,
     val sessionPhase: BoardSessionPhase = BoardSessionPhase.IDLE,
+    val preparationState: BoardPreparationState = BoardPreparationState.NONE,
+    val preparationError: String? = null,
     val focusState: Int = 0,
     val phoneSignal: Boolean = false,
     val phoneUsageState: String = "unknown",
@@ -94,6 +103,7 @@ data class SharedTimerState(
 @Singleton
 class TimerStateHolder @Inject constructor(
     private val bleManager: BleManager,
+    private val connectionSupervisor: ConnectionSupervisor,
     private val appEventLog: AppEventLog,
     private val settingsDao: SettingsDao
 ) {
@@ -104,6 +114,9 @@ class TimerStateHolder @Inject constructor(
         private const val CALIBRATION_THRESHOLD_MS = 5000L
         private const val MANUAL_STOP_REPORT_TIMEOUT_MS = 10_000L
         private const val BOARD_COMPLETION_GRACE_MS = 5_000L
+        private const val START_RECONCILE_DEADLINE_MS = 30_000L
+        private const val START_RECONCILE_INTERVAL_MS = 1_000L
+        private const val PREVIEW_INTERVAL_MS = 1_200L
     }
 
     private val _state = MutableStateFlow(SharedTimerState())
@@ -114,13 +127,20 @@ class TimerStateHolder @Inject constructor(
     private var boardSyncJob: Job? = null
     private var boardCompletionFallbackJob: Job? = null
     private var previewJob: Job? = null
+    private var pendingStartJob: Job? = null
+    private val pendingStartInFlight = AtomicBoolean(false)
+    private val startOperationEpoch = AtomicLong(0L)
     @Volatile
     private var isControlPanelActive = false
 
     init {
         scope.launch {
-            state.map { it.sessionPhase }.distinctUntilChanged().collect { phase ->
-                if (phase == BoardSessionPhase.PRECHECK) startPreviewLoop() else stopPreviewLoop()
+            state.map {
+                it.sessionPhase == BoardSessionPhase.PRECHECK &&
+                    (it.preparationState == BoardPreparationState.READY ||
+                        it.preparationState == BoardPreparationState.DEGRADED)
+            }.distinctUntilChanged().collect { previewReady ->
+                if (previewReady) startPreviewLoop() else stopPreviewLoop()
             }
         }
         scope.launch {
@@ -164,21 +184,29 @@ class TimerStateHolder @Inject constructor(
                     _state.update { it.copy(sessionMode = mode) }
                     appEventLog.log("BLE_CONNECT", "模式: $mode")
 
-                    // EdgeFocus模式下，检查板端是否有进行中的会话
-                    if (mode == SessionMode.EDGEFOCUS) {
-                        checkBoardSession()
-                    }
                 }
 
                 // 运行中连接，启动同步
-                if (isConnected && _state.value.sessionMode == SessionMode.EDGEFOCUS
-                    && _state.value.timerState == TimerState.RUNNING) {
-                    startBoardSync()
-                }
-
                 // 断开连接时停止同步任务（本地继续倒计时）
                 if (!isConnected) {
                     stopBoardSync()
+                    stopPreviewLoop()
+                }
+            }
+        }
+
+        scope.launch {
+            connectionSupervisor.snapshot.collect { snapshot ->
+                if (snapshot.phase != HostConnectionPhase.READY) return@collect
+                if (_state.value.sessionMode == SessionMode.EDGEFOCUS) {
+                    checkBoardSession()
+                    if (_state.value.timerState == TimerState.RUNNING ||
+                        _state.value.timerState == TimerState.PRECHECK ||
+                        _state.value.timerState == TimerState.PAUSED
+                    ) {
+                        startBoardSync()
+                    }
+                    if (isPreviewReady()) startPreviewLoop()
                 }
             }
         }
@@ -329,17 +357,20 @@ class TimerStateHolder @Inject constructor(
      */
     fun startEdgeFocusSession(
         targetDurationMinutes: Int,
-        sessionId: String = "session_${System.currentTimeMillis()}",
         sessionStartTime: Long = System.currentTimeMillis()
     ) {
-        if (!bleManager.isConnected()) {
+        if (!bleManager.isConnected() || !connectionSupervisor.snapshot.value.isReady) {
             Log.w(TAG, "Cannot start EdgeFocus session: device not connected")
             return
         }
-        if (_state.value.isSyncingWithBoard) {
+        if (!pendingStartInFlight.compareAndSet(false, true)) {
             Log.w(TAG, "Ignoring duplicate EdgeFocus start while board request is pending")
             return
         }
+
+        val epoch = startOperationEpoch.incrementAndGet()
+        val operationId = "android-${System.currentTimeMillis()}-$epoch"
+        val deadlineElapsedMs = SystemClock.elapsedRealtime() + START_RECONCILE_DEADLINE_MS
 
         // 先设置基础状态（不启动倒计时）
         val totalTimeMs = TimeUtils.minutesToMillis(targetDurationMinutes)
@@ -352,6 +383,8 @@ class TimerStateHolder @Inject constructor(
                 boardSessionPaused = false,
                 calibrationCompleted = false,
                 sessionPhase = BoardSessionPhase.IDLE,
+                preparationState = BoardPreparationState.INITIALIZING,
+                preparationError = null,
                 focusState = 0,
                 elapsedMs = 0L,
                 timeRemaining = totalTimeMs,
@@ -369,7 +402,7 @@ class TimerStateHolder @Inject constructor(
                 distractionCount = 0,
                 reminderCount = 0,
                 phoneDistractionCount = 0,
-                sessionId = sessionId,
+                sessionId = null,
                 sessionStartTime = sessionStartTime,
                 boardTotalDuration = null,
                 boardFocusDuration = null,
@@ -379,92 +412,140 @@ class TimerStateHolder @Inject constructor(
             )
         }
 
-        // 通知板端开始会话，等待响应
-        scope.launch {
+        // start 只发送一次；超时表示结果未知，随后只核对主机权威状态。
+        pendingStartJob = scope.launch {
             try {
-                appEventLog.log("SESSION_CONTROL", "start, duration=${targetDurationMinutes}min")
-                val result = bleManager.sessionControl("start", targetDurationMinutes)
-                result.onSuccess { data ->
-                    // 板端响应成功
-                    val json = String(data, Charsets.UTF_8)
-                    val boardState = BoardJsonParser.parseSessionState(json)
-                    if (boardState.sessionPhase != BoardSessionPhase.IDLE) {
-                        applyBoardSessionState(boardState, targetDurationMinutes)
-                        return@onSuccess
-                    }
-                    val jsonObj = JSONObject(json)
-                    val responseData = jsonObj.optJSONObject("data")
-                    val success = responseData?.optBoolean("success", true) ?: true
-
-                    if (!success) {
-                        Log.e(TAG, "Board rejected session start")
-                        _state.update {
-                            it.copy(
-                                timerState = TimerState.IDLE,
-                                isSyncingWithBoard = false
+                try {
+                    appEventLog.log(
+                        "SESSION_CONTROL",
+                        "start, operation=$operationId, duration=${targetDurationMinutes}min"
+                    )
+                    val result = bleManager.sessionControl(
+                        "start",
+                        targetDurationMinutes,
+                        operationId
+                    )
+                    result.onSuccess { data ->
+                        val json = String(data, Charsets.UTF_8)
+                        val envelopeError = runCatching {
+                            BoardJsonParser.parseResponseError(json)
+                        }.onFailure { error ->
+                            appEventLog.log(
+                                "SESSION_START_ACK_ENVELOPE_PARSE",
+                                error.message ?: "invalid response envelope"
                             )
+                        }.getOrNull()
+                        envelopeError?.let { error ->
+                            failPendingStart(epoch, error)
+                            return@launch
                         }
-                        return@onSuccess
-                    }
-                    
-                    val boardRemainingMs = responseData?.optLong("remaining_ms", 0) ?: 0
-                    val boardTargetMs = responseData?.optLong("target_duration_ms", 0) ?: 0
-                    val boardSessionId = responseData?.optString("session_id").orEmpty()
-
-                    if (boardSessionId.isNotBlank()) {
-                        _state.update { it.copy(sessionId = boardSessionId) }
-                    }
-                    
-                    if (boardRemainingMs > 0 && boardTargetMs > 0) {
-                        // 板端有时间数据，跟随板端
-                        Log.d(TAG, "Board responded with time: remaining=${boardRemainingMs}ms, target=${boardTargetMs}ms")
-                        _state.update {
-                            it.copy(
-                                timerState = TimerState.RUNNING,
-                                sessionType = SessionType.WORK,
-                                timeRemaining = boardRemainingMs,
-                                totalTime = boardTargetMs,
-                                targetDurationMinutes = targetDurationMinutes
-                            )
+                        runCatching {
+                            BoardJsonParser.parseSessionState(json)
+                        }.onSuccess { boardState ->
+                            if (StartTransactionPolicy.acceptsDirectAck(operationId, boardState.operationId)) {
+                                if (applyPendingStartObservation(
+                                        epoch,
+                                        operationId,
+                                        boardState,
+                                        targetDurationMinutes
+                                    )
+                                ) return@launch
+                            }
+                        }.onFailure { error ->
+                            appEventLog.log("SESSION_START_ACK_PARSE", error.message ?: "invalid response")
                         }
-                    } else {
-                        // 板端无时间数据，使用本地时间
-                        Log.d(TAG, "Board responded without time, using local time")
-                        _state.update {
-                            it.copy(
-                                timerState = TimerState.RUNNING,
-                                sessionType = SessionType.WORK,
-                                timeRemaining = totalTimeMs,
-                                totalTime = totalTimeMs,
-                                targetDurationMinutes = targetDurationMinutes
-                            )
-                        }
-                    }
-                    
-                    startBoardSync()
-                    startLocalCountdown()
-                    
-                }.onFailure { error ->
-                    Log.e(TAG, "Failed to start session on board: ${error.message}")
-                    _state.update {
-                        it.copy(
-                            timerState = TimerState.IDLE,
-                            isSyncingWithBoard = false
+                    }.onFailure { error ->
+                        appEventLog.log(
+                            "SESSION_START_ACK_UNKNOWN",
+                            error.message ?: "BLE response unavailable"
                         )
                     }
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Error starting session on board: ${e.message}")
-                _state.update {
-                    it.copy(
-                        timerState = TimerState.IDLE,
-                        isSyncingWithBoard = false
+                } catch (error: Exception) {
+                    appEventLog.log(
+                        "SESSION_START_ACK_UNKNOWN",
+                        error.message ?: "invalid response"
                     )
+                }
+
+                while (startOperationEpoch.get() == epoch &&
+                    SystemClock.elapsedRealtime() < deadlineElapsedMs
+                ) {
+                    if (_state.value.sessionPhase != BoardSessionPhase.IDLE) return@launch
+                    if (connectionSupervisor.snapshot.value.isReady) {
+                        bleManager.getCurrentState().onSuccess { data ->
+                            runCatching {
+                                BoardJsonParser.parseSessionState(String(data, Charsets.UTF_8))
+                            }.onSuccess { boardState ->
+                                if (applyPendingStartObservation(
+                                        epoch,
+                                        operationId,
+                                        boardState,
+                                        targetDurationMinutes
+                                    )
+                                ) return@launch
+                            }.onFailure { error ->
+                                appEventLog.log(
+                                    "SESSION_START_RECONCILE_PARSE",
+                                    error.message ?: "invalid state"
+                                )
+                            }
+                        }
+                    }
+                    delay(START_RECONCILE_INTERVAL_MS)
+                }
+                failPendingStart(epoch, "EdgeFocus 未在 30 秒内确认预检，请重试")
+            } finally {
+                if (startOperationEpoch.get() == epoch) {
+                    pendingStartJob = null
+                    pendingStartInFlight.set(false)
                 }
             }
         }
 
         Log.d(TAG, "EdgeFocus session starting: waiting for board response...")
+    }
+
+    private fun applyPendingStartObservation(
+        epoch: Long,
+        operationId: String,
+        boardState: BoardSessionState,
+        fallbackDurationMinutes: Int
+    ): Boolean {
+        if (startOperationEpoch.get() != epoch) return true
+        StartTransactionPolicy.failureForCurrentOperation(
+            operationId,
+            boardState,
+            System.currentTimeMillis()
+        )?.let { error ->
+            failPendingStart(epoch, error)
+            return true
+        }
+        if (!boardState.success) {
+            failPendingStart(epoch, boardState.preparationError ?: "EdgeFocus 拒绝启动会话")
+            return true
+        }
+        if (!StartTransactionPolicy.isAuthoritativeActive(boardState)) return false
+        appEventLog.log(
+            "SESSION_START_CONFIRMED",
+            "session=${boardState.sessionId}, phase=${boardState.sessionPhase}, preparation=${boardState.preparationState}"
+        )
+        applyBoardSessionState(boardState, fallbackDurationMinutes)
+        return true
+    }
+
+    private fun failPendingStart(epoch: Long, message: String) {
+        if (startOperationEpoch.get() != epoch) return
+        _state.update {
+            it.copy(
+                timerState = TimerState.IDLE,
+                sessionPhase = BoardSessionPhase.IDLE,
+                preparationState = BoardPreparationState.FAILED,
+                preparationError = message,
+                isSyncingWithBoard = false,
+                boardErrorMessage = message
+            )
+        }
+        appEventLog.log("SESSION_START_FAILED", message)
     }
 
     /**
@@ -599,6 +680,7 @@ class TimerStateHolder @Inject constructor(
     }
 
     fun stopSession() {
+        invalidatePendingStart()
         cancelBoardCompletionFallback()
         localCountdownJob?.cancel()
         boardSyncJob?.cancel()
@@ -664,12 +746,25 @@ class TimerStateHolder @Inject constructor(
 
     fun refreshCameraPreview() {
         if (!bleManager.isConnected()) return
+        if (_state.value.preparationState != BoardPreparationState.READY &&
+            _state.value.preparationState != BoardPreparationState.DEGRADED
+        ) return
+        val requestSessionId = _state.value.sessionId ?: return
         scope.launch {
             bleManager.getCameraPreviewImage().onSuccess { data ->
-                val preview = BoardJsonParser.parseCameraPreview(String(data, Charsets.UTF_8))
-                _state.update { it.copy(cameraPreview = preview, boardErrorMessage = null) }
+                runCatching {
+                    BoardJsonParser.parseCameraPreview(String(data, Charsets.UTF_8))
+                }.onSuccess { preview ->
+                    if (isCurrentPrecheckSession(requestSessionId)) {
+                        _state.update { it.copy(cameraPreview = preview, boardErrorMessage = null) }
+                    }
+                }.onFailure { error ->
+                    appEventLog.log("PREVIEW_PARSE", error.message ?: "invalid preview")
+                }
             }.onFailure { error ->
-                _state.update { it.copy(boardErrorMessage = "无法刷新摄像头预览：${error.message ?: "未知错误"}") }
+                if (isCurrentPrecheckSession(requestSessionId)) {
+                    _state.update { it.copy(boardErrorMessage = "无法刷新摄像头预览：${error.message ?: "未知错误"}") }
+                }
             }
         }
     }
@@ -679,14 +774,26 @@ class TimerStateHolder @Inject constructor(
     }
 
     private fun startPreviewLoop() {
+        if (!connectionSupervisor.snapshot.value.isReady || !bleManager.isConnected()) return
         if (previewJob?.isActive == true) return
         previewJob = scope.launch {
-            while (_state.value.sessionPhase == BoardSessionPhase.PRECHECK) {
+            while (isPreviewReady() &&
+                connectionSupervisor.snapshot.value.isReady &&
+                bleManager.isConnected()
+            ) {
+                val requestSessionId = _state.value.sessionId ?: break
                 bleManager.getCameraPreviewImage().onSuccess { data ->
-                    val preview = BoardJsonParser.parseCameraPreview(String(data, Charsets.UTF_8))
-                    _state.update { it.copy(cameraPreview = preview, boardErrorMessage = null) }
+                    runCatching {
+                        BoardJsonParser.parseCameraPreview(String(data, Charsets.UTF_8))
+                    }.onSuccess { preview ->
+                        if (isCurrentPrecheckSession(requestSessionId)) {
+                            _state.update { it.copy(cameraPreview = preview, boardErrorMessage = null) }
+                        }
+                    }.onFailure { error ->
+                        appEventLog.log("PREVIEW_PARSE", error.message ?: "invalid preview")
+                    }
                 }
-                delay(750L)
+                delay(PREVIEW_INTERVAL_MS)
             }
         }
     }
@@ -695,6 +802,22 @@ class TimerStateHolder @Inject constructor(
         previewJob?.cancel()
         previewJob = null
         scope.launch { bleManager.cancelPreviewRequests() }
+    }
+
+    private fun isCurrentPrecheckSession(requestSessionId: String): Boolean =
+        _state.value.sessionPhase == BoardSessionPhase.PRECHECK &&
+            _state.value.sessionId == requestSessionId
+
+    private fun isPreviewReady(): Boolean =
+        _state.value.sessionPhase == BoardSessionPhase.PRECHECK &&
+            (_state.value.preparationState == BoardPreparationState.READY ||
+                _state.value.preparationState == BoardPreparationState.DEGRADED)
+
+    private fun invalidatePendingStart() {
+        startOperationEpoch.incrementAndGet()
+        pendingStartJob?.cancel()
+        pendingStartJob = null
+        pendingStartInFlight.set(false)
     }
 
     fun refreshGimbalStatus() {
@@ -960,6 +1083,8 @@ class TimerStateHolder @Inject constructor(
                 reminderCount = boardState.reminderCount,
                 phoneDistractionCount = boardState.phoneDistractionCount,
                 sessionPhase = phase,
+                preparationState = boardState.preparationState,
+                preparationError = boardState.preparationError,
                 focusState = boardState.focusState,
                 phoneSignal = boardState.phoneSignal,
                 phoneUsageState = boardState.phoneUsageState,
@@ -1023,6 +1148,15 @@ class TimerStateHolder @Inject constructor(
                     return@onSuccess
                 }
                 applyBoardDeviceStatus(boardState)
+                if (boardState.preparationState == BoardPreparationState.FAILED) {
+                    _state.update {
+                        it.copy(
+                            preparationState = BoardPreparationState.FAILED,
+                            preparationError = boardState.preparationError,
+                            boardErrorMessage = boardState.preparationError ?: "EdgeFocus 预检准备失败"
+                        )
+                    }
+                }
 
                 val isActive = stateData.optBoolean("active", false)
                 val focusState = stateData.optInt("focus_state", 0)
@@ -1120,12 +1254,14 @@ class TimerStateHolder @Inject constructor(
     // ==================== 板端同步 ====================
 
     private fun startBoardSync() {
+        if (!connectionSupervisor.snapshot.value.isReady) return
         boardSyncJob?.cancel()
         boardSyncJob = scope.launch {
             while ((_state.value.timerState == TimerState.RUNNING ||
                    _state.value.timerState == TimerState.PRECHECK ||
                    _state.value.timerState == TimerState.PAUSED) &&
                    _state.value.sessionMode == SessionMode.EDGEFOCUS &&
+                   connectionSupervisor.snapshot.value.isReady &&
                    bleManager.isConnected()) {
                 try {
                     val result = bleManager.getCurrentState()
@@ -1142,7 +1278,8 @@ class TimerStateHolder @Inject constructor(
 
     private fun stopBoardSync() {
         boardSyncJob?.cancel()
-        _state.update { it.copy(isSyncingWithBoard = false) }
+        boardSyncJob = null
+        _state.update { it.copy(isSyncingWithBoard = pendingStartInFlight.get()) }
     }
 
     private fun calibrateFromBoard(jsonString: String) {

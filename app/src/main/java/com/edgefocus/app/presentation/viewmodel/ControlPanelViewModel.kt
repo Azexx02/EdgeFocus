@@ -11,6 +11,7 @@ import com.edgefocus.app.data.remote.BoardJsonParser
 import com.edgefocus.app.data.remote.BoardPreferences
 import com.edgefocus.app.data.remote.BleManager
 import com.edgefocus.app.data.remote.BoardPrecheck
+import com.edgefocus.app.data.remote.BoardPreparationState
 import com.edgefocus.app.data.remote.BoardSessionPhase
 import com.edgefocus.app.data.remote.CameraPreviewImage
 import com.edgefocus.app.data.remote.GimbalStatus
@@ -76,6 +77,8 @@ data class ControlPanelUiState(
     val boardPowerProfile: PowerProfile = PowerProfile.GO,
     val elapsedMs: Long = 0L,
     val precheck: BoardPrecheck? = null,
+    val preparationState: BoardPreparationState = BoardPreparationState.NONE,
+    val preparationError: String? = null,
     val outputCapability: OutputCapability? = null,
     val cameraPreview: CameraPreviewImage? = null,
     val gimbalStatus: GimbalStatus? = null,
@@ -188,6 +191,8 @@ class ControlPanelViewModel @Inject constructor(
                         boardPowerProfile = sharedState.boardPowerProfile,
                         elapsedMs = sharedState.elapsedMs,
                         precheck = sharedState.precheck,
+                        preparationState = sharedState.preparationState,
+                        preparationError = sharedState.preparationError,
                         outputCapability = sharedState.outputCapability,
                         cameraPreview = sharedState.cameraPreview,
                         gimbalStatus = sharedState.gimbalStatus,

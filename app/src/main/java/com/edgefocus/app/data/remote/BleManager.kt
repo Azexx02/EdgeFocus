@@ -53,6 +53,7 @@ class BleManager @Inject constructor(
     companion object {
         private const val TAG = "BleManager"
         private const val WRITE_TIMEOUT_MS = 5000L
+        private const val MAX_LOG_CONTENT_CHARS = 1024
         private const val REQUESTED_MTU = 517
         private const val BLUETOOTH_STATUS_SUCCESS = 0
 
@@ -209,8 +210,15 @@ class BleManager @Inject constructor(
     }
 
     private fun logBle(direction: String, content: String) {
-        Log.d(TAG, "BLE $direction: $content")
-        bleLogListener?.invoke(direction, content)
+        val safeContent = if (content.length > MAX_LOG_CONTENT_CHARS ||
+            content.contains("\"data_base64\"")
+        ) {
+            "payload omitted (${content.toByteArray(Charsets.UTF_8).size} bytes)"
+        } else {
+            content
+        }
+        Log.d(TAG, "BLE $direction: $safeContent")
+        bleLogListener?.invoke(direction, safeContent)
     }
 
     private val scanCallback = object : ScanCallback() {
@@ -972,7 +980,11 @@ class BleManager @Inject constructor(
     }
 
     @SuppressLint("MissingPermission")
-    override suspend fun sessionControl(action: String, targetDurationMin: Int?): Result<ByteArray> {
+    override suspend fun sessionControl(
+        action: String,
+        targetDurationMin: Int?,
+        operationId: String?
+    ): Result<ByteArray> {
         // 模拟设备回复
         if (simulatedConnected && simulateDeviceResponse) {
             val actionName = when (action) {
@@ -991,7 +1003,7 @@ class BleManager @Inject constructor(
                 if (simulateAutoCountdown) {
                     simStartTime = System.currentTimeMillis()
                 }
-                val response = """{"status":"success","data":{"success":true,"remaining_ms":${durationMs},"target_duration_ms":${durationMs}}}"""
+                val response = """{"status":"success","data":{"success":true,"session_phase":"precheck","remaining_ms":${durationMs},"target_duration_ms":${durationMs},"runtime_snapshot":{"session":{"phase":"PRECHECK","preparation_state":"READY","operation_id":${org.json.JSONObject.quote(operationId)}}}}}"""
                 logBle("RECV", response)
                 return Result.success(response.toByteArray())
             }
@@ -1013,7 +1025,11 @@ class BleManager @Inject constructor(
             "stop" -> "end"
             else -> action
         }
-        val data = BoardJsonParser.buildSessionControl(actionName, targetDurationMin).toString()
+        val data = BoardJsonParser.buildSessionControl(
+            actionName,
+            targetDurationMin,
+            operationId
+        ).toString()
         return sendDataAndAwait(data.toByteArray(Charsets.UTF_8), HostRequestPriority.P0_CRITICAL)
     }
 

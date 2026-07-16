@@ -1,7 +1,5 @@
 package com.edgefocus.app.presentation.ui.controlpanel
 
-import android.graphics.BitmapFactory
-import android.util.Base64
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -62,6 +60,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.verticalScroll
 import androidx.hilt.navigation.compose.hiltViewModel
 import com.edgefocus.app.data.remote.BoardSessionPhase
+import com.edgefocus.app.data.remote.BoardPreparationState
 import com.edgefocus.app.data.remote.ConnectionState
 import com.edgefocus.app.data.remote.PowerProfile
 import com.edgefocus.app.data.ble.model.ExternalPowerState
@@ -70,6 +69,7 @@ import com.edgefocus.app.presentation.ui.home.DurationSelectorRing
 import com.edgefocus.app.presentation.ui.home.PomodoroTimer
 import com.edgefocus.app.presentation.viewmodel.BleViewModel
 import com.edgefocus.app.presentation.viewmodel.ControlPanelViewModel
+import com.edgefocus.app.presentation.shared.rememberCameraPreviewBitmap
 import com.edgefocus.app.util.TimeUtils
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
@@ -354,6 +354,8 @@ private fun PrecheckPage(
     viewModel: ControlPanelViewModel,
     uiState: com.edgefocus.app.presentation.viewmodel.ControlPanelUiState
 ) {
+    val preparationReady = uiState.preparationState == BoardPreparationState.READY ||
+        uiState.preparationState == BoardPreparationState.DEGRADED
     Row(
         modifier = Modifier
             .fillMaxSize()
@@ -373,7 +375,11 @@ private fun PrecheckPage(
             ) {
                 Text("摄像头预检", style = MaterialTheme.typography.titleMedium)
                 Text(
-                    "请确认画面、距离和坐姿。预览是拍照式刷新，不是实时视频。",
+                    when (uiState.preparationState) {
+                        BoardPreparationState.INITIALIZING -> "EdgeFocus 正在准备摄像头与预检功能…"
+                        BoardPreparationState.FAILED -> uiState.preparationError ?: "EdgeFocus 预检准备失败"
+                        else -> "请确认画面、距离和坐姿。预览是拍照式刷新，不是实时视频。"
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -386,18 +392,11 @@ private fun PrecheckPage(
                 }
                 val preview = uiState.cameraPreview
                 if (preview?.available == true) {
-                    val bitmap = remember(preview.sequence, preview.dataBase64) {
-                        runCatching {
-                            val encoded = preview.dataBase64
-                                ?.substringAfter("base64,", preview.dataBase64.orEmpty())
-                                .orEmpty()
-                            val bytes = Base64.decode(encoded, Base64.DEFAULT)
-                            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                        }.getOrNull()
-                    }
-                    if (bitmap != null) {
+                    val bitmap by rememberCameraPreviewBitmap(preview)
+                    val decodedBitmap = bitmap
+                    if (decodedBitmap != null) {
                         Image(
-                            bitmap = bitmap.asImageBitmap(),
+                            bitmap = decodedBitmap.asImageBitmap(),
                             contentDescription = "主机摄像头预览",
                             modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
                             contentScale = ContentScale.Fit
@@ -416,13 +415,13 @@ private fun PrecheckPage(
                     Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
                 }
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = viewModel::refreshCameraPreview) {
+                    OutlinedButton(onClick = viewModel::refreshCameraPreview, enabled = preparationReady) {
                         Text("刷新画面")
                     }
-                    OutlinedButton(onClick = viewModel::skipPrecheck) {
+                    OutlinedButton(onClick = viewModel::skipPrecheck, enabled = preparationReady) {
                         Text("继续")
                     }
-                    TextButton(onClick = viewModel::skipCalibration) {
+                    TextButton(onClick = viewModel::skipCalibration, enabled = preparationReady) {
                         Text("跳过")
                     }
                 }

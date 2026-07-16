@@ -1,7 +1,5 @@
 package com.edgefocus.app.presentation.ui.home
 
-import android.graphics.BitmapFactory
-import android.util.Base64
 import androidx.compose.foundation.Image
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
@@ -60,7 +58,9 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import com.edgefocus.app.data.SessionMode
 import com.edgefocus.app.data.remote.ConnectionState
 import com.edgefocus.app.data.remote.PowerProfile
+import com.edgefocus.app.data.remote.BoardPreparationState
 import com.edgefocus.app.data.ble.model.ExternalPowerState
+import com.edgefocus.app.presentation.shared.rememberCameraPreviewBitmap
 import com.edgefocus.app.domain.model.SessionType
 import com.edgefocus.app.domain.model.TimerState
 import com.edgefocus.app.presentation.viewmodel.BleViewModel
@@ -323,6 +323,8 @@ private fun HomePrecheckPage(
     viewModel: HomeViewModel,
     modifier: Modifier = Modifier
 ) {
+    val preparationReady = uiState.preparationState == BoardPreparationState.READY ||
+        uiState.preparationState == BoardPreparationState.DEGRADED
     Column(
         modifier = modifier
             .fillMaxWidth()
@@ -333,7 +335,11 @@ private fun HomePrecheckPage(
     ) {
         Text("开始前预检", style = MaterialTheme.typography.headlineMedium)
         Text(
-            uiState.precheckGuidance ?: "请确认画面、距离和坐姿，再开始正式专注。",
+            when (uiState.preparationState) {
+                BoardPreparationState.INITIALIZING -> "EdgeFocus 正在准备摄像头与预检功能…"
+                BoardPreparationState.FAILED -> uiState.preparationError ?: "EdgeFocus 预检准备失败"
+                else -> uiState.precheckGuidance ?: "请确认画面、距离和坐姿，再开始正式专注。"
+            },
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -347,18 +353,11 @@ private fun HomePrecheckPage(
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 val preview = uiState.cameraPreview
-                val bitmap = remember(preview?.sequence, preview?.dataBase64) {
-                    runCatching {
-                        val encoded = preview?.dataBase64
-                            ?.substringAfter("base64,", preview.dataBase64.orEmpty())
-                            .orEmpty()
-                        val bytes = Base64.decode(encoded, Base64.DEFAULT)
-                        BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                    }.getOrNull()
-                }
-                if (preview?.available == true && bitmap != null) {
+                val bitmap by rememberCameraPreviewBitmap(preview)
+                val decodedBitmap = bitmap
+                if (preview?.available == true && decodedBitmap != null) {
                     Image(
-                        bitmap = bitmap.asImageBitmap(),
+                        bitmap = decodedBitmap.asImageBitmap(),
                         contentDescription = "主机摄像头预览",
                         modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
                         contentScale = ContentScale.Fit
@@ -366,7 +365,7 @@ private fun HomePrecheckPage(
                 } else {
                     Text("暂无预览，点击刷新获取最近一帧。")
                 }
-                OutlinedButton(onClick = viewModel::refreshCameraPreview) {
+                OutlinedButton(onClick = viewModel::refreshCameraPreview, enabled = preparationReady) {
                     Text("刷新画面")
                 }
             }
@@ -374,25 +373,26 @@ private fun HomePrecheckPage(
 
         if (uiState.precheck?.gimbal != null) {
             Text("云台微调", style = MaterialTheme.typography.titleMedium)
-            OutlinedButton(onClick = { viewModel.nudgeGimbal("UP") }) { Text("上") }
+            OutlinedButton(onClick = { viewModel.nudgeGimbal("UP") }, enabled = preparationReady) { Text("上") }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { viewModel.nudgeGimbal("LEFT") }) { Text("左") }
-                OutlinedButton(onClick = viewModel::centerGimbal) { Text("归中") }
-                OutlinedButton(onClick = { viewModel.nudgeGimbal("RIGHT") }) { Text("右") }
+                OutlinedButton(onClick = { viewModel.nudgeGimbal("LEFT") }, enabled = preparationReady) { Text("左") }
+                OutlinedButton(onClick = viewModel::centerGimbal, enabled = preparationReady) { Text("归中") }
+                OutlinedButton(onClick = { viewModel.nudgeGimbal("RIGHT") }, enabled = preparationReady) { Text("右") }
             }
-            OutlinedButton(onClick = { viewModel.nudgeGimbal("DOWN") }) { Text("下") }
-            TextButton(onClick = viewModel::stopGimbal) { Text("停止云台") }
+            OutlinedButton(onClick = { viewModel.nudgeGimbal("DOWN") }, enabled = preparationReady) { Text("下") }
+            TextButton(onClick = viewModel::stopGimbal, enabled = preparationReady) { Text("停止云台") }
         }
 
         uiState.boardErrorMessage?.let {
             Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
         }
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            OutlinedButton(onClick = viewModel::skipPrecheckAutoAdjust) { Text("跳过自动调整") }
+            OutlinedButton(onClick = viewModel::skipPrecheckAutoAdjust, enabled = preparationReady) { Text("跳过自动调整") }
             TactileButton(
                 onClick = viewModel::confirmPrecheck,
                 containerColor = MaterialTheme.colorScheme.primary,
-                contentColor = Color.White
+                contentColor = Color.White,
+                enabled = preparationReady
             ) {
                 Icon(Icons.Default.PlayArrow, contentDescription = null)
                 Spacer(modifier = Modifier.width(6.dp))

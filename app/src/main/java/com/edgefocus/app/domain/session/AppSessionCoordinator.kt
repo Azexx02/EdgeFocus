@@ -109,7 +109,7 @@ class AppSessionCoordinator @Inject constructor(
         val sessionId = "session_$now"
         runtime = LocalSessionRuntime(sessionId, owner, now)
         if (owner == SessionMode.EDGEFOCUS) {
-            timerStateHolder.startEdgeFocusSession(durationMinutes, sessionId, now)
+            timerStateHolder.startEdgeFocusSession(durationMinutes, now)
         } else {
             timerStateHolder.startLocalSession(durationMinutes, sessionId, now)
         }

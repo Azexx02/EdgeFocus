@@ -17,6 +17,26 @@ enum class BoardSessionPhase(val wireValue: String) {
     }
 }
 
+enum class BoardPreparationState {
+    NONE,
+    INITIALIZING,
+    READY,
+    DEGRADED,
+    FAILED;
+
+    companion object {
+        fun fromWire(value: String?, phase: BoardSessionPhase): BoardPreparationState {
+            val normalized = value?.trim().orEmpty()
+            if (normalized.isBlank()) {
+                return if (phase == BoardSessionPhase.PRECHECK) READY else NONE
+            }
+            val parsed = entries.firstOrNull { it.name.equals(normalized, ignoreCase = true) }
+            if (parsed != null) return parsed
+            return if (phase == BoardSessionPhase.PRECHECK) INITIALIZING else NONE
+        }
+    }
+}
+
 enum class NotificationMode(val wireValue: String) {
     NORMAL("normal"),
     SILENT("silent");
@@ -67,6 +87,11 @@ data class BoardSessionState(
     val phoneDistractionCount: Int = 0,
     val calibrationCompleted: Boolean = false,
     val sessionPhase: BoardSessionPhase = BoardSessionPhase.IDLE,
+    val preparationState: BoardPreparationState = BoardPreparationState.NONE,
+    val preparationError: String? = null,
+    val preparationFailedAtMs: Long = 0L,
+    val startGeneration: Long = 0L,
+    val operationId: String? = null,
     val sessionStartSource: String? = null,
     val precheck: BoardPrecheck? = null,
     val precheckControl: PrecheckControl? = null,
@@ -178,18 +203,31 @@ data class BoardPreferences(
 
 object BoardJsonParser {
 
+    fun parseResponseError(jsonString: String): String? {
+        val root = JSONObject(jsonString)
+        if (!root.optString("status").equals("error", ignoreCase = true)) return null
+        return root.optString("error").takeIf { it.isNotBlank() }
+            ?: root.optString("message").takeIf { it.isNotBlank() }
+            ?: "EdgeFocus 拒绝了请求"
+    }
+
     fun buildCommand(command: String): JSONObject {
         return JSONObject().apply {
             put("cmd", command)
         }
     }
 
-    fun buildSessionControl(action: String, targetDurationMin: Int? = null): JSONObject {
+    fun buildSessionControl(
+        action: String,
+        targetDurationMin: Int? = null,
+        operationId: String? = null
+    ): JSONObject {
         val data = JSONObject().apply {
             put("action", action)
             if (action == "start") {
                 targetDurationMin?.let { put("target_duration_min", it) }
                 put("source_mode", "live_camera")
+                operationId?.takeIf { it.isNotBlank() }?.let { put("operation_id", it) }
             }
         }
         return JSONObject().apply {
@@ -290,6 +328,10 @@ object BoardJsonParser {
             runtimeSession?.optString("phase")?.takeIf { it.isNotBlank() }
                 ?: data.optString("session_phase").takeIf { it.isNotBlank() }
         )
+        val preparationState = BoardPreparationState.fromWire(
+            runtimeSession?.optString("preparation_state")?.takeIf { it.isNotBlank() },
+            phase
+        )
         return BoardSessionState(
             success = data.optBoolean("success", true),
             alreadyActive = data.optBoolean("already_active", false),
@@ -328,6 +370,13 @@ object BoardJsonParser {
                 data.optBoolean("calibration_completed", false)
             },
             sessionPhase = phase,
+            preparationState = preparationState,
+            preparationError = runtimeSession?.optString("preparation_error")
+                ?.takeIf { it.isNotBlank() && it != "null" },
+            preparationFailedAtMs = runtimeSession?.optLong("preparation_failed_at_ms", 0L) ?: 0L,
+            startGeneration = runtimeSession?.optLong("start_generation", 0L) ?: 0L,
+            operationId = runtimeSession?.optString("operation_id")
+                ?.takeIf { it.isNotBlank() && it != "null" },
             sessionStartSource = data.optJsonString("session_start_source"),
             precheck = parsePrecheck(data.optJSONObject("precheck")),
             precheckControl = parsePrecheckControl(data.optJSONObject("precheck_control")),

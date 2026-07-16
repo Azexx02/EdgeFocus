@@ -36,7 +36,11 @@ interface BleCommand {
     suspend fun getCameraPreviewImage(): Result<ByteArray>
     suspend fun getGimbalStatus(): Result<ByteArray>
     suspend fun getBandStatus(): Result<ByteArray>
-    suspend fun sessionControl(action: String, targetDurationMin: Int? = null): Result<ByteArray>
+    suspend fun sessionControl(
+        action: String,
+        targetDurationMin: Int? = null,
+        operationId: String? = null
+    ): Result<ByteArray>
     suspend fun updatePreferences(key: String, value: String): Result<ByteArray>
     suspend fun updatePreferences(preferences: Map<String, Any?>): Result<ByteArray>
     suspend fun gimbalControl(

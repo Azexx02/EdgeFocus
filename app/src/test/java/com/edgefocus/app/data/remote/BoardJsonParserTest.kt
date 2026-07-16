@@ -11,12 +11,17 @@ class BoardJsonParserTest {
 
     @Test
     fun buildSessionControlStartIncludesTargetDuration() {
-        val json = BoardJsonParser.buildSessionControl("start", targetDurationMin = 25)
+        val json = BoardJsonParser.buildSessionControl(
+            "start",
+            targetDurationMin = 25,
+            operationId = "android-123-1"
+        )
 
         assertEquals("session_control", json.getString("cmd"))
         val data = json.getJSONObject("data")
         assertEquals("start", data.getString("action"))
         assertEquals(25, data.getInt("target_duration_min"))
+        assertEquals("android-123-1", data.getString("operation_id"))
     }
 
     @Test
@@ -260,6 +265,63 @@ class BoardJsonParserTest {
         assertFalse(state.active)
         assertFalse(state.calibrationCompleted)
         assertTrue(state.representsActiveRuntime())
+    }
+
+    @Test
+    fun runtimeSnapshotParsesInitializingPreparationCorrelation() {
+        val state = BoardJsonParser.parseSessionState(
+            """
+                {
+                  "status":"success",
+                  "data":{
+                    "runtime_snapshot":{
+                      "session":{
+                        "id":"session_prepare_1",
+                        "phase":"PRECHECK",
+                        "remaining_ms":1500000,
+                        "preparation_state":"INITIALIZING",
+                        "start_generation":8,
+                        "operation_id":"android-123-8"
+                      }
+                    }
+                  }
+                }
+            """.trimIndent()
+        )
+
+        assertEquals(BoardSessionPhase.PRECHECK, state.sessionPhase)
+        assertEquals(BoardPreparationState.INITIALIZING, state.preparationState)
+        assertEquals(8L, state.startGeneration)
+        assertEquals("android-123-8", state.operationId)
+    }
+
+    @Test
+    fun legacyPrecheckWithoutPreparationStateDefaultsReady() {
+        val state = BoardJsonParser.parseSessionState(
+            """{"status":"success","data":{"session_phase":"precheck"}}"""
+        )
+
+        assertEquals(BoardPreparationState.READY, state.preparationState)
+    }
+
+    @Test
+    fun unknownPreparationStateStaysInitializing() {
+        val state = BoardJsonParser.parseSessionState(
+            """{"status":"success","data":{"runtime_snapshot":{"session":{"phase":"PRECHECK","preparation_state":"FUTURE_VALUE"}}}}"""
+        )
+
+        assertEquals(BoardPreparationState.INITIALIZING, state.preparationState)
+    }
+
+    @Test
+    fun responseEnvelopeErrorIsReturnedBeforeSessionParsing() {
+        assertEquals(
+            "runtime unavailable",
+            BoardJsonParser.parseResponseError(
+                """{"status":"error","error":"runtime unavailable"}"""
+            )
+        )
+        assertNull(BoardJsonParser.parseResponseError("""{"status":"success","data":{}}"""))
     }
 
     @Test
