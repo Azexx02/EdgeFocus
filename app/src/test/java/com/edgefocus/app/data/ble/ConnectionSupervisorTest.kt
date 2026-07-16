@@ -8,6 +8,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -79,13 +80,75 @@ class ConnectionSupervisorTest {
         assertEquals(HostConnectionPhase.DISCONNECTED, supervisor.snapshot.value.phase)
     }
 
+    @Test
+    fun `cold start disconnect schedules reconnect without previous ready state`() = runTest {
+        val transport = FakeTransport(autoReconnect = true)
+        val supervisor = ConnectionSupervisor(
+            transport,
+            CoroutineScope(StandardTestDispatcher(testScheduler))
+        )
+
+        supervisor.start()
+        runCurrent()
+        advanceTimeBy(1_000)
+        runCurrent()
+
+        assertEquals(1, transport.reconnectRequests)
+    }
+
+    @Test
+    fun `repeated cold start failures advance reconnect backoff`() = runTest {
+        val transport = FakeTransport(autoReconnect = true)
+        val supervisor = ConnectionSupervisor(
+            transport,
+            CoroutineScope(StandardTestDispatcher(testScheduler))
+        )
+
+        supervisor.start()
+        runCurrent()
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertEquals(1, transport.reconnectRequests)
+
+        transport.rawConnectionState.value = ConnectionState.CONNECTING
+        runCurrent()
+        transport.rawConnectionState.value = ConnectionState.ERROR
+        runCurrent()
+        advanceTimeBy(1_999)
+        runCurrent()
+        assertEquals(1, transport.reconnectRequests)
+        advanceTimeBy(1)
+        runCurrent()
+        assertEquals(2, transport.reconnectRequests)
+    }
+
+    @Test
+    fun `connecting without callback is cancelled after timeout`() = runTest {
+        val transport = FakeTransport(autoReconnect = true)
+        val supervisor = ConnectionSupervisor(
+            transport,
+            CoroutineScope(StandardTestDispatcher(testScheduler))
+        )
+
+        supervisor.start()
+        transport.rawConnectionState.value = ConnectionState.CONNECTING
+        runCurrent()
+        advanceTimeBy(15_000)
+        runCurrent()
+
+        assertEquals(1, transport.cancelRequests)
+    }
+
     private class FakeTransport(
         private val stateResponse: String =
-            """{"status":"success","data":{"session_phase":"idle","active":false,"external_power_state":"UNKNOWN"}}"""
+            """{"status":"success","data":{"session_phase":"idle","active":false,"external_power_state":"UNKNOWN"}}""",
+        private val autoReconnect: Boolean = false
     ) : HostConnectionTransport {
         override val rawConnectionState = MutableStateFlow(ConnectionState.DISCONNECTED)
         val calls = mutableListOf<String>()
         var stateGate: CompletableDeferred<Unit>? = null
+        var reconnectRequests = 0
+        var cancelRequests = 0
 
         override suspend fun clientHello(): Result<ByteArray> {
             calls += "hello"
@@ -101,7 +164,15 @@ class ConnectionSupervisorTest {
             return Result.success(stateResponse.toByteArray())
         }
 
-        override fun shouldAutoReconnect(): Boolean = false
-        override fun requestReconnect(): Boolean = false
+        override fun shouldAutoReconnect(): Boolean = autoReconnect
+        override fun requestReconnect(): Boolean {
+            reconnectRequests += 1
+            return true
+        }
+
+        override fun cancelStaleConnectionAttempt(): Boolean {
+            cancelRequests += 1
+            return true
+        }
     }
 }

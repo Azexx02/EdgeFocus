@@ -12,6 +12,7 @@ import com.edgefocus.app.data.remote.ConnectionState
 import com.edgefocus.app.data.remote.PhoneUsage
 import com.edgefocus.app.data.remote.PushEventHandler
 import com.edgefocus.app.data.remote.TimerComplete
+import com.edgefocus.app.data.ble.BleAutoConnectCoordinator
 import com.edgefocus.app.domain.model.DeviceStatus
 import com.edgefocus.app.domain.model.FocusState
 import com.edgefocus.app.domain.repository.ISettingsRepository
@@ -29,7 +30,8 @@ import javax.inject.Inject
 class BleViewModel @Inject constructor(
     application: Application,
     private val bleManager: BleManager,
-    private val settingsRepository: ISettingsRepository
+    private val settingsRepository: ISettingsRepository,
+    private val autoConnectCoordinator: BleAutoConnectCoordinator
 ) : AndroidViewModel(application) {
 
     companion object {
@@ -83,23 +85,6 @@ class BleViewModel @Inject constructor(
         }
 
         // 设置推送事件处理器
-        viewModelScope.launch {
-            val settings = settingsRepository.getSettingsOnce()
-            val decision = BleMacAddressPolicy.decide(
-                roomMac = settings?.edgeFocusMacAddress.orEmpty(),
-                legacyMac = prefs.getString("edge_focus_mac", "").orEmpty()
-            )
-            if (decision.shouldMigrateLegacy) {
-                settingsRepository.updateSettings(
-                    (settings ?: com.edgefocus.app.data.local.entity.Settings())
-                        .copy(edgeFocusMacAddress = decision.preferredMac)
-                )
-            }
-            if (decision.preferredMac.isNotBlank()) {
-                bleManager.setTargetMac(decision.preferredMac)
-            }
-        }
-
         bleManager.setPushEventHandler(pushEventHandler)
     }
 
@@ -127,6 +112,7 @@ class BleViewModel @Inject constructor(
             _simulatedConnectionState.value = ConnectionState.DISCONNECTED
         }
         if (decision.shouldStartRealScan) {
+            autoConnectCoordinator.onUserRequestedScan()
             bleManager.startScan(autoConnectStoredTarget = decision.shouldAutoConnectStoredTarget)
         }
     }
@@ -141,12 +127,14 @@ class BleViewModel @Inject constructor(
         if (isSimulatingBle()) {
             _simulatedConnectionState.value = ConnectionState.DISCONNECTED
         } else {
+            autoConnectCoordinator.onUserDisconnected()
             bleManager.disconnect()
         }
     }
 
     fun connectToDiscoveredDevice(address: String) {
         if (!isSimulatingBle()) {
+            autoConnectCoordinator.onUserSelectedDevice(address)
             bleManager.connectToDiscoveredDevice(address)
         }
     }

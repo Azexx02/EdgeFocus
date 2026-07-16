@@ -18,7 +18,7 @@ internal object BleGattConnectionPolicy {
         currentGattAddress: String?,
         requestedAddress: String
     ): Boolean {
-        return currentState == ConnectionState.CONNECTED &&
+        return currentState in setOf(ConnectionState.CONNECTING, ConnectionState.CONNECTED) &&
             currentGattAddress.equals(requestedAddress, ignoreCase = true)
     }
 }

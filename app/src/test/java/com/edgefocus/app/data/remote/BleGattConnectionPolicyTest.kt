@@ -81,12 +81,23 @@ class BleGattConnectionPolicyTest {
     }
 
     @Test
-    fun doesNotSkipConnectingStateSoStaleAttemptsCanBeReplaced() {
-        assertFalse(
+    fun skipsDuplicateConnectingRequestToSameAddress() {
+        assertTrue(
             BleGattConnectionPolicy.shouldSkipConnectionRequest(
                 currentState = ConnectionState.CONNECTING,
                 currentGattAddress = "AA:BB:CC:DD:EE:FF",
                 requestedAddress = "AA:BB:CC:DD:EE:FF"
+            )
+        )
+    }
+
+    @Test
+    fun allowsConnectingRequestToReplaceDifferentAddress() {
+        assertFalse(
+            BleGattConnectionPolicy.shouldSkipConnectionRequest(
+                currentState = ConnectionState.CONNECTING,
+                currentGattAddress = "AA:BB:CC:DD:EE:01",
+                requestedAddress = "AA:BB:CC:DD:EE:02"
             )
         )
     }

@@ -68,6 +68,8 @@ class BleManager @Inject constructor(
 
     @Volatile
     private var bluetoothGatt: BluetoothGatt? = null
+    private var pendingConnectionAddress: String? = null
+    private var connectionAttemptGeneration = 0L
     @Volatile
     private var writeCharacteristic: BluetoothGattCharacteristic? = null
     @Volatile
@@ -232,8 +234,12 @@ class BleManager @Inject constructor(
             if (scanDecision.shouldAutoConnectTarget) {
                 Log.d(TAG, "Found target MAC: $deviceAddress")
                 bluetoothAdapter?.bluetoothLeScanner?.stopScan(this)
-                _connectionState.value = ConnectionState.CONNECTING
-                connectToDevice(result.device)
+                val attemptGeneration = synchronized(writeLock) {
+                    pendingConnectionAddress = deviceAddress
+                    _connectionState.value = ConnectionState.CONNECTING
+                    ++connectionAttemptGeneration
+                }
+                connectToDevice(result.device, attemptGeneration)
                 return
             }
 
@@ -439,8 +445,9 @@ class BleManager @Inject constructor(
     }
 
     @SuppressLint("MissingPermission")
-    private fun connectToDevice(device: BluetoothDevice) {
+    private fun connectToDevice(device: BluetoothDevice, attemptGeneration: Long) {
         val previousGatt = synchronized(writeLock) {
+            if (attemptGeneration != connectionAttemptGeneration) return
             val gatt = bluetoothGatt
             bluetoothGatt = null
             writeCharacteristic = null
@@ -483,12 +490,35 @@ class BleManager @Inject constructor(
         }
 
         if (gatt == null) {
-            _connectionState.value = ConnectionState.ERROR
+            synchronized(writeLock) {
+                if (attemptGeneration != connectionAttemptGeneration) {
+                    return
+                } else {
+                    pendingConnectionAddress = null
+                    _connectionState.value = ConnectionState.ERROR
+                }
+            }
             return
         }
 
-        synchronized(writeLock) {
-            bluetoothGatt = gatt
+        val accepted = synchronized(writeLock) {
+            if (attemptGeneration == connectionAttemptGeneration &&
+                _connectionState.value == ConnectionState.CONNECTING
+            ) {
+                bluetoothGatt = gatt
+                pendingConnectionAddress = null
+                true
+            } else {
+                false
+            }
+        }
+        if (!accepted) {
+            try {
+                gatt.disconnect()
+            } catch (_: SecurityException) {
+            } catch (_: IllegalStateException) {
+            }
+            gatt.close()
         }
     }
 
@@ -579,6 +609,8 @@ class BleManager @Inject constructor(
     fun disconnect() {
         autoReconnectEnabled = false
         synchronized(writeLock) {
+            ++connectionAttemptGeneration
+            pendingConnectionAddress = null
             bluetoothGatt?.disconnect()
             bluetoothGatt?.close()
             bluetoothGatt = null
@@ -776,6 +808,38 @@ class BleManager @Inject constructor(
     }
 
     @SuppressLint("MissingPermission")
+    fun cancelStaleConnectionAttempt(): Boolean {
+        if (_connectionState.value != ConnectionState.CONNECTING) return false
+        val (staleGatt, timeoutGeneration) = synchronized(writeLock) {
+            val generation = ++connectionAttemptGeneration
+            val gatt = bluetoothGatt
+            bluetoothGatt = null
+            pendingConnectionAddress = null
+            writeCharacteristic = null
+            notifyCharacteristic = null
+            gatt to generation
+        }
+        try {
+            staleGatt?.disconnect()
+        } catch (e: SecurityException) {
+            Log.w(TAG, "Bluetooth permission denied while timing out connection: ${e.message}")
+        } catch (e: IllegalStateException) {
+            Log.w(TAG, "Stale Bluetooth connection could not be disconnected: ${e.message}")
+        }
+        staleGatt?.close()
+        return synchronized(writeLock) {
+            if (connectionAttemptGeneration == timeoutGeneration &&
+                _connectionState.value == ConnectionState.CONNECTING
+            ) {
+                _connectionState.value = ConnectionState.ERROR
+                true
+            } else {
+                false
+            }
+        }
+    }
+
+    @SuppressLint("MissingPermission")
     fun connectToDiscoveredDevice(address: String) {
         val adapter = bluetoothAdapter
         if (adapter?.isEnabled != true) {
@@ -785,17 +849,6 @@ class BleManager @Inject constructor(
         }
         targetMacAddress = address
         autoReconnectEnabled = true
-        val currentGattAddress = synchronized(writeLock) {
-            bluetoothGatt?.device?.address
-        }
-        if (BleGattConnectionPolicy.shouldSkipConnectionRequest(
-                currentState = _connectionState.value,
-                currentGattAddress = currentGattAddress,
-                requestedAddress = address
-            )
-        ) {
-            return
-        }
         val device = try {
             adapter.getRemoteDevice(address)
         } catch (e: IllegalArgumentException) {
@@ -803,6 +856,24 @@ class BleManager @Inject constructor(
             _connectionState.value = ConnectionState.ERROR
             return
         }
+        var attemptGeneration = 0L
+        val shouldSkip = synchronized(writeLock) {
+            val currentAddress = bluetoothGatt?.device?.address ?: pendingConnectionAddress
+            if (BleGattConnectionPolicy.shouldSkipConnectionRequest(
+                    currentState = _connectionState.value,
+                    currentGattAddress = currentAddress,
+                    requestedAddress = address
+                )
+            ) {
+                true
+            } else {
+                pendingConnectionAddress = address
+                _connectionState.value = ConnectionState.CONNECTING
+                attemptGeneration = ++connectionAttemptGeneration
+                false
+            }
+        }
+        if (shouldSkip) return
         try {
             adapter.bluetoothLeScanner?.stopScan(scanCallback)
         } catch (e: SecurityException) {
@@ -810,8 +881,7 @@ class BleManager @Inject constructor(
         } catch (e: IllegalStateException) {
             Log.e(TAG, "Bluetooth scan could not be stopped before connect: ${e.message}", e)
         }
-        _connectionState.value = ConnectionState.CONNECTING
-        connectToDevice(device)
+        connectToDevice(device, attemptGeneration)
     }
 
     fun clearDiscoveredDevices() {

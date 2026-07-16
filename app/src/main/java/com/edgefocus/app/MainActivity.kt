@@ -29,6 +29,7 @@ import com.edgefocus.app.presentation.shared.shouldEnableBlackScreenSaver
 import com.edgefocus.app.domain.alert.AlertDeliveryCoordinator
 import com.edgefocus.app.data.TimerStateHolder
 import com.edgefocus.app.data.local.dao.SettingsDao
+import com.edgefocus.app.data.ble.BleAutoConnectCoordinator
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import javax.inject.Inject
@@ -46,6 +47,9 @@ class MainActivity : ComponentActivity() {
     @Inject
     lateinit var timerStateHolder: TimerStateHolder
 
+    @Inject
+    lateinit var autoConnectCoordinator: BleAutoConnectCoordinator
+
     companion object {
         private const val TAG = "MainActivity"
     }
@@ -57,6 +61,9 @@ class MainActivity : ComponentActivity() {
         if (!allGranted) {
             Log.w(TAG, "Some permissions were not granted")
         }
+        // Re-evaluate the BLE-specific Gate even when an unrelated permission
+        // (for example notifications) was denied.
+        autoConnectCoordinator.retryNow()
         checkUsageStatsPermission()
     }
 
@@ -103,6 +110,11 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent?) {
         super.onNewIntent(intent)
         handleNfcIntent(intent)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        autoConnectCoordinator.retryNow()
     }
 
     private fun handleNfcIntent(intent: Intent?) {
@@ -160,6 +172,7 @@ class MainActivity : ComponentActivity() {
         if (permissions.isNotEmpty()) {
             permissionLauncher.launch(permissions.toTypedArray())
         } else {
+            autoConnectCoordinator.retryNow()
             checkUsageStatsPermission()
         }
     }
