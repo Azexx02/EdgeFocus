@@ -1,6 +1,6 @@
 # EdgeFocus 主程序当前架构基线
 
-- 更新时间：2026-07-16
+- 更新时间：2026-07-17
 - 适用仓库：`code/focus_app`
 - 当前板端服务：`focus_app.service`
 - 当前已验证发布：`/opt/edgefocus/releases/20260715-221512`
@@ -294,6 +294,8 @@ DistractionAssessment.level
 - 手机事实：`phone_sync`，2 秒心跳、5 秒 TTL。
 - 关键事件：`AppEventOutbox` 有界保存、重发和 event ACK。
 - App 承担提醒文字与声音呈现。
+
+BlueZ GATT 应用注册与 BLE 广播注册分别确认；只有两者都成功时主机才视为可发现。广播注册失败按 2/5/10 秒退避重试，收到 BlueZ `Release` 后立即作废旧回调并重新注册；广播恢复不阻断已建立 GATT 连接的通知。进程监听 `org.bluez` D-Bus owner，bluetoothd 消失时同时作废 GATT 与广播注册，owner 恢复后先完整重注册 Application，再注册 Advertisement。
 
 ### 8.2 手环通道
 

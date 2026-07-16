@@ -161,7 +161,11 @@ BleGattServer::BleGattServer(SystemStateStore& store, SQLiteStore& sqlite_store,
                     session_orchestrator, phone_facts, session_snapshots, &event_outbox_,
                     workload_policy, gimbal_precheck, device_manager) {}
 
-BleGattServer::~BleGattServer() = default;
+BleGattServer::~BleGattServer() {
+#if defined(__linux__) && defined(EDGEFOCUS_WITH_BLUEZ)
+    callback_lifetime_->store(false);
+#endif
+}
 
 bool BleGattServer::init(AppContext& /*ctx*/) {
     app_commands_.loadPreferences();
@@ -360,6 +364,7 @@ void handleMethodCall(GDBusConnection* /*connection*/, const gchar* /*sender*/,
     }
 
     if (iface == "org.bluez.LEAdvertisement1" && method == "Release") {
+        server->bluezOnAdvertisementReleased();
         g_dbus_method_invocation_return_value(invocation, nullptr);
         return;
     }
@@ -480,23 +485,66 @@ const GDBusInterfaceVTable kVTable = {
     {nullptr}
 };
 
+struct BluezRegistrationCallbackContext {
+    BleGattServer* server = nullptr;
+    std::shared_ptr<std::atomic<bool>> lifetime;
+    std::uint64_t lifecycle_generation = 0;
+    std::uint64_t attempt_generation = 0;
+};
+
 void onApplicationRegistered(GObject* source_object, GAsyncResult* result, gpointer user_data) {
-    auto* server = static_cast<BleGattServer*>(user_data);
-    server->bluezOnApplicationRegistered(source_object, result);
+    std::unique_ptr<BluezRegistrationCallbackContext> context(
+        static_cast<BluezRegistrationCallbackContext*>(user_data));
+    if (context->lifetime && context->lifetime->load()) {
+        context->server->bluezOnApplicationRegistered(
+            source_object, result, context->lifecycle_generation);
+    } else {
+        GError* error = nullptr;
+        GVariant* call_result = g_dbus_connection_call_finish(
+            G_DBUS_CONNECTION(source_object), result, &error);
+        if (call_result) g_variant_unref(call_result);
+        if (error) g_error_free(error);
+    }
 }
 
 void onAdvertisementRegistered(GObject* source_object, GAsyncResult* result, gpointer user_data) {
-    auto* server = static_cast<BleGattServer*>(user_data);
-    server->bluezOnAdvertisementRegistered(source_object, result);
+    std::unique_ptr<BluezRegistrationCallbackContext> context(
+        static_cast<BluezRegistrationCallbackContext*>(user_data));
+    if (context->lifetime && context->lifetime->load()) {
+        context->server->bluezOnAdvertisementRegistered(
+            source_object, result, context->lifecycle_generation,
+            context->attempt_generation);
+    } else {
+        GError* error = nullptr;
+        GVariant* call_result = g_dbus_connection_call_finish(
+            G_DBUS_CONNECTION(source_object), result, &error);
+        if (call_result) g_variant_unref(call_result);
+        if (error) g_error_free(error);
+    }
+}
+
+void onBluezNameAppeared(GDBusConnection*, const gchar*, const gchar*, gpointer user_data) {
+    static_cast<BleGattServer*>(user_data)->bluezOnNameAppeared();
+}
+
+void onBluezNameVanished(GDBusConnection*, const gchar*, gpointer user_data) {
+    static_cast<BleGattServer*>(user_data)->bluezOnNameVanished();
 }
 } // namespace
 
 bool BleGattServer::initBluez() {
+    bool app_already_registered = false;
     {
         std::lock_guard<std::mutex> lock(bluez_mutex_);
-        if (bluez_app_registered_ || bluez_registering_app_) return bluez_ready_;
+        if (bluez_ready_) return true;
+        if (!bluez_owner_available_) return false;
+        if (bluez_registering_app_ || advertisement_recovery_.registering()) return false;
         if (bluez_next_retry_ms_ > 0 && monotonicMs() < bluez_next_retry_ms_) return false;
+        if (advertisement_recovery_.shuttingDown()) advertisement_recovery_.reset();
+        app_already_registered = bluez_app_registered_;
     }
+
+    if (app_already_registered) return requestBluezAdvertisementRegistration();
 
     GError* error = nullptr;
     if (!bluez_connection_) {
@@ -508,6 +556,14 @@ bool BleGattServer::initBluez() {
             bluez_next_retry_ms_ = monotonicMs() + 10000;
             return false;
         }
+        bluez_name_watch_id_ = g_bus_watch_name_on_connection(
+            static_cast<GDBusConnection*>(bluez_connection_),
+            "org.bluez",
+            G_BUS_NAME_WATCHER_FLAGS_NONE,
+            onBluezNameAppeared,
+            onBluezNameVanished,
+            this,
+            nullptr);
     }
 
     if (!object_manager_node_) object_manager_node_ = g_dbus_node_info_new_for_xml(kObjectManagerXml, &error);
@@ -558,23 +614,37 @@ bool BleGattServer::initBluez() {
 
     GVariantBuilder app_options;
     g_variant_builder_init(&app_options, G_VARIANT_TYPE("a{sv}"));
+    std::uint64_t lifecycle_generation = 0;
     {
         std::lock_guard<std::mutex> lock(bluez_mutex_);
         bluez_registering_app_ = true;
+        lifecycle_generation = bluez_lifecycle_generation_;
     }
+    auto* callback_context = new BluezRegistrationCallbackContext{
+        this, callback_lifetime_, lifecycle_generation, 0
+    };
     g_dbus_connection_call(connection, "org.bluez", kAdapterPath,
         "org.bluez.GattManager1", "RegisterApplication",
         g_variant_new("(oa{sv})", kAppPath, &app_options), nullptr,
-        G_DBUS_CALL_FLAGS_NONE, 10000, nullptr, onApplicationRegistered, this);
+        G_DBUS_CALL_FLAGS_NONE, 10000, nullptr, onApplicationRegistered, callback_context);
     LOGI("BleGattServer", "BlueZ GATT registration requested");
     return false;
 }
 
-void BleGattServer::bluezOnApplicationRegistered(void* source_object, void* async_result) {
+void BleGattServer::bluezOnApplicationRegistered(void* source_object, void* async_result,
+                                                 std::uint64_t lifecycle_generation) {
     auto* connection = G_DBUS_CONNECTION(source_object);
     auto* result = static_cast<GAsyncResult*>(async_result);
     GError* error = nullptr;
     GVariant* call_result = g_dbus_connection_call_finish(connection, result, &error);
+    {
+        std::lock_guard<std::mutex> lock(bluez_mutex_);
+        if (lifecycle_generation != bluez_lifecycle_generation_) {
+            if (call_result) g_variant_unref(call_result);
+            if (error) g_error_free(error);
+            return;
+        }
+    }
     if (!call_result) {
         LOGW("BleGattServer", "RegisterApplication failed: %s", error ? error->message : "unknown");
         if (error) g_error_free(error);
@@ -589,29 +659,66 @@ void BleGattServer::bluezOnApplicationRegistered(void* source_object, void* asyn
         std::lock_guard<std::mutex> lock(bluez_mutex_);
         bluez_registering_app_ = false;
         bluez_app_registered_ = true;
-        bluez_ready_ = true;
+        bluez_ready_ = false;
+    }
+    LOGI("BleGattServer", "BlueZ GATT registered: service=%s tx=%s rx=%s", kServiceUuid, kTxUuid, kRxUuid);
+    requestBluezAdvertisementRegistration();
+}
+
+bool BleGattServer::requestBluezAdvertisementRegistration() {
+    GDBusConnection* connection = nullptr;
+    std::uint64_t lifecycle_generation = 0;
+    std::uint64_t attempt_generation = 0;
+    {
+        std::lock_guard<std::mutex> lock(bluez_mutex_);
+        if (!bluez_app_registered_ || bluez_ready_ || !bluez_connection_) return bluez_ready_;
+        const auto attempt = advertisement_recovery_.beginAttempt(monotonicMs());
+        if (!attempt) return false;
+        attempt_generation = *attempt;
+        lifecycle_generation = bluez_lifecycle_generation_;
+        connection = static_cast<GDBusConnection*>(bluez_connection_);
         bluez_registering_advertisement_ = true;
+        bluez_advertisement_registered_ = false;
     }
 
     GVariantBuilder adv_options;
     g_variant_builder_init(&adv_options, G_VARIANT_TYPE("a{sv}"));
+    auto* callback_context = new BluezRegistrationCallbackContext{
+        this, callback_lifetime_, lifecycle_generation, attempt_generation
+    };
     g_dbus_connection_call(connection, "org.bluez", kAdapterPath,
         "org.bluez.LEAdvertisingManager1", "RegisterAdvertisement",
         g_variant_new("(oa{sv})", kAdvPath, &adv_options), nullptr,
-        G_DBUS_CALL_FLAGS_NONE, 10000, nullptr, onAdvertisementRegistered, this);
-
-    LOGI("BleGattServer", "BlueZ GATT registered: service=%s tx=%s rx=%s", kServiceUuid, kTxUuid, kRxUuid);
+        G_DBUS_CALL_FLAGS_NONE, 10000, nullptr, onAdvertisementRegistered,
+        callback_context);
+    LOGI("BleGattServer", "BlueZ advertisement registration requested");
+    return false;
 }
 
-void BleGattServer::bluezOnAdvertisementRegistered(void* source_object, void* async_result) {
+void BleGattServer::bluezOnAdvertisementRegistered(void* source_object, void* async_result,
+                                                   std::uint64_t lifecycle_generation,
+                                                   std::uint64_t attempt_generation) {
     auto* connection = G_DBUS_CONNECTION(source_object);
     auto* result = static_cast<GAsyncResult*>(async_result);
     GError* error = nullptr;
     GVariant* call_result = g_dbus_connection_call_finish(connection, result, &error);
+    bool accepted = false;
     {
         std::lock_guard<std::mutex> lock(bluez_mutex_);
-        bluez_registering_advertisement_ = false;
-        bluez_advertisement_registered_ = call_result != nullptr;
+        if (lifecycle_generation == bluez_lifecycle_generation_) {
+            accepted = advertisement_recovery_.complete(
+                attempt_generation, call_result != nullptr, monotonicMs());
+            if (accepted) {
+                bluez_registering_advertisement_ = false;
+                bluez_advertisement_registered_ = call_result != nullptr;
+                bluez_ready_ = call_result != nullptr;
+            }
+        }
+    }
+    if (!accepted) {
+        if (call_result) g_variant_unref(call_result);
+        if (error) g_error_free(error);
+        return;
     }
     if (!call_result) {
         LOGW("BleGattServer", "RegisterAdvertisement failed: %s", error ? error->message : "unknown");
@@ -620,6 +727,44 @@ void BleGattServer::bluezOnAdvertisementRegistered(void* source_object, void* as
     }
     g_variant_unref(call_result);
     LOGI("BleGattServer", "BlueZ advertisement registered: name=EdgeFocus");
+}
+
+void BleGattServer::bluezOnAdvertisementReleased() {
+    std::lock_guard<std::mutex> lock(bluez_mutex_);
+    advertisement_recovery_.release(monotonicMs());
+    bluez_registering_advertisement_ = false;
+    bluez_advertisement_registered_ = false;
+    bluez_ready_ = false;
+    LOGW("BleGattServer", "BlueZ released advertisement; scheduling immediate re-registration");
+}
+
+void BleGattServer::bluezOnNameAppeared() {
+    std::lock_guard<std::mutex> lock(bluez_mutex_);
+    bluez_owner_available_ = true;
+    bluez_next_retry_ms_ = 0;
+    LOGI("BleGattServer", "BlueZ D-Bus owner available; registration recovery enabled");
+}
+
+void BleGattServer::bluezOnNameVanished() {
+    {
+        std::lock_guard<std::mutex> lock(bluez_mutex_);
+        bluez_owner_available_ = false;
+        ++bluez_lifecycle_generation_;
+        advertisement_recovery_.reset();
+        bluez_ready_ = false;
+        bluez_registering_app_ = false;
+        bluez_app_registered_ = false;
+        bluez_registering_advertisement_ = false;
+        bluez_advertisement_registered_ = false;
+        rx_notifying_ = false;
+        phone_connected_.store(false);
+    }
+    event_outbox_.setSubscribed(false);
+    PhoneUsageSignal sig;
+    sig.active = false;
+    sig.timestamp_ms = monotonicMs();
+    store_.setPhoneSignal(sig);
+    LOGW("BleGattServer", "BlueZ D-Bus owner vanished; GATT and advertisement invalidated");
 }
 
 std::string BleGattServer::bluezRxValueSnapshot() {
@@ -656,6 +801,12 @@ void BleGattServer::bluezSetNotifying(bool notifying) {
 }
 
 void BleGattServer::shutdownBluez() {
+    {
+        std::lock_guard<std::mutex> lock(bluez_mutex_);
+        ++bluez_lifecycle_generation_;
+        advertisement_recovery_.shutdown();
+        bluez_ready_ = false;
+    }
     auto* connection = static_cast<GDBusConnection*>(bluez_connection_);
     if (connection) {
         GVariantBuilder options;
@@ -676,6 +827,11 @@ void BleGattServer::shutdownBluez() {
         if (tx_registration_id_) g_dbus_connection_unregister_object(connection, tx_registration_id_);
         if (service_registration_id_) g_dbus_connection_unregister_object(connection, service_registration_id_);
         if (app_registration_id_) g_dbus_connection_unregister_object(connection, app_registration_id_);
+    }
+
+    if (bluez_name_watch_id_) {
+        g_bus_unwatch_name(bluez_name_watch_id_);
+        bluez_name_watch_id_ = 0;
     }
 
     if (advertisement_node_) g_dbus_node_info_unref(static_cast<GDBusNodeInfo*>(advertisement_node_));
@@ -701,6 +857,7 @@ void BleGattServer::shutdownBluez() {
     bluez_registering_advertisement_ = false;
     bluez_advertisement_registered_ = false;
     bluez_next_retry_ms_ = 0;
+    bluez_owner_available_ = true;
     rx_notifying_ = false;
     phone_connected_.store(false);
     event_outbox_.setSubscribed(false);
@@ -732,7 +889,9 @@ void BleGattServer::notifyBluez(const std::string& payload) {
         std::lock_guard<std::mutex> lock(bluez_mutex_);
         rx_value_ = outbound;
         connection = static_cast<GDBusConnection*>(bluez_connection_);
-        should_notify = bluez_ready_ && rx_notifying_ && connection != nullptr;
+        // Advertisement availability controls discovery, not an already
+        // established GATT notification channel.
+        should_notify = bluez_app_registered_ && rx_notifying_ && connection != nullptr;
         if (connection) g_object_ref(connection);
     }
 

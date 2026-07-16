@@ -1,6 +1,7 @@
 #pragma once
 #include "network/AppCommandService.h"
 #include "network/AppEventOutbox.h"
+#include "network/BleAdvertisementRecovery.h"
 #include "app/Module.h"
 #include "app/SystemStateStore.h"
 #include "storage/SQLiteStore.h"
@@ -13,6 +14,7 @@
 #include <cstdint>
 #include <cstddef>
 #include <atomic>
+#include <memory>
 
 namespace edgefocus {
 
@@ -61,8 +63,14 @@ public:
     bool bluezRxNotifyingSnapshot();
     void bluezSetNotifying(bool notifying);
     void notifyBluez(const std::string& payload);
-    void bluezOnApplicationRegistered(void* source_object, void* async_result);
-    void bluezOnAdvertisementRegistered(void* source_object, void* async_result);
+    void bluezOnApplicationRegistered(void* source_object, void* async_result,
+                                      std::uint64_t lifecycle_generation);
+    void bluezOnAdvertisementRegistered(void* source_object, void* async_result,
+                                         std::uint64_t lifecycle_generation,
+                                         std::uint64_t attempt_generation);
+    void bluezOnAdvertisementReleased();
+    void bluezOnNameAppeared();
+    void bluezOnNameVanished();
 #endif
 
 private:
@@ -88,14 +96,21 @@ private:
     unsigned int tx_registration_id_ = 0;
     unsigned int rx_registration_id_ = 0;
     unsigned int advertisement_registration_id_ = 0;
+    unsigned int bluez_name_watch_id_ = 0;
     bool bluez_objects_registered_ = false;
     bool bluez_registering_app_ = false;
     bool bluez_app_registered_ = false;
     bool bluez_registering_advertisement_ = false;
     bool bluez_advertisement_registered_ = false;
     int64_t bluez_next_retry_ms_ = 0;
+    bool bluez_owner_available_ = true;
+    std::uint64_t bluez_lifecycle_generation_ = 1;
+    BleAdvertisementRecovery advertisement_recovery_;
+    std::shared_ptr<std::atomic<bool>> callback_lifetime_ =
+        std::make_shared<std::atomic<bool>>(true);
 
     bool initBluez();
+    bool requestBluezAdvertisementRegistration();
     void shutdownBluez();
 #else
     bool initBluez() { return false; }

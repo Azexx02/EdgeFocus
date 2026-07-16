@@ -119,6 +119,30 @@ int main() {
     std::cout << "Starting BLE GATT Server tests...\n";
     json response;
 
+    // Test 0: advertisement registration retries and rejects stale callbacks.
+    {
+        BleAdvertisementRecovery recovery;
+        const auto first = recovery.beginAttempt(1'000);
+        assert(first.has_value());
+        assert(!recovery.beginAttempt(1'000).has_value());
+        assert(recovery.complete(*first, false, 1'100));
+        assert(recovery.nextRetryMs() == 3'100);
+        assert(!recovery.beginAttempt(3'099).has_value());
+
+        const auto second = recovery.beginAttempt(3'100);
+        assert(second.has_value());
+        recovery.release(3'101);
+        assert(!recovery.complete(*second, true, 3'102));
+        const auto after_release = recovery.beginAttempt(3'102);
+        assert(after_release.has_value());
+        assert(recovery.complete(*after_release, true, 3'103));
+        assert(recovery.registered());
+
+        recovery.shutdown();
+        assert(!recovery.beginAttempt(9'000).has_value());
+        std::cout << "  BLE advertisement recovery state machine: OK\n";
+    }
+
     // Test 0a: application chunk payloads can reassemble large responses and pushes.
     {
         std::string large_payload = R"({"status":"success","id":991,"data":{"blob":")" +
