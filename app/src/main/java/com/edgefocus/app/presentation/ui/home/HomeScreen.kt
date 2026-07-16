@@ -160,10 +160,8 @@ fun HomeScreen(
                 viewModel = viewModel,
                 modifier = Modifier.weight(1f)
             )
-            return@Column
-        }
-
-        Spacer(modifier = Modifier.height(32.dp))
+        } else {
+            Spacer(modifier = Modifier.height(32.dp))
 
         // Context Tag
         val sessionTypeText = when (uiState.sessionType) {
@@ -295,24 +293,25 @@ fun HomeScreen(
             }
         }
 
-        if (useBoard && uiState.isSyncingWithBoard &&
-            (uiState.timerState == TimerState.IDLE || uiState.timerState == TimerState.FINISHED)
-        ) {
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = "正在等待 EdgeFocus 确认会话",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-        } else if (useBoard && !isConnected &&
-            (uiState.timerState == TimerState.IDLE || uiState.timerState == TimerState.FINISHED)
-        ) {
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = "连接设备后可使用 EdgeFocus 模式",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            if (useBoard && uiState.isSyncingWithBoard &&
+                (uiState.timerState == TimerState.IDLE || uiState.timerState == TimerState.FINISHED)
+            ) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "正在等待 EdgeFocus 确认会话",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            } else if (useBoard && !isConnected &&
+                (uiState.timerState == TimerState.IDLE || uiState.timerState == TimerState.FINISHED)
+            ) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "连接设备后可使用 EdgeFocus 模式",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
     }
 }

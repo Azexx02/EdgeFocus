@@ -238,16 +238,14 @@ private fun TimerPage(
 
     if (uiState.timerState == TimerState.PRECHECK) {
         PrecheckPage(viewModel = viewModel, uiState = uiState)
-        return
-    }
-
-    Row(
+    } else {
+        Row(
         modifier = Modifier
             .fillMaxSize()
             .padding(horizontal = 32.dp),
         horizontalArrangement = Arrangement.spacedBy(48.dp, Alignment.CenterHorizontally),
         verticalAlignment = Alignment.CenterVertically
-    ) {
+        ) {
         // Left: Timer ring + Remaining label
         Column(
             horizontalAlignment = Alignment.CenterHorizontally
@@ -345,6 +343,7 @@ private fun TimerPage(
                     color = MaterialTheme.colorScheme.error
                 )
             }
+        }
         }
     }
 }
