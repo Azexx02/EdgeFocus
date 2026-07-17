@@ -51,7 +51,9 @@ json outputCapabilityData(const SystemSnapshot& snap);
 json cameraPreviewData(const SystemSnapshot& snap);
 json behaviorContextData(const SystemSnapshot& snap);
 json precheckFlowData(const SystemSnapshot& snap, bool gimbal_precheck_available);
-bool gimbalPrecheckAvailable(const SystemSnapshot& snap, const GimbalMonitor* gimbal_monitor);
+bool gimbalPrecheckAvailable(
+    const SystemSnapshot& snap,
+    const gimbal::GimbalPrecheckController* gimbal_precheck);
 
 const char* applicabilityWire(session::Applicability value) {
     switch (value) {
@@ -320,10 +322,12 @@ json gimbalStatusData(const SystemSnapshot& snap) {
     };
 }
 
-bool gimbalPrecheckAvailable(const SystemSnapshot& snap, const GimbalMonitor* gimbal_monitor) {
-    if (!gimbal_monitor) return false;
+bool gimbalPrecheckAvailable(
+    const SystemSnapshot& snap,
+    const gimbal::GimbalPrecheckController* gimbal_precheck) {
+    if (!gimbal_precheck) return false;
     if (!snap.preferences.gimbal_enabled) return false;
-    return snap.device.gimbal_online && snap.device.gimbal_safe;
+    return true;
 }
 
 bool isGimbalMotionAction(const std::string& action) {
@@ -480,7 +484,6 @@ Preferences sanitizePreferences(Preferences prefs) {
     prefs.away_timeout_min = clampMinutes(prefs.away_timeout_min, kMinAwayTimeoutMin, kMaxAwayTimeoutMin);
     prefs.default_focus_duration_min = clampFocusDurationMin(prefs.default_focus_duration_min);
     prefs.sound_volume = clampFloat(prefs.sound_volume, 0.0f, 1.0f);
-    prefs.gimbal_enabled = false;
     return prefs;
 }
 
@@ -718,9 +721,10 @@ void AppCommandService::loadPreferences() {
     // persisted legacy "board" routes and expose App-owned output instead.
     prefs.screen_output_route = "phone";
     prefs.sound_output_route = "phone";
-    // Gimbal hardware is intentionally disabled for this release. Persisted
-    // legacy preferences must not reactivate the monitor or serial control.
-    prefs.gimbal_enabled = false;
+    // Gimbal availability is capability-driven. It is not a normal product
+    // preference; verified hardware is enabled unless the maintenance switch
+    // below explicitly disables it.
+    prefs.gimbal_enabled = gimbal_precheck_ != nullptr;
     prefs = sanitizePreferences(prefs);
     if (const char* disabled = std::getenv("EDGEFOCUS_DISABLE_LCD")) {
         const auto value = lowerCopy(disabled);
@@ -964,7 +968,7 @@ std::string AppCommandService::handleGimbalPrecheckCommand(
 
 std::string AppCommandService::handleGetCurrentState(int req_id) {
     auto snap = store_.snapshot();
-    const bool gimbal_precheck_available = gimbalPrecheckAvailable(snap, gimbal_monitor_);
+    const bool gimbal_precheck_available = gimbalPrecheckAvailable(snap, gimbal_precheck_);
     json data = sessionStateData(snap, gimbal_precheck_available);
     data["reminder"] = reminderData(snap);
     data["precheck_guidance"] = precheckGuidanceData(snap);
@@ -1022,7 +1026,7 @@ std::string AppCommandService::handleSessionControl(const json& data, int req_id
         LOGI("AppCommandService", "Session started: %s", s.session_id.c_str());
         json resp = sessionStateData(
             started_snapshot,
-            gimbalPrecheckAvailable(started_snapshot, gimbal_monitor_));
+            gimbalPrecheckAvailable(started_snapshot, gimbal_precheck_));
         resp["success"] = started.success;
         resp["already_active"] = started.already_active;
         return makeResponse(req_id, resp);
@@ -1036,7 +1040,7 @@ std::string AppCommandService::handleSessionControl(const json& data, int req_id
             ? "board"
             : snap.session.precheck_owner;
         if (owner != "app") {
-            json resp = sessionStateData(snap, gimbalPrecheckAvailable(snap, gimbal_monitor_));
+            json resp = sessionStateData(snap, gimbalPrecheckAvailable(snap, gimbal_precheck_));
             resp["success"] = false;
             resp["message"] = "App is not allowed to skip board-owned precheck";
             return makeResponse(req_id, resp);
@@ -1044,7 +1048,7 @@ std::string AppCommandService::handleSessionControl(const json& data, int req_id
         SessionController controller(store_, sqlite_store_);
         bool ok = controller.skipPrecheck("app_skip_precheck");
         auto after = store_.snapshot();
-        const bool gimbal_precheck_available = gimbalPrecheckAvailable(after, gimbal_monitor_);
+        const bool gimbal_precheck_available = gimbalPrecheckAvailable(after, gimbal_precheck_);
         json resp = sessionStateData(after, gimbal_precheck_available);
         resp["success"] = ok;
         store_.pushEvent(makePush("push_state", sessionStateData(after, gimbal_precheck_available)));
@@ -1058,7 +1062,7 @@ std::string AppCommandService::handleSessionControl(const json& data, int req_id
         SessionController controller(store_, sqlite_store_);
         bool ok = controller.pauseSession("User paused");
         auto after = store_.snapshot();
-        const bool gimbal_precheck_available = gimbalPrecheckAvailable(after, gimbal_monitor_);
+        const bool gimbal_precheck_available = gimbalPrecheckAvailable(after, gimbal_precheck_);
         json resp = sessionStateData(after, gimbal_precheck_available);
         resp["success"] = ok;
         store_.pushEvent(makePush("push_state", sessionStateData(after, gimbal_precheck_available)));
@@ -1072,7 +1076,7 @@ std::string AppCommandService::handleSessionControl(const json& data, int req_id
         SessionController controller(store_, sqlite_store_);
         bool ok = controller.resumeSession("User resumed");
         auto after = store_.snapshot();
-        const bool gimbal_precheck_available = gimbalPrecheckAvailable(after, gimbal_monitor_);
+        const bool gimbal_precheck_available = gimbalPrecheckAvailable(after, gimbal_precheck_);
         json resp = sessionStateData(after, gimbal_precheck_available);
         resp["success"] = ok;
         store_.pushEvent(makePush("push_state", sessionStateData(after, gimbal_precheck_available)));
@@ -1115,7 +1119,7 @@ std::string AppCommandService::handleSessionControlV2(const json& data, int req_
             {minutesToMs(target_min), session::SourceMode::LiveCamera,
              data.value("operation_id", std::string{})});
         auto after = store_.snapshot();
-        json response = sessionStateData(after, gimbalPrecheckAvailable(after, gimbal_monitor_));
+        json response = sessionStateData(after, gimbalPrecheckAvailable(after, gimbal_precheck_));
         response["success"] = result.success;
         response["already_active"] = result.already_active;
         if (session_snapshots_) {
@@ -1138,7 +1142,7 @@ std::string AppCommandService::handleSessionControlV2(const json& data, int req_
                                                   : before.session.session_id;
         if (expected_session_id.empty() || expected_session_id != active_session_id) {
             json response = sessionStateData(
-                before, gimbalPrecheckAvailable(before, gimbal_monitor_));
+                before, gimbalPrecheckAvailable(before, gimbal_precheck_));
             response["success"] = false;
             response["message"] = "session_id_mismatch";
             if (session_snapshots_) {
@@ -1190,7 +1194,7 @@ std::string AppCommandService::handleSessionControlV2(const json& data, int req_
     }
 
     const auto after = store_.snapshot();
-    const bool gimbal_available = gimbalPrecheckAvailable(after, gimbal_monitor_);
+    const bool gimbal_available = gimbalPrecheckAvailable(after, gimbal_precheck_);
     json response = sessionStateData(after, gimbal_available);
     response["success"] = result.success;
     if (session_snapshots_) {
@@ -1262,10 +1266,9 @@ std::string AppCommandService::handleUpdatePreferences(const json& data, int req
     // re-enabled by an old App or stale preference record.
     prefs.screen_output_route = "phone";
     prefs.sound_output_route = "phone";
-    if (data.contains("gimbal_enabled") && data["gimbal_enabled"].get<bool>()) {
-        LOGW("AppCommandService", "Ignoring gimbal_enabled=true while gimbal is disabled");
-    }
-    prefs.gimbal_enabled = false;
+    // Keep gimbal ownership capability-driven. App/Web preference updates may
+    // not bypass board capability detection or disable a verified controller.
+    prefs.gimbal_enabled = gimbal_precheck_ != nullptr;
     prefs = sanitizePreferences(prefs);
 
     store_.updatePreferences(prefs);
@@ -1637,7 +1640,26 @@ std::string AppCommandService::handleGetPreferences(int req_id) {
 
 std::string AppCommandService::handleGetGimbalStatus(int req_id) {
     auto snap = store_.snapshot();
-    return makeResponse(req_id, gimbalStatusData(snap));
+    json status = gimbalStatusData(snap);
+    if (gimbal_precheck_) {
+        const auto precheck = gimbal_precheck_->snapshot();
+        const auto hardware = gimbal_precheck_->snapshotHardware();
+        const bool online = hardware.link_healthy;
+        status["connected"] = online;
+        status["online"] = online;
+        status["safe"] = online && !hardware.fault_active &&
+            precheck.state != gimbal::PrecheckState::Degraded;
+        status["calibrated"] = hardware.state == gimbal::State::Ready ||
+            hardware.state == gimbal::State::Moving ||
+            hardware.state == gimbal::State::Holding;
+        status["angle_x"] = hardware.yaw_deg ? json(*hardware.yaw_deg) : json(nullptr);
+        status["angle_y"] = hardware.pitch_deg ? json(*hardware.pitch_deg) : json(nullptr);
+        status["last_error"] = hardware.fault_latched_reason;
+        status["state"] = gimbal::precheckStateName(precheck.state);
+        status["manual_lease"] = precheck.manual_lease;
+        status["detail"] = precheck.detail;
+    }
+    return makeResponse(req_id, status);
 }
 
 std::string AppCommandService::handleGimbalControl(const json& data, int req_id) {
