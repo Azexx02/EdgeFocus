@@ -257,6 +257,42 @@ void test_orchestrator_fast_ack_duplicate_and_initializing_gate() {
     assert(orchestrator.end().success);
 }
 
+void test_precheck_waits_for_an_explicit_transition_without_session_timeout() {
+    std::int64_t monotonic = 100;
+    SessionSnapshotPublisher snapshots("boot-precheck-no-timeout");
+    std::vector<std::string> trace;
+    SessionOrchestrator orchestrator(
+        snapshots,
+        [&](const SessionContext& context) {
+            auto runtime = std::make_unique<SessionRuntime>(context);
+            runtime->addFeature(std::make_unique<TraceFeature>(
+                "camera", trace, PrepareResult::success()), true);
+            return runtime;
+        },
+        [&] { return monotonic; }, [] { return 200; },
+        [](std::int64_t) { return "session-precheck-no-timeout"; });
+
+    const auto started = orchestrator.start({60000, SourceMode::LiveCamera});
+    assert(started.success);
+    assert(wait_until([&] {
+        return snapshots.read().preparation.state == StartPreparationState::Ready;
+    }));
+
+    monotonic += 24LL * 60LL * 60LL * 1000LL;
+    assert(orchestrator.active());
+    assert(orchestrator.phase() == Phase::Precheck);
+    const auto still_prechecking = snapshots.read();
+    assert(still_prechecking.runtime_active);
+    assert(!still_prechecking.formal_active);
+    assert(still_prechecking.phase == Phase::Precheck);
+
+    const auto duplicate = orchestrator.start({60000, SourceMode::LiveCamera});
+    assert(duplicate.success && duplicate.already_active);
+    assert(duplicate.context->session_id == started.context->session_id);
+    assert(orchestrator.end(StopReason::Cancelled).success);
+    assert(orchestrator.phase() == Phase::Idle);
+}
+
 void test_prepare_failure_is_retained_and_correlated() {
     SessionSnapshotPublisher snapshots("boot-failed-start");
     auto factory = [&](const SessionContext& context) {
@@ -380,6 +416,7 @@ int main() {
     test_required_formal_start_failure_rolls_back_without_focusing();
     test_orchestrator_lifecycle_and_snapshot_isolation();
     test_orchestrator_fast_ack_duplicate_and_initializing_gate();
+    test_precheck_waits_for_an_explicit_transition_without_session_timeout();
     test_prepare_failure_is_retained_and_correlated();
     test_factory_exception_becomes_correlated_failure();
     test_cancel_during_preparation_cleans_once();

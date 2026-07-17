@@ -481,8 +481,20 @@ int main() {
         const auto precheck_only = typed_orchestrator.start(
             {1500000, session::SourceMode::LiveCamera});
         assert(precheck_only.success);
+
+        json stale_cancel = parseResponse(typed_server.handleCommand(
+            R"({"cmd":"session_control","id":490,"data":{"action":"end","session_id":"stale-session"}})"));
+        assertSuccess(stale_cancel, 490);
+        assert(stale_cancel["data"]["success"] == false);
+        assert(stale_cancel["data"]["message"] == "session_id_mismatch");
+        assert(typed_orchestrator.phase() == session::Phase::Precheck);
+
+        const auto cancel_payload = std::string(
+            "{\"cmd\":\"session_control\",\"id\":491,\"data\":{"
+            "\"action\":\"end\",\"session_id\":\"") +
+            precheck_only.context->session_id + "\"}}";
         json cancelled_precheck = parseResponse(typed_server.handleCommand(
-            R"({"cmd":"session_control","id":491,"data":{"action":"end"}})"));
+            cancel_payload));
         assertSuccess(cancelled_precheck, 491);
         assert(cancelled_precheck["data"]["success"] == true);
         assert(cancelled_precheck["data"]["cancelled_precheck"] == true);

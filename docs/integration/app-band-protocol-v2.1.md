@@ -181,7 +181,9 @@ gimbal_realign
 precheck_confirm_position
 ```
 
-每条命令的 `data` 必须带当前 `session_id` 和严格递增的无符号 `sequence`。板端只接受固定 small
+`session_control.skip_precheck` 与 PRECHECK 阶段的 `session_control.end` 应携带当前 `session_id`。板端在执行状态转换前核对当前 runtime；不匹配时返回 `success=false, message=session_id_mismatch`，避免重连或旧响应把命令作用到新会话。未携带该字段的旧客户端暂时保持兼容。
+
+每条云台命令的 `data` 必须带当前 `session_id` 和严格递增的无符号 `sequence`。板端只接受固定 small
 nudge，App 不上传步长或原始角度。自动搜索结束后才授予 `manual_lease`；确认位置后 App 再发送正常
 会话 `session_control.skip_precheck` 进入 FOCUSING。`runtime_snapshot.gimbal` 返回搜索状态、租约、
 waypoint、角度、recoverable 和故障锁存原因。任一运行条件失败时，PRECHECK 运动和会话内跟踪能力同时降级；App 只展示状态，不自行重试运动。板端低频探测恢复并在重新对齐成功后更新快照。

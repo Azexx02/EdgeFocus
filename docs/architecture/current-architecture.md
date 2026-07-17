@@ -178,6 +178,8 @@ stateDiagram-v2
     ENDING --> IDLE: reverse stop + flush + destroy
 ```
 
+PRECHECK 会话本身没有固定超时：准备完成后可无限等待 App 重连，只有显式 `confirmReady`、显式取消、required prepare 失败或进程关闭才离开。云台约 75 秒的硬截止只结束自动搜索并交出 `manual_lease`，不会结束 PRECHECK 会话。
+
 | Phase | 相机 | NPU/视觉 | Fusion/episode | 提醒 | 手机事实 |
 |---|---|---|---|---|---|
 | IDLE | 关闭 | 不存在 | 不存在 | 禁止 | 不接受正式 session fact |

@@ -1125,6 +1125,29 @@ std::string AppCommandService::handleSessionControlV2(const json& data, int req_
         return makeResponse(req_id, response);
     }
 
+    if (data.contains("session_id")) {
+        if (!data["session_id"].is_string()) {
+            return makeError(req_id, "session_id must be a string");
+        }
+        const std::string expected_session_id = data["session_id"].get<std::string>();
+        const auto runtime = session_snapshots_
+                                 ? session_snapshots_->read()
+                                 : session::SessionSnapshot{};
+        const std::string active_session_id = session_snapshots_
+                                                  ? runtime.context.session_id
+                                                  : before.session.session_id;
+        if (expected_session_id.empty() || expected_session_id != active_session_id) {
+            json response = sessionStateData(
+                before, gimbalPrecheckAvailable(before, gimbal_monitor_));
+            response["success"] = false;
+            response["message"] = "session_id_mismatch";
+            if (session_snapshots_) {
+                response["runtime_snapshot"] = stableSessionSnapshotData(runtime);
+            }
+            return makeResponse(req_id, response);
+        }
+    }
+
     if (action == "skip_precheck" || action == "skip_calibration") {
         result = session_orchestrator_->confirmReady();
     } else if (action == "pause") {
