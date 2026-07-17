@@ -40,6 +40,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -131,6 +132,10 @@ class TimerStateHolder @Inject constructor(
     private var pendingStartJob: Job? = null
     private val pendingStartInFlight = AtomicBoolean(false)
     private val startOperationEpoch = AtomicLong(0L)
+    private val precheckExitInFlight = AtomicBoolean(false)
+    private val precheckExitEpoch = AtomicLong(0L)
+    @Volatile
+    private var closedPrecheckSessionId: String? = null
     @Volatile
     private var isControlPanelActive = false
 
@@ -194,12 +199,16 @@ class TimerStateHolder @Inject constructor(
         }
 
         scope.launch {
-            connectionSupervisor.snapshot.collect { snapshot ->
-                if (snapshot.phase != HostConnectionPhase.READY) return@collect
+            connectionSupervisor.snapshot
+                .map { it.phase to it.connectionEpoch }
+                .distinctUntilChanged()
+                .collect { (phase, _) ->
+                if (phase != HostConnectionPhase.READY) return@collect
                 if (_state.value.sessionMode == SessionMode.EDGEFOCUS) {
                     checkBoardSession()
                     if (_state.value.timerState == TimerState.RUNNING ||
-                        _state.value.timerState == TimerState.PRECHECK ||
+                        (_state.value.timerState == TimerState.PRECHECK &&
+                            _state.value.precheck?.gimbal?.manualLease != true) ||
                         _state.value.timerState == TimerState.PAUSED
                     ) {
                         startBoardSync()
@@ -237,6 +246,12 @@ class TimerStateHolder @Inject constructor(
             }
             override fun onPushStateSnapshot(state: BoardSessionState) {
                 if (_state.value.sessionMode != SessionMode.EDGEFOCUS) return
+                if (precheckExitInFlight.get()) {
+                    if (state.effectivePhase() == BoardSessionPhase.IDLE) {
+                        completePrecheckExit(precheckExitEpoch.get(), state)
+                    }
+                    return
+                }
                 if (state.sessionPhase == BoardSessionPhase.IDLE && isEdgeFocusActiveLocally()) {
                     handleBoardIdleWhileLocalActive("push_state_idle")
                     return
@@ -678,6 +693,14 @@ class TimerStateHolder @Inject constructor(
     }
 
     fun stopSession() {
+        val stoppingState = _state.value
+        if (stoppingState.sessionMode == SessionMode.EDGEFOCUS &&
+            stoppingState.timerState == TimerState.PRECHECK
+        ) {
+            cancelBoardPrecheck()
+            return
+        }
+
         invalidatePendingStart()
         cancelBoardCompletionFallback()
         localCountdownJob?.cancel()
@@ -732,6 +755,121 @@ class TimerStateHolder @Inject constructor(
                 isSyncingWithBoard = false
             )
         }
+    }
+
+    private fun cancelBoardPrecheck() {
+        invalidatePendingStart()
+        cancelBoardCompletionFallback()
+        localCountdownJob?.cancel()
+        boardSyncJob?.cancel()
+
+        if (!bleManager.isConnected() || !connectionSupervisor.snapshot.value.isReady) {
+            _state.update {
+                it.copy(
+                    isSyncingWithBoard = false,
+                    boardErrorMessage = "主机未连接，预检仍保留在主机；重连后可再次退出"
+                )
+            }
+            return
+        }
+
+        if (!precheckExitInFlight.compareAndSet(false, true)) return
+        val exitEpoch = precheckExitEpoch.incrementAndGet()
+        val sessionId = _state.value.sessionId
+        if (sessionId.isNullOrBlank()) {
+            precheckExitInFlight.set(false)
+            _state.update { it.copy(boardErrorMessage = "缺少 PRECHECK session_id，请先刷新主机状态") }
+            startBoardSync()
+            return
+        }
+
+        _state.update { it.copy(isSyncingWithBoard = true, boardErrorMessage = null) }
+        appEventLog.log("SESSION_CONTROL", "cancel precheck")
+        scope.launch {
+            val request = bleManager.sessionControl(
+                action = "stop",
+                sessionId = sessionId
+            )
+            val idleState = awaitAuthoritativeIdle()
+            if (exitEpoch != precheckExitEpoch.get() || !precheckExitInFlight.get()) {
+                return@launch
+            }
+            if (idleState != null) {
+                completePrecheckExit(exitEpoch, idleState)
+            } else {
+                val message = request.exceptionOrNull()?.message
+                    ?: "主机尚未确认退出预检，请保持连接后重试"
+                appEventLog.log("PRECHECK_CANCEL_PENDING", message)
+                precheckExitInFlight.set(false)
+                _state.update {
+                    it.copy(isSyncingWithBoard = false, boardErrorMessage = message)
+                }
+                startBoardSync()
+            }
+        }
+    }
+
+    private suspend fun awaitAuthoritativeIdle(): BoardSessionState? {
+        return withTimeoutOrNull(10_000L) {
+            while (true) {
+                val observed = bleManager.getCurrentState().getOrNull()
+                    ?.let(::parseAuthoritativeBoardState)
+                if (observed?.effectivePhase() == BoardSessionPhase.IDLE) {
+                    return@withTimeoutOrNull observed
+                }
+                delay(250L)
+            }
+            @Suppress("UNREACHABLE_CODE")
+            null
+        }
+    }
+
+    private fun parseAuthoritativeBoardState(bytes: ByteArray): BoardSessionState? = runCatching {
+        val root = JSONObject(String(bytes, Charsets.UTF_8))
+        val data = root.optJSONObject("data") ?: return@runCatching null
+        val runtimePhase = data.optJSONObject("runtime_snapshot")
+            ?.optJSONObject("session")
+            ?.optString("phase")
+            .orEmpty()
+        val legacyPhase = data.optString("session_phase")
+        val wirePhase = runtimePhase.ifBlank { legacyPhase }
+        if (BoardSessionPhase.fromWireOrNull(wirePhase) == null) return@runCatching null
+        BoardJsonParser.parseSessionState(data)
+    }.getOrNull()
+
+    private fun completePrecheckExit(exitEpoch: Long, boardState: BoardSessionState) {
+        if (exitEpoch != precheckExitEpoch.get()) return
+        if (!precheckExitInFlight.compareAndSet(true, false)) return
+        precheckExitEpoch.incrementAndGet()
+        applyBoardIdleAfterPrecheckExit(boardState)
+    }
+
+    private fun applyBoardIdleAfterPrecheckExit(boardState: BoardSessionState) {
+        closedPrecheckSessionId = _state.value.sessionId
+        val targetMs = _state.value.totalTime.takeIf { it > 0L }
+            ?: TimeUtils.minutesToMillis(_state.value.targetDurationMinutes)
+        _state.update {
+            it.copy(
+                timerState = TimerState.IDLE,
+                timeRemaining = targetMs,
+                totalTime = targetMs,
+                sessionMode = SessionMode.EDGEFOCUS,
+                isSyncingWithBoard = false,
+                sessionId = null,
+                sessionStartTime = 0L,
+                boardSessionActive = false,
+                boardSessionPaused = false,
+                calibrationCompleted = false,
+                sessionPhase = BoardSessionPhase.IDLE,
+                preparationState = boardState.preparationState,
+                preparationError = boardState.preparationError,
+                precheck = null,
+                cameraPreview = null,
+                precheckGuidance = null,
+                boardErrorMessage = null
+            )
+        }
+        stopBoardSync()
     }
 
     fun skipPrecheck() {
@@ -805,7 +943,13 @@ class TimerStateHolder @Inject constructor(
             (requestSessionId == null || _state.value.sessionId == requestSessionId)
 
     private fun isPreviewReady(): Boolean =
-        _state.value.timerState == TimerState.PRECHECK
+        _state.value.timerState == TimerState.PRECHECK &&
+            // PRECHECK preview is a still-image aid, not a video stream. Once a
+            // frame is available, keep it stable and leave BLE bandwidth free
+            // for latency-sensitive manual gimbal commands. The explicit
+            // refresh button remains available whenever the user wants a new
+            // frame.
+            _state.value.cameraPreview?.available != true
 
     private fun invalidatePendingStart() {
         startOperationEpoch.incrementAndGet()
@@ -980,6 +1124,10 @@ class TimerStateHolder @Inject constructor(
     private fun handleBoardIdleWhileLocalActive(reason: String) {
         if (!isEdgeFocusActiveLocally()) return
         appEventLog.log("BOARD_IDLE", reason)
+        if (_state.value.timerState == TimerState.PRECHECK) {
+            applyBoardIdleAfterPrecheckExit(BoardSessionState())
+            return
+        }
         cancelBoardCompletionFallback()
         localCountdownJob?.cancel()
         stopBoardSync()
@@ -1039,6 +1187,12 @@ class TimerStateHolder @Inject constructor(
         boardState: BoardSessionState,
         fallbackDurationMinutes: Int = _state.value.targetDurationMinutes
     ) {
+        if (PrecheckObservationPolicy.isClosedPrecheck(closedPrecheckSessionId, boardState)) return
+        if (boardState.effectivePhase() == BoardSessionPhase.PRECHECK &&
+            boardState.sessionId != closedPrecheckSessionId
+        ) {
+            closedPrecheckSessionId = null
+        }
         val fallbackTotalMs = TimeUtils.minutesToMillis(fallbackDurationMinutes)
         val targetMs = when {
             boardState.hasTargetDurationMs && boardState.targetDurationMs > 0L -> boardState.targetDurationMs
@@ -1105,8 +1259,16 @@ class TimerStateHolder @Inject constructor(
         when (timerState) {
             TimerState.PRECHECK -> {
                 localCountdownJob?.cancel()
-                startBoardSync()
-                refreshGimbalStatusIfVisible()
+                if (boardState.precheck?.gimbal?.manualLease == true) {
+                    // Once the board grants manual control, the last
+                    // authoritative snapshot is sufficient for UI gating.
+                    // Continuous 3 KB state responses otherwise occupy the
+                    // BLE notification channel and delay every direction tap.
+                    stopBoardSync()
+                } else {
+                    startBoardSync()
+                    refreshGimbalStatusIfVisible()
+                }
             }
             TimerState.RUNNING -> {
                 startBoardSync()
@@ -1127,13 +1289,23 @@ class TimerStateHolder @Inject constructor(
 
     private suspend fun checkBoardSession() {
         if (!bleManager.isConnected() || !connectionSupervisor.snapshot.value.isReady) return
+        val observationEpoch = precheckExitEpoch.get()
         try {
             val result = bleManager.getCurrentState()
             result.onSuccess { data ->
+                if (PrecheckObservationPolicy.isStale(observationEpoch, precheckExitEpoch.get())) {
+                    return@onSuccess
+                }
                 val json = String(data, Charsets.UTF_8)
                 val jsonObj = JSONObject(json)
                 val stateData = jsonObj.getJSONObject("data")
                 val boardState = BoardJsonParser.parseSessionState(stateData)
+                if (precheckExitInFlight.get()) {
+                    if (boardState.effectivePhase() == BoardSessionPhase.IDLE) {
+                        completePrecheckExit(precheckExitEpoch.get(), boardState)
+                    }
+                    return@onSuccess
+                }
                 if (boardState.sessionPhase != BoardSessionPhase.IDLE) {
                     applyBoardSessionState(boardState)
                     return@onSuccess
@@ -1263,9 +1435,10 @@ class TimerStateHolder @Inject constructor(
                    connectionSupervisor.snapshot.value.isReady &&
                    bleManager.isConnected()) {
                 try {
+                    val observationEpoch = precheckExitEpoch.get()
                     val result = bleManager.getCurrentState()
                     result.onSuccess { data ->
-                        calibrateFromBoard(String(data, Charsets.UTF_8))
+                        calibrateFromBoard(String(data, Charsets.UTF_8), observationEpoch)
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Board sync failed: ${e.message}")
@@ -1282,11 +1455,18 @@ class TimerStateHolder @Inject constructor(
         _state.update { it.copy(isSyncingWithBoard = pendingStartInFlight.get()) }
     }
 
-    private fun calibrateFromBoard(jsonString: String) {
+    private fun calibrateFromBoard(jsonString: String, observationEpoch: Long) {
         try {
+            if (PrecheckObservationPolicy.isStale(observationEpoch, precheckExitEpoch.get())) return
             val json = JSONObject(jsonString)
             val data = json.getJSONObject("data")
             val boardState = BoardJsonParser.parseSessionState(data)
+            if (precheckExitInFlight.get()) {
+                if (boardState.effectivePhase() == BoardSessionPhase.IDLE) {
+                    completePrecheckExit(precheckExitEpoch.get(), boardState)
+                }
+                return
+            }
             if (boardState.sessionPhase == BoardSessionPhase.PRECHECK ||
                 boardState.sessionPhase == BoardSessionPhase.PAUSED ||
                 (_state.value.timerState == TimerState.PRECHECK &&

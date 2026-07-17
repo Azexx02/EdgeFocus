@@ -10,6 +10,13 @@ import org.json.JSONObject
 
 class BoardJsonParserTest {
     @Test
+    fun `strict phase parser rejects unknown values`() {
+        assertEquals(BoardSessionPhase.IDLE, BoardSessionPhase.fromWireOrNull("IDLE"))
+        assertNull(BoardSessionPhase.fromWireOrNull("future_phase"))
+        assertNull(BoardSessionPhase.fromWireOrNull(""))
+    }
+
+    @Test
     fun `empty structured precheck guidance is not exposed as raw json`() {
         val state = BoardJsonParser.parseSessionState(
             JSONObject(
@@ -34,6 +41,18 @@ class BoardJsonParserTest {
         assertEquals("start", data.getString("action"))
         assertEquals(25, data.getInt("target_duration_min"))
         assertEquals("android-123-1", data.getString("operation_id"))
+    }
+
+    @Test
+    fun buildSessionControlExitBindsExpectedSession() {
+        val json = BoardJsonParser.buildSessionControl(
+            action = "end",
+            sessionId = "session_1"
+        )
+
+        val data = json.getJSONObject("data")
+        assertEquals("end", data.getString("action"))
+        assertEquals("session_1", data.getString("session_id"))
     }
 
     @Test
@@ -709,7 +728,10 @@ class BoardJsonParserTest {
                     "degraded":false,
                     "health_status":"ready",
                     "angle_x":315.0,
-                    "angle_y":353.0
+                    "angle_y":353.0,
+                    "state":"manual",
+                    "manual_lease":true,
+                    "detail":"search_timeout_manual"
                   }
                 }
               }
@@ -724,5 +746,31 @@ class BoardJsonParserTest {
         assertTrue(gimbal.safe)
         assertEquals(315.0, gimbal.angleX!!, 0.001)
         assertEquals(353.0, gimbal.angleY!!, 0.001)
+        assertEquals("manual", gimbal.state)
+        assertTrue(gimbal.manualLease)
+        assertEquals("search_timeout_manual", gimbal.detail)
+    }
+
+    @Test
+    fun parseSessionStateMergesRuntimeLeaseIntoPrecheckGimbal() {
+        val response = """
+            {
+              "status":"success",
+              "data":{
+                "precheck":{"gimbal":{"enabled":true,"online":true,"safe":true}},
+                "runtime_snapshot":{
+                  "session":{"id":"session_2","phase":"PRECHECK","preparation_state":"READY"},
+                  "gimbal":{"state":"manual","manual_lease":true,"detail":"automatic_search_skipped"}
+                }
+              }
+            }
+        """.trimIndent()
+
+        val gimbal = BoardJsonParser.parseSessionState(response).precheck?.gimbal
+
+        assertNotNull(gimbal)
+        assertEquals("manual", gimbal!!.state)
+        assertTrue(gimbal.manualLease)
+        assertEquals("automatic_search_skipped", gimbal.detail)
     }
 }

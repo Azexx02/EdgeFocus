@@ -34,13 +34,15 @@ object HostJsonCodec {
     fun sessionControl(
         requestId: Int,
         action: String,
-        targetDurationMinutes: Int? = null
+        targetDurationMinutes: Int? = null,
+        sessionId: String? = null
     ): JSONObject {
         val data = JSONObject().put("action", action)
         if (action == "start") {
             data.put("target_duration_min", (targetDurationMinutes ?: 25).coerceIn(5, 120))
             data.put("source_mode", "live_camera")
         }
+        sessionId?.takeIf { it.isNotBlank() }?.let { data.put("session_id", it) }
         return request("session_control", requestId, data)
     }
 

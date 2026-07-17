@@ -19,6 +19,17 @@ class HostJsonCodecTest {
     }
 
     @Test
+    fun `precheck transition carries expected session`() {
+        val request = HostJsonCodec.sessionControl(
+            requestId = 8,
+            action = "skip_precheck",
+            sessionId = "session_1"
+        )
+
+        assertEquals("session_1", request.getJSONObject("data").getString("session_id"))
+    }
+
+    @Test
     fun `phone sync contains raw fact and no distraction level`() {
         val request = HostJsonCodec.phoneSync(
             requestId = 9,

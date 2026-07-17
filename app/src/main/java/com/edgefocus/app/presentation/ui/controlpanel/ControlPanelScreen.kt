@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
@@ -355,6 +354,8 @@ private fun PrecheckPage(
 ) {
     val preparationReady = uiState.preparationState == BoardPreparationState.READY ||
         uiState.preparationState == BoardPreparationState.DEGRADED
+    val gimbal = uiState.precheck?.gimbal
+    val manualControlsReady = preparationReady && (gimbal == null || gimbal.manualLease)
     Row(
         modifier = Modifier
             .fillMaxSize()
@@ -390,25 +391,32 @@ private fun PrecheckPage(
                     )
                 }
                 val preview = uiState.cameraPreview
-                if (preview?.available == true) {
-                    val bitmap by rememberCameraPreviewBitmap(preview)
-                    val decodedBitmap = bitmap
-                    if (decodedBitmap != null) {
+                val bitmap by rememberCameraPreviewBitmap(preview)
+                val decodedBitmap = bitmap
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(140.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (preview?.available == true && decodedBitmap != null) {
                         Image(
                             bitmap = decodedBitmap.asImageBitmap(),
                             contentDescription = "主机摄像头预览",
-                            modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
+                            modifier = Modifier.fillMaxSize(),
                             contentScale = ContentScale.Fit
                         )
+                    } else {
+                        Text(
+                            "暂无预览，点击刷新获取最近一帧。",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
                     }
+                }
+                if (preview?.available == true) {
                     StatRow("预览尺寸", "${preview.width} x ${preview.height}")
                     StatRow("来源", preview.source ?: "主机摄像头")
                     StatRow("序号", "${preview.sequence}")
-                } else {
-                    Text(
-                        "暂无预览，点击刷新获取最近一帧。",
-                        style = MaterialTheme.typography.bodyMedium
-                    )
                 }
                 uiState.boardErrorMessage?.let {
                     Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error)
@@ -417,17 +425,20 @@ private fun PrecheckPage(
                     OutlinedButton(onClick = viewModel::refreshCameraPreview, enabled = preparationReady) {
                         Text("刷新画面")
                     }
-                    OutlinedButton(onClick = viewModel::skipPrecheck, enabled = preparationReady) {
+                    OutlinedButton(onClick = viewModel::skipPrecheck, enabled = manualControlsReady) {
                         Text("继续")
                     }
-                    TextButton(onClick = viewModel::skipCalibration, enabled = preparationReady) {
+                    TextButton(
+                        onClick = viewModel::skipCalibration,
+                        enabled = preparationReady && gimbal != null && !gimbal.manualLease
+                    ) {
                         Text("跳过")
                     }
                 }
             }
         }
 
-        if (uiState.precheck?.gimbal != null) {
+        if (gimbal != null) {
             Card(
                 modifier = Modifier.weight(1f).fillMaxHeight(),
                 colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
@@ -441,7 +452,11 @@ private fun PrecheckPage(
                 ) {
                     Text("云台微调", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "小步调整镜头方向，默认每次 3 度。",
+                        if (gimbal.manualLease) {
+                            "自动调整已结束，可以手动微调。"
+                        } else {
+                            "自动调整中；完成后可微调，也可点击跳过。"
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -456,14 +471,31 @@ private fun PrecheckPage(
                         )
                         gimbalStatus.lastError?.let { StatRow("错误", it) }
                     }
-                    OutlinedButton(onClick = { viewModel.moveGimbal(0, -3) }) { Text("上") }
+                    OutlinedButton(
+                        onClick = { viewModel.moveGimbal(0, -3) },
+                        enabled = manualControlsReady
+                    ) { Text("上") }
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = { viewModel.moveGimbal(-3, 0) }) { Text("左") }
-                        OutlinedButton(onClick = viewModel::centerGimbal) { Text("归中") }
-                        OutlinedButton(onClick = { viewModel.moveGimbal(3, 0) }) { Text("右") }
+                        OutlinedButton(
+                            onClick = { viewModel.moveGimbal(-3, 0) },
+                            enabled = manualControlsReady
+                        ) { Text("左") }
+                        OutlinedButton(
+                            onClick = viewModel::centerGimbal,
+                            enabled = manualControlsReady
+                        ) { Text("归中") }
+                        OutlinedButton(
+                            onClick = { viewModel.moveGimbal(3, 0) },
+                            enabled = manualControlsReady
+                        ) { Text("右") }
                     }
-                    OutlinedButton(onClick = { viewModel.moveGimbal(0, 3) }) { Text("下") }
-                    TextButton(onClick = viewModel::stopGimbal) { Text("停止") }
+                    OutlinedButton(
+                        onClick = { viewModel.moveGimbal(0, 3) },
+                        enabled = manualControlsReady
+                    ) { Text("下") }
+                    TextButton(onClick = viewModel::stopGimbal, enabled = manualControlsReady) {
+                        Text("停止")
+                    }
                 }
             }
         }

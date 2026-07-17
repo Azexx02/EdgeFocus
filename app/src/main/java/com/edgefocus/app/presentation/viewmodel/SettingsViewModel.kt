@@ -12,8 +12,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 data class BandControlUiState(
@@ -53,14 +53,11 @@ class SettingsViewModel @Inject constructor(
                 }
             }
         }
-        viewModelScope.launch {
-            while (true) {
-                if (connectionSupervisor.snapshot.value.isReady) {
-                    connectionSupervisor.refreshHostState()
-                }
-                delay(5_000L)
-            }
-        }
+    }
+
+    fun refreshHostStatus() {
+        if (!connectionSupervisor.snapshot.value.isReady) return
+        viewModelScope.launch { connectionSupervisor.refreshHostState() }
     }
 
     fun updatePomodoroDuration(duration: Int) {

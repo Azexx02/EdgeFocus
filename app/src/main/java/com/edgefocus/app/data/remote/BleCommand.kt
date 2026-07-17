@@ -39,7 +39,8 @@ interface BleCommand {
     suspend fun sessionControl(
         action: String,
         targetDurationMin: Int? = null,
-        operationId: String? = null
+        operationId: String? = null,
+        sessionId: String? = null
     ): Result<ByteArray>
     suspend fun updatePreferences(key: String, value: String): Result<ByteArray>
     suspend fun updatePreferences(preferences: Map<String, Any?>): Result<ByteArray>

@@ -1019,7 +1019,8 @@ class BleManager @Inject constructor(
     override suspend fun sessionControl(
         action: String,
         targetDurationMin: Int?,
-        operationId: String?
+        operationId: String?,
+        sessionId: String?
     ): Result<ByteArray> {
         // 模拟设备回复
         if (simulatedConnected && simulateDeviceResponse) {
@@ -1064,7 +1065,8 @@ class BleManager @Inject constructor(
         val data = BoardJsonParser.buildSessionControl(
             actionName,
             targetDurationMin,
-            operationId
+            operationId,
+            sessionId
         ).toString()
         return sendDataAndAwait(data.toByteArray(Charsets.UTF_8), HostRequestPriority.P0_CRITICAL)
     }

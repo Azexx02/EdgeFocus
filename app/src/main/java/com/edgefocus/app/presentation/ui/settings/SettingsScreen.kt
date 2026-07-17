@@ -35,6 +35,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -63,6 +64,10 @@ fun SettingsScreen(
     val bandControl by viewModel.bandControl.collectAsState()
     var versionTapCount by remember { mutableIntStateOf(0) }
     var showDevTools by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(Unit) {
+        viewModel.refreshHostStatus()
+    }
 
     Column(
         modifier = Modifier

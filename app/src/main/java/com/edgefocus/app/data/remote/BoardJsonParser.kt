@@ -10,9 +10,13 @@ enum class BoardSessionPhase(val wireValue: String) {
     PAUSED("paused");
 
     companion object {
-        fun fromWire(value: String?): BoardSessionPhase {
+        fun fromWireOrNull(value: String?): BoardSessionPhase? {
             val normalized = value?.trim()?.lowercase()
-            return entries.firstOrNull { it.wireValue == normalized } ?: IDLE
+            return entries.firstOrNull { it.wireValue == normalized }
+        }
+
+        fun fromWire(value: String?): BoardSessionPhase {
+            return fromWireOrNull(value) ?: IDLE
         }
     }
 }
@@ -134,7 +138,10 @@ data class PrecheckGimbal(
     val online: Boolean = false,
     val safe: Boolean = false,
     val angleX: Double? = null,
-    val angleY: Double? = null
+    val angleY: Double? = null,
+    val state: String = "idle",
+    val manualLease: Boolean = false,
+    val detail: String? = null
 )
 
 data class OutputCapability(
@@ -220,7 +227,8 @@ object BoardJsonParser {
     fun buildSessionControl(
         action: String,
         targetDurationMin: Int? = null,
-        operationId: String? = null
+        operationId: String? = null,
+        sessionId: String? = null
     ): JSONObject {
         val data = JSONObject().apply {
             put("action", action)
@@ -229,6 +237,7 @@ object BoardJsonParser {
                 put("source_mode", "live_camera")
                 operationId?.takeIf { it.isNotBlank() }?.let { put("operation_id", it) }
             }
+            sessionId?.takeIf { it.isNotBlank() }?.let { put("session_id", it) }
         }
         return JSONObject().apply {
             put("cmd", "session_control")
@@ -508,8 +517,18 @@ object BoardJsonParser {
                     enabled = it.optBoolean("enabled", false),
                     online = it.optBoolean("online", false),
                     safe = it.optBoolean("safe", false),
-                    angleX = it.optDoubleOrNull("angle_x"),
-                    angleY = it.optDoubleOrNull("angle_y")
+                    angleX = runtimeGimbal?.optDoubleOrNull("angle_x")
+                        ?: it.optDoubleOrNull("angle_x"),
+                    angleY = runtimeGimbal?.optDoubleOrNull("angle_y")
+                        ?: it.optDoubleOrNull("angle_y"),
+                    state = runtimeGimbal?.optString("state")?.takeIf { value -> value.isNotBlank() }
+                        ?: it.optString("state", "idle"),
+                    manualLease = runtimeGimbal?.optBoolean(
+                        "manual_lease",
+                        it.optBoolean("manual_lease", false)
+                    ) ?: it.optBoolean("manual_lease", false),
+                    detail = runtimeGimbal?.optJsonString("detail")
+                        ?: it.optJsonString("detail")
                 )
             } ?: runtimeGimbal?.let { gimbal ->
                 val available = gimbal.optBoolean("available", false)
@@ -519,7 +538,10 @@ object BoardJsonParser {
                     online = available && healthStatus !in setOf("not_started", "offline", "failed"),
                     safe = available && !gimbal.optBoolean("degraded", false) && healthStatus == "ready",
                     angleX = gimbal.optDoubleOrNull("angle_x"),
-                    angleY = gimbal.optDoubleOrNull("angle_y")
+                    angleY = gimbal.optDoubleOrNull("angle_y"),
+                    state = gimbal.optString("state", "idle"),
+                    manualLease = gimbal.optBoolean("manual_lease", false),
+                    detail = gimbal.optJsonString("detail")
                 )
             }
         )

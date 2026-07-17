@@ -21,7 +21,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
@@ -324,6 +323,8 @@ private fun HomePrecheckPage(
 ) {
     val preparationReady = uiState.preparationState == BoardPreparationState.READY ||
         uiState.preparationState == BoardPreparationState.DEGRADED
+    val gimbal = uiState.precheck?.gimbal
+    val manualControlsReady = preparationReady && (gimbal == null || gimbal.manualLease)
     Box(modifier = modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier
@@ -355,15 +356,22 @@ private fun HomePrecheckPage(
                 val preview = uiState.cameraPreview
                 val bitmap by rememberCameraPreviewBitmap(preview)
                 val decodedBitmap = bitmap
-                if (preview?.available == true && decodedBitmap != null) {
-                    Image(
-                        bitmap = decodedBitmap.asImageBitmap(),
-                        contentDescription = "主机摄像头预览",
-                        modifier = Modifier.fillMaxWidth().aspectRatio(16f / 9f),
-                        contentScale = ContentScale.Fit
-                    )
-                } else {
-                    Text("暂无预览，点击刷新获取最近一帧。")
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(140.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    if (preview?.available == true && decodedBitmap != null) {
+                        Image(
+                            bitmap = decodedBitmap.asImageBitmap(),
+                            contentDescription = "主机摄像头预览",
+                            modifier = Modifier.fillMaxSize(),
+                            contentScale = ContentScale.Fit
+                        )
+                    } else {
+                        Text("暂无预览，点击刷新获取最近一帧。")
+                    }
                 }
                 OutlinedButton(onClick = viewModel::refreshCameraPreview, enabled = preparationReady) {
                     Text("刷新画面")
@@ -371,16 +379,25 @@ private fun HomePrecheckPage(
             }
         }
 
-        if (uiState.precheck?.gimbal != null) {
+        if (gimbal != null) {
             Text("云台微调", style = MaterialTheme.typography.titleMedium)
-            OutlinedButton(onClick = { viewModel.nudgeGimbal("UP") }, enabled = preparationReady) { Text("上") }
+            Text(
+                if (gimbal.manualLease) {
+                    "自动调整已结束，可以手动微调。"
+                } else {
+                    "自动调整中；完成后可微调，也可点击跳过。"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            OutlinedButton(onClick = { viewModel.nudgeGimbal("UP") }, enabled = manualControlsReady) { Text("上") }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { viewModel.nudgeGimbal("LEFT") }, enabled = preparationReady) { Text("左") }
-                OutlinedButton(onClick = viewModel::centerGimbal, enabled = preparationReady) { Text("归中") }
-                OutlinedButton(onClick = { viewModel.nudgeGimbal("RIGHT") }, enabled = preparationReady) { Text("右") }
+                OutlinedButton(onClick = { viewModel.nudgeGimbal("LEFT") }, enabled = manualControlsReady) { Text("左") }
+                OutlinedButton(onClick = viewModel::centerGimbal, enabled = manualControlsReady) { Text("归中") }
+                OutlinedButton(onClick = { viewModel.nudgeGimbal("RIGHT") }, enabled = manualControlsReady) { Text("右") }
             }
-            OutlinedButton(onClick = { viewModel.nudgeGimbal("DOWN") }, enabled = preparationReady) { Text("下") }
-            TextButton(onClick = viewModel::stopGimbal, enabled = preparationReady) { Text("停止云台") }
+            OutlinedButton(onClick = { viewModel.nudgeGimbal("DOWN") }, enabled = manualControlsReady) { Text("下") }
+            TextButton(onClick = viewModel::stopGimbal, enabled = manualControlsReady) { Text("停止云台") }
         }
 
             uiState.boardErrorMessage?.let {
@@ -397,14 +414,17 @@ private fun HomePrecheckPage(
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                OutlinedButton(onClick = viewModel::skipPrecheckAutoAdjust, enabled = preparationReady) {
+                OutlinedButton(
+                    onClick = viewModel::skipPrecheckAutoAdjust,
+                    enabled = preparationReady && gimbal != null && !gimbal.manualLease
+                ) {
                     Text("跳过自动调整")
                 }
                 TactileButton(
                     onClick = viewModel::confirmPrecheck,
                     containerColor = MaterialTheme.colorScheme.primary,
                     contentColor = Color.White,
-                    enabled = preparationReady
+                    enabled = manualControlsReady
                 ) {
                     Icon(Icons.Default.PlayArrow, contentDescription = null)
                     Spacer(modifier = Modifier.width(6.dp))
