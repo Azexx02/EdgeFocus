@@ -13,15 +13,14 @@ Shorten the automatic PRECHECK search of the currently stable old runtime withou
 
 ## Preserved fallback
 
-Before changing the active configuration, create a timestamped immutable-style snapshot under `/opt/edgefocus/releases/` containing:
+Before changing the active configuration, create a timestamped immutable-style snapshot outside the live `/opt/edgefocus` tree containing:
 
-- the active `focus_app` executable;
-- the complete active `config/` directory;
-- the active `focus_app.service` unit;
-- a manifest containing source paths, sizes, timestamps, and SHA-256 hashes;
+- a metadata-preserving archive of the complete active `/opt/edgefocus` tree, excluding only the existing `releases/` backup tree to avoid recursion;
+- the effective `focus_app.service` unit, its source unit file, all drop-ins, and any referenced `EnvironmentFile` files;
+- a manifest containing source paths, file types, symbolic-link targets, ownership, permissions, sizes, timestamps, and SHA-256 hashes for regular files;
 - a short restore script or exact restore commands stored with the snapshot.
 
-The snapshot directory must not be used as the working deployment target and must not be overwritten by later tests. The existing rollback copies remain untouched as a second fallback.
+The snapshot must be stored under a unique timestamped name, must not be used as the working deployment target, and must not be overwritten by later tests. The existing rollback copies remain untouched as a second fallback. Verify available storage before creating the archive and verify the archive can be listed after creation.
 
 ## Configuration change
 
@@ -38,15 +37,18 @@ Retain all old-parser-required fields, including `effective_vertical_fov_deg` an
 | `stop_queueing_ms` | `6000` | stop before the old parser enters vertical/recovery points |
 | `hard_deadline_ms` | `9000` | final search cutoff |
 
-The old parser still constructs seven primary and several recovery waypoints. With its minimum 3-second waypoint dwell, this configuration admits the first two horizontal waypoints only: approximately `-30°`, then `+30°`, followed by the old runtime's existing return-to-center behavior. Recovery parameters remain valid but their waypoints should not be reached.
+The old parser still constructs seven primary and several recovery waypoints. With its minimum 3-second waypoint dwell, this configuration admits the first two horizontal waypoints only: approximately `-30°`, then `+30°`, followed by the old runtime's existing return-to-center behavior. `stop_queueing_ms` is checked before either a primary or recovery waypoint is selected, so a later scheduler tick can reduce the number of movements but cannot enqueue a third or recovery waypoint after the six-second cutoff. Recovery parameters remain parser-valid but their waypoints are not expected to execute.
+
+The old `finishSearch()` performs a synchronous verified return to center with an eight-second command timeout. Therefore `hard_deadline_ms=9000` is a search-admission cutoff, not a wall-clock interrupt for an already-running return-to-center command. Normal completion is expected around 8–11 seconds; a conservative acceptance ceiling is 16 seconds.
 
 ## Deployment
 
 1. Verify the board is running the known-good old executable and is idle.
-2. Create and verify the complete fallback snapshot.
+2. Record the active executable SHA-256, then create and verify the complete fallback snapshot.
 3. Produce the compact config as a separate candidate file and validate it as JSON.
-4. Install only the candidate config and restart `focus_app`.
-5. Do not restart Bluetooth unless advertisement recovery is actually required. If Wi-Fi remains associated but loses IPv4, restart the existing `wifi-105-dhcp.service`; do not start a second DHCP client.
+4. Install the candidate under a temporary file in the live config directory, preserve the original owner and mode, and rename it atomically over `gimbal-board.json`.
+5. Restart the unchanged old executable. Its startup must log `Gimbal capability enabled with verified board config`; this is the semantic validation performed by the exact deployed parser. If validation fails, restore before starting a session.
+6. Do not restart Bluetooth unless advertisement recovery is actually required. If Wi-Fi remains associated but loses IPv4, restart the existing `wifi-105-dhcp.service`; do not start a second DHCP client.
 
 ## Acceptance test
 
@@ -55,8 +57,8 @@ Use the real web session API, because it exercises the same path as the exhibiti
 1. Confirm idle state, HTTP responsiveness, Wi-Fi IPv4, SSH, Bluetooth service, and one BLE advertisement instance.
 2. Start a one-minute formal session.
 3. Observe PRECHECK transitions and measure state endpoint latency.
-4. Confirm automatic search performs no more than the two intended horizontal sweeps before returning to manual adjustment.
-5. Require manual adjustment availability approximately within 8–11 seconds and no later than 12 seconds under normal hardware operation.
+4. For the no-subject search test, inspect the board command log and physical motion: expect the `-30°` and `+30°` horizontal targets followed by return to center, with no third primary or recovery target. A scheduler-delayed run may stop after one target and is still safe, but a third or recovery target is a failure. A separate subject-present run may terminate early and does not validate the complete no-subject sequence.
+5. Expect manual adjustment availability approximately within 8–11 seconds. Allow up to 16 seconds for the old runtime's synchronous verified return to center.
 6. End the session and confirm the board returns to idle.
 7. Recheck HTTP, Wi-Fi, BLE advertisement, and service health.
 
@@ -64,10 +66,10 @@ Use the real web session API, because it exercises the same path as the exhibiti
 
 Immediately restore the complete known-good snapshot configuration and restart the old runtime if any of the following occurs:
 
-- automatic PRECHECK has not released to manual adjustment within 12 seconds;
+- automatic PRECHECK has not released to manual adjustment within 16 seconds;
 - the process, web endpoint, Wi-Fi, BLE advertisement, or SSH becomes unhealthy;
 - the gimbal enters degraded/fault state;
 - the search reaches recovery scanning or moves outside the intended compact range;
 - configuration validation or service startup fails.
 
-Rollback restores the snapshot's executable and complete `config/` directory together, then verifies their hashes against the manifest.
+Rollback restores the complete archived runtime tree and captured systemd material with metadata, runs `systemctl daemon-reload` if unit material was restored, and verifies the active executable and configuration hashes against the manifest. It then rechecks service state, HTTP, idle/session start, Wi-Fi IPv4, SSH, and BLE advertisement.
