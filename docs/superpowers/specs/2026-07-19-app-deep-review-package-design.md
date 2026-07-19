@@ -79,10 +79,11 @@
 - `REVIEW_GUIDE.md` 记录打包时 HEAD、主机参考仓库 HEAD 和 dirty 状态，但使用符号来源名，不记录本机路径。
 - `SOURCE_STATE.md` 记录 APP 的完整 `git status --short --untracked-files=all` 路径清单、包含/排除决定和已删除文件；不复制 `.git`。`_workspace/` 调试产物明确列为排除类别，可压缩汇总而不逐项展开。
 - APP 源码 dirty 文件必须逐字节存在；排除的 dirty 文件必须在 `SOURCE_STATE.md` 解释原因。文档若因隐私清理发生变化，在清单中标为 `sanitized-copy`，不声称字节一致。
-- `FILE_MANIFEST.sha256` 记录包内每个文件的相对路径、字节数、SHA-256 和类别。需求/主机参考还记录符号来源、来源相对文件名、来源仓库 HEAD/dirty 状态以及清理前 SHA-256。
-- ZIP 生成后展开到新的校验目录，逐项比较 manifest 与实际内容，拒绝缺失、多余或哈希不符。
-- 对最终解压目录再次执行敏感信息、敏感文件名、符号链接、路径越界和禁止二进制扫描。
-- 从解压目录使用 JDK 17、Android SDK 34 运行 `gradlew.bat testDebugUnitTest` 和 `gradlew.bat clean assembleDebug`，结果写入 `VALIDATION.md`。验证生成的 `build/` 产物不回装进 ZIP。
+- 先从 staging 生成不含 `VALIDATION.md` 和 `FILE_MANIFEST.sha256` 的候选 ZIP，展开到候选验证目录。
+- 从候选验证目录使用 JDK 17、Android SDK 34 运行 `gradlew.bat testDebugUnitTest`、`gradlew.bat clean assembleDebug` 和 `gradlew.bat assembleDebugAndroidTest`。只编译仪器测试，不声称已在设备上执行。结果写入 staging 的 `VALIDATION.md`；验证生成的 `build/` 产物不回装进 ZIP。
+- `FILE_MANIFEST.sha256` 记录除它自身以外每个最终包文件的相对路径、字节数、SHA-256 和类别。需求/主机参考还记录符号来源、来源相对文件名、来源仓库 HEAD/dirty 状态以及清理前 SHA-256。manifest 由最终 ZIP 的 SHA-256 间接认证。
+- 加入 `VALIDATION.md` 和 manifest 后生成最终 ZIP，展开到全新的最终校验目录，逐项比较 manifest 与实际内容；仅允许 manifest 自身不在其哈希条目中，拒绝其他缺失、多余或哈希不符。
+- 对最终解压目录再次执行敏感信息、敏感文件名、符号链接、路径越界和禁止二进制扫描；最终校验期间不得修改解压目录。
 - 对最终 ZIP 计算 SHA-256，并在交付信息中提供文件数、未压缩大小和压缩大小。
 
 本包只携带 Windows `gradlew.bat`，因此声明为 Windows 构建复现包。构建需要 JDK 17、Android SDK 34 和首次解析依赖时的网络；不声称可直接在 Unix 上执行 wrapper。
