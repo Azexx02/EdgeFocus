@@ -52,7 +52,10 @@ void MX_GPIO_Init(void)
   __HAL_RCC_GPIOD_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOC, GIMBAL_Y_STBY_Pin|GIMBAL_X_STBY_Pin|BOOST_EN_Pin|G431_FAULT_OUT_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOC, GIMBAL_Y_STBY_Pin|GIMBAL_X_STBY_Pin|BOOST_EN_Pin, GPIO_PIN_RESET);
+
+  /* G431_FAULT_OUT has an external pull-up: release it while fault-free. */
+  HAL_GPIO_WritePin(G431_FAULT_OUT_GPIO_Port, G431_FAULT_OUT_Pin, GPIO_PIN_SET);
 
   /*Configure GPIO pin Output Level */
   HAL_GPIO_WritePin(GPIOA, GIMBAL_X_EN_Pin|GIMBAL_Y_EN_Pin, GPIO_PIN_RESET);
@@ -62,11 +65,18 @@ void MX_GPIO_Init(void)
 
 
   /* 配置 GPIO 引脚：Y 轴待机、X 轴待机、升压使能和故障输出。 */
-  GPIO_InitStruct.Pin = GIMBAL_Y_STBY_Pin|GIMBAL_X_STBY_Pin|BOOST_EN_Pin|G431_FAULT_OUT_Pin;
+  GPIO_InitStruct.Pin = GIMBAL_Y_STBY_Pin|GIMBAL_X_STBY_Pin|BOOST_EN_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+  /* Low-active, open-drain fault output; R4 in the netlist pulls it up. */
+  GPIO_InitStruct.Pin = G431_FAULT_OUT_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(G431_FAULT_OUT_GPIO_Port, &GPIO_InitStruct);
 
   /* 配置 X、Y 轴驱动使能引脚。 */
   GPIO_InitStruct.Pin = GIMBAL_X_EN_Pin|GIMBAL_Y_EN_Pin;
@@ -89,6 +99,13 @@ void MX_GPIO_Init(void)
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   HAL_GPIO_Init(G431_ENABLE_IN_GPIO_Port, &GPIO_InitStruct);
+
+  /* PB8 is sampled by the ROM as BOOT0 at reset and remains readable by the
+     application. R1 in the netlist supplies the required default pull-down. */
+  GPIO_InitStruct.Pin = BOOT0_CTRL_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(BOOT0_CTRL_GPIO_Port, &GPIO_InitStruct);
 
 }
 

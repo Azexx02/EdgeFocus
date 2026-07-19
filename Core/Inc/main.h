@@ -71,6 +71,8 @@ void Error_Handler(void);
 #define SOFT_I2C_SCL_GPIO_Port GPIOB
 #define SOFT_I2C_SDA_Pin GPIO_PIN_11
 #define SOFT_I2C_SDA_GPIO_Port GPIOB
+#define BOOT0_CTRL_Pin GPIO_PIN_8
+#define BOOT0_CTRL_GPIO_Port GPIOB
 #define G431_FAULT_OUT_Pin GPIO_PIN_12
 #define G431_FAULT_OUT_GPIO_Port GPIOC
 #define G431_ENABLE_IN_Pin GPIO_PIN_2

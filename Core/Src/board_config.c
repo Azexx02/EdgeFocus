@@ -4,6 +4,7 @@
 #include "main.h"
 
 static bool boost_enabled;
+static bool fault_active;
 
 void board_config_init(void)
 {
@@ -31,11 +32,20 @@ bool board_get_enable_input(void)
   return HAL_GPIO_ReadPin(G431_ENABLE_IN_GPIO_Port, G431_ENABLE_IN_Pin) == GPIO_PIN_SET;
 }
 
+bool board_get_boot0_ctrl(void)
+{
+  return HAL_GPIO_ReadPin(BOOT0_CTRL_GPIO_Port, BOOT0_CTRL_Pin) == GPIO_PIN_SET;
+}
+
 void board_set_fault(bool active)
 {
+  fault_active = active;
+  /* Netlist R4 pulls this line high. Assert a fault by sinking the line. */
   HAL_GPIO_WritePin(G431_FAULT_OUT_GPIO_Port, G431_FAULT_OUT_Pin,
-                    active ? GPIO_PIN_SET : GPIO_PIN_RESET);
+                    active ? GPIO_PIN_RESET : GPIO_PIN_SET);
 }
+
+bool board_get_fault(void) { return fault_active; }
 
 void board_set_dac_mv(uint16_t x_mv, uint16_t y_mv)
 {
