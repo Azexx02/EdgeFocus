@@ -11,7 +11,7 @@
 
 目标：让维护 profile 的 yaw ±3° 验证能够克服实机静摩擦并按现有 settled 条件真实到位，以便取得有效电流样本。
 
-非目标：不修改生产 profile，不放宽 settled 条件，不扩大维护 ±10° 安全窗，不改变 UART 协议、速度斜坡、原点、校准结果或电流保护策略。
+非目标：不修改生产 profile，不放宽 settled 条件，不扩大维护 ±10° 安全窗，不改变既有 UART 控制命令、速度斜坡、原点、校准结果或电流保护策略。允许增加一条只读、无运动副作用的维护诊断查询，但协议版本和既有命令语义不变。
 
 ## 3. 设计
 
@@ -65,7 +65,7 @@ output = clamp(controller_output,
 
 ### 6.2 修订后的控制设计
 
-新增 HAL 无关的 `gimbal_maintenance_stiction` 小状态机，仅由 yaw 的 maintenance profile 调用。生产 profile、pitch、协议、目标斜坡、PD 参数、settled 门限和 180 tick 上限全部保持不变。
+新增 HAL 无关的 `gimbal_maintenance_stiction` 小状态机，仅由 yaw 的 maintenance profile 调用。生产 profile、pitch、既有控制协议、目标斜坡、PD 参数、settled 门限和 180 tick 上限全部保持不变。
 
 抗静摩擦触发必须同时满足：
 
@@ -73,7 +73,7 @@ output = clamp(controller_output,
 - 目标斜坡已到终点：`target_delta_abs <= 2 raw`；
 - 尚未 settled，且 `error_abs > 8 raw`；
 - 滤波速度处于 `-1..+1 raw/control-cycle`；
-- 上述条件连续保持 30 个 5 ms 控制周期，即 150 ms。
+- 上述条件按 MCU 单调毫秒时钟连续保持至少 150 ms。
 
 状态机只处理无符号 PWM 幅值，绝不生成或改变方向。`requested_magnitude` 是原 PD/static 控制器输出的绝对值，`requested_direction` 完全沿用现有控制器方向；方向无效、误差为零或控制器没有请求扭矩时不得触发补偿。触发前完全返回原 `requested_magnitude`。触发后，临时 duty floor 从当前 `requested_magnitude` 起每个控制周期增加 2 tick，最终输出为：
 
@@ -87,30 +87,41 @@ output_magnitude = max(requested_magnitude, assist_floor)
 output_direction = requested_direction
 ```
 
-每个新 yaw 目标最多允许一次补偿尝试：进入激活态时立即锁存 `assist_attempted`，在该目标生命周期内不得第二次触发。补偿单次最多激活 60 个 5 ms 控制周期，即 300 ms。达到期限但仍未检测到运动恢复时，立即撤销临时 floor、恢复原 `requested_magnitude`，并锁存 `assist_exhausted`。该期限由 G431 本地计数，独立于主机 5 秒 verified-settle 超时、UART 和 STOP 是否正常；因此即使主机失联，也不会重复脉冲或无限保持 180 tick。
+状态机更新接口接收 MCU 单调时间 `now_ms`，所有时差采用无符号减法以兼容计数器回绕。首次满足资格条件时记录 `qualify_started_ms`；只有 `now_ms - qualify_started_ms >= 150` 才能触发。条件中断会清除资格起点，下一次必须重新累计真实墙钟时间。
+
+每个新 yaw 目标最多允许一次补偿尝试：进入激活态时立即记录 `assist_started_ms` 并锁存 `assist_attempted`，在该目标生命周期内不得第二次触发。每次状态更新都必须先判断 `now_ms - assist_started_ms >= 300`，到期则在本轮输出计算前立即撤销临时 floor、恢复原 `requested_magnitude`，并锁存 `assist_exhausted`。该期限由 G431 本地单调时间判断，独立于主机 5 秒 verified-settle 超时、UART 和 STOP 是否正常；因此即使主机失联，也不会重复脉冲。正常控制任务继续运行时，补偿在真实 300 ms 到期后的首个控制调用撤销；若整个 MCU/控制中断停止运行，则由既有硬件 Fault/看门狗安全链负责关断，不把控制循环停摆误表述为软件状态机可单独解决的问题。
 
 下列任一条件出现时立即把资格计数和临时 floor 清零：退出 maintenance、轴不是 yaw、目标斜坡重新运动、进入 settled 误差带 `error_abs <= 8`、或实际速度离开 `-1..+1`。其中速度恢复只撤销本次 floor；同一目标仍保留 `assist_attempted`，因而不会再次补偿。`assist_attempted` 和 `assist_exhausted` 只允许由新目标、STOP、重新 ARM 或显式 reset 清除。由此补偿只形成每目标至多一次、有界的“停滞解锁脉冲”，不会在轴已恢复运动后持续顶到 180，也不会进入生产模式。
 
 `motor_pwm_hold_enable(false)`、STOP、Fault、重新 ARM 和新 yaw 目标均必须显式清除该状态。原 `gimbal_power_profile` 的生产/维护上限隔离和编译期约束继续保留。
+
+为使实机验证可观察，协议 3 增加只读维护查询 `MAINTASSIST?`。它不改变目标、HOLD、输出或任何保护状态，仅返回与控制状态分离的最近一次诊断快照：
+
+```text
+MAINTASSIST,GEN=<target_generation>,ATTEMPTED=<0|1>,EXHAUSTED=<0|1>,ACTIVE_MS=<0..300>,PEAK_FLOOR=<0..180>
+```
+
+诊断快照在补偿开始、结束或到期时更新，跨 STOP 保留，直到新 yaw 目标开始时清零；STOP 仍立即清除实际资格计数、floor 和激活态。查询需要已完成 HELLO，且只有 maintenance ARM 生命周期产生的数据才可标记 `ATTEMPTED=1`。该查询是新增的只读兼容扩展，协议版本保持 3.0，未知命令和既有响应不变。
 
 ### 6.3 可测试边界
 
 纯 C 测试必须覆盖：
 
 1. 生产 yaw、maintenance pitch、目标斜坡未完成或已 settled 时，输出幅值和方向严格等于原控制器输出。
-2. maintenance yaw 停滞不足 150 ms 时不介入。
+2. maintenance yaw 停滞不足 150 ms 时不介入；以 5 ms、20 ms 和 50 ms 的不规则调用间隔验证资格按 `now_ms` 而不是调用次数计算，并覆盖毫秒计数器回绕。
 3. 满足 150 ms 后 floor 单调上升、永不超过 180；分别覆盖正向和负向请求，并验证输出相位/方向与原控制器完全一致。
 4. 速度恢复、误差进入 settled 带、STOP/reset 或新目标到来时，计数与 floor 立即归零。
 5. 归零后再次停滞必须重新等待完整 150 ms，不允许沿用旧补偿。
 6. 首次激活即锁存 `assist_attempted`；无论因速度恢复还是达到 300 ms 而撤销 floor，同一目标均不得再次触发。
-7. 激活达到 300 ms 时立即撤销 floor 并额外锁存 `assist_exhausted`；即使主机不发送 STOP，也不得无限保持 180。
+7. 激活达到 300 ms 时，在该次输出计算前立即撤销 floor 并额外锁存 `assist_exhausted`；以 5 ms、20 ms 和 50 ms 调用间隔验证基于 `now_ms` 的期限，并覆盖计数器回绕。即使主机不发送 STOP，也不得再次触发或在状态机继续运行时保持 180。
 8. 方向无效、误差为零或原控制器不请求扭矩时不触发补偿；新目标、STOP、重新 ARM 和显式 reset 可以清除 `assist_attempted` 与 `assist_exhausted`。
+9. 诊断快照正确记录 generation、实际激活时长和峰值 floor；STOP 清除控制状态但不擦除最近快照，新 yaw 目标清零快照，查询本身不得改变任何控制状态。
 
 ### 6.4 实机验证顺序
 
 1. G431 纯 C 测试、Debug/Release 重建、Flash/RAM 检查和 ST-LINK 下载校验。
 2. 无运动 `probe` 确认协议 3、calibration/origin epoch 1、无 Fault。
-3. 单独运行 yaw +1°，要求同 generation `SETTLED=1`；记录实际补偿激活时长并确认不超过 300 ms，随后 STOP，检查无 Fault、电流有效且未饱和。
+3. 单独运行 yaw +1°，要求同 generation `SETTLED=1`。settled 后保持当前目标和 HOLD，不再改变目标；每 100 ms 轮询 CURRENT，最多再等待 2000 ms，直到 `WINDOW_MS>=1000` 且 `VALID=1`。期间若出现饱和、Fault 或采样 deadline 到期则判本阶段失败。读取 `MAINTASSIST?`，记录同 generation 的实际补偿激活时长并确认不超过 300 ms，随后无条件 STOP，再检查无 Fault。
 4. +1°通过后，单独运行 yaw +3°并执行相同检查；失败则 STOP，不测试反向，不提高 180 上限。
 5. +3°通过后再运行 yaw -3°；只有正反向均通过才运行完整 `current-sample`。
-6. 本修订仍不写电流保护阈值；只有完整样本满足有效、未饱和、窗口至少 1000 ms 后，才另行评估阈值。
+6. CLI 对成功和失败路径都执行 finally 风格 STOP；为凑满电流窗口不得继续改变目标。只有完整样本满足有效、未饱和、窗口至少 1000 ms 后，才另行评估保护阈值；本修订仍不写阈值。
