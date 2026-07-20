@@ -36,7 +36,17 @@ bool StateMachine::beginAlignment(std::int64_t now_ms) {
     return transition(State::LinkCheck, State::Aligning, now_ms);
 }
 
+bool StateMachine::markReady(std::int64_t now_ms) {
+    if (status_.state != State::Aligning && status_.state != State::LinkCheck) return false;
+    status_.state = State::Ready;
+    status_.state_since_ms = now_ms;
+    status_.fault_active = false;
+    ++status_.generation;
+    return true;
+}
+
 bool StateMachine::beginMove(std::int64_t now_ms) {
+    if (status_.state == State::Moving) return true;
     if (status_.state != State::Ready && status_.state != State::Holding) return false;
     const State current = status_.state;
     return transition(current, State::Moving, now_ms);
@@ -70,24 +80,28 @@ void StateMachine::updateEvent(const Event& event, std::int64_t now_ms) {
     if (event.yaw_deg) status_.yaw_deg = event.yaw_deg;
     if (event.pitch_deg) status_.pitch_deg = event.pitch_deg;
     if (event.fault_active) status_.fault_active = *event.fault_active;
+    if (event.error_class != ErrorClass::None) {
+        status_.snapshot.fault_class = event.error_class;
+        status_.snapshot.fault_code = event.error_code;
+    }
 }
 
 bool StateMachine::onEvent(const Event& event, std::int64_t now_ms) {
     updateEvent(event, now_ms);
-    if (event.kind == EventKind::Error) {
-        tripFault(now_ms, event.raw.empty() ? "g431_error" : event.raw);
+    if (event.kind == EventKind::Error &&
+        (event.error_class == ErrorClass::Fault ||
+         event.error_class == ErrorClass::Safety)) {
+        tripFault(now_ms, event.error_code.empty() ?
+            (event.raw.empty() ? "g431_error" : event.raw) : event.error_code);
         return false;
     }
     if (event.fault_active.value_or(false)) {
         tripFault(now_ms, "g431_fault_event");
         return false;
     }
-    if (status_.state == State::Aligning && event.kind == EventKind::BootAlignOk) {
-        status_.state = State::Ready;
-        status_.state_since_ms = now_ms;
-        status_.fault_active = false;
-        ++status_.generation;
-        return true;
+    if (status_.state == State::Aligning &&
+        (event.kind == EventKind::BootAlignOk || event.kind == EventKind::ArmAck)) {
+        return markReady(now_ms);
     }
     if (status_.state == State::Stopping && event.kind == EventKind::Ok &&
         event.subject == "STOP") {

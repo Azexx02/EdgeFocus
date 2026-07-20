@@ -5,10 +5,27 @@
 
 #include <algorithm>
 #include <cmath>
+#include <exception>
 #include <thread>
 #include <utility>
 
 namespace edgefocus::gimbal {
+namespace {
+
+CommandResult failure(std::string error, ErrorClass error_class,
+                      std::string error_code = {}) {
+    CommandResult result;
+    result.error = std::move(error);
+    result.error_class = error_class;
+    result.error_code = std::move(error_code);
+    return result;
+}
+
+std::int32_t degreeToTenths(double degree) {
+    return static_cast<std::int32_t>(std::lround(normalizeAngle(degree) * 10.0)) % 3600;
+}
+
+}  // namespace
 
 std::int64_t GimbalHardwareService::defaultClockMs() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -16,8 +33,9 @@ std::int64_t GimbalHardwareService::defaultClockMs() {
         .count();
 }
 
-GimbalHardwareService::GimbalHardwareService(
-    std::unique_ptr<IGimbalIo> io, MotionLimits limits, Clock clock, Sleeper sleeper)
+GimbalHardwareService::GimbalHardwareService(std::unique_ptr<IGimbalIo> io,
+                                             MotionLimits limits, Clock clock,
+                                             Sleeper sleeper)
     : Module("GimbalHardwareService"),
       io_(std::move(io)),
       limits_(std::move(limits)),
@@ -25,7 +43,10 @@ GimbalHardwareService::GimbalHardwareService(
       sleeper_(sleeper ? std::move(sleeper)
                        : Sleeper([](std::chrono::milliseconds delay) {
                              std::this_thread::sleep_for(delay);
-                         })) {}
+                         })) {
+    snapshot_.control_mode = io_ ? io_->controlMode() : ControlMode::UartOnly;
+    published_status_.snapshot = snapshot_;
+}
 
 GimbalHardwareService::~GimbalHardwareService() { stop(); }
 
@@ -37,92 +58,243 @@ bool GimbalHardwareService::init(AppContext& /*ctx*/) {
              "Initialization degraded; fixed-camera mode remains available: %s",
              error.c_str());
     }
-    // Gimbal is an optional process capability and must never prevent the
-    // camera/Fusion/BLE core from starting.
     return true;
 }
 
 void GimbalHardwareService::runOnce(AppContext& /*ctx*/) {
-    bool initialized = false;
-    {
-        std::lock_guard<std::recursive_mutex> lock(operation_mutex_);
-        initialized = initialized_;
-    }
-    if (!initialized) {
+    const auto current = snapshot();
+    if (!current.available && current.link_health == LinkHealth::Unavailable) {
         const auto now_ms = clock_();
         if (now_ms >= next_start_attempt_ms_) {
             std::string error;
-            if (start(&error)) {
-                LOGI("GimbalHardwareService", "Gimbal I/O recovered");
-                next_start_attempt_ms_ = 0;
-            } else {
+            if (!start(&error)) {
                 next_start_attempt_ms_ = now_ms + StateMachine::kRecoveryIntervalMs;
-                LOGW("GimbalHardwareService", "Gimbal I/O still unavailable: %s",
-                     error.c_str());
+            } else {
+                next_start_attempt_ms_ = 0;
             }
         }
-        sleeper_(std::chrono::milliseconds(25));
-        return;
+    } else {
+        pollOnce();
     }
-    pollOnce();
+    sleeper_(std::chrono::milliseconds(10));
 }
+
 void GimbalHardwareService::shutdown(AppContext& /*ctx*/) { stop(); }
+
+void GimbalHardwareService::ensureWorker() {
+    std::lock_guard<std::mutex> lock(queue_mutex_);
+    if (worker_.joinable()) return;
+    worker_terminate_ = false;
+    worker_ = std::thread([this] { workerMain(); });
+}
+
+void GimbalHardwareService::workerMain() {
+    worker_id_ = std::this_thread::get_id();
+    for (;;) {
+        std::unique_ptr<QueueItem> item;
+        {
+            std::unique_lock<std::mutex> lock(queue_mutex_);
+            queue_cv_.wait(lock, [this] {
+                return worker_terminate_ || emergency_requested_.load() || !queue_.empty();
+            });
+            if (emergency_requested_.exchange(false)) {
+                lock.unlock();
+                emergencyStopLocked();
+                continue;
+            }
+            if (worker_terminate_ && queue_.empty()) break;
+            item = std::move(queue_.front());
+            queue_.pop_front();
+        }
+
+        CommandResult result;
+        try {
+            result = item->work();
+        } catch (const std::exception& exception) {
+            result = failure(std::string("worker_exception:") + exception.what(),
+                             ErrorClass::Link, "WORKER_EXCEPTION");
+            degradeLocked(result.error, result.error_class, result.error_code, true);
+        } catch (...) {
+            result = failure("worker_exception:unknown", ErrorClass::Link,
+                             "WORKER_EXCEPTION");
+            degradeLocked(result.error, result.error_class, result.error_code, true);
+        }
+        result.queued = true;
+        result.request_sequence = item->sequence;
+        snapshot_.last_queued_sequence = item->sequence;
+        snapshot_.acked_through_sequence = item->sequence;
+        publishLocked();
+        item->completion.set_value(std::move(result));
+    }
+    worker_id_ = {};
+}
+
+CommandResult GimbalHardwareService::submit(Work work, int caller_timeout_ms) {
+    if (std::this_thread::get_id() == worker_id_) return work();
+    ensureWorker();
+    auto item = std::make_unique<QueueItem>();
+    item->sequence = next_sequence_.fetch_add(1);
+    item->work = std::move(work);
+    auto future = item->completion.get_future();
+    {
+        std::lock_guard<std::mutex> lock(queue_mutex_);
+        if (queue_.size() >= kMaximumQueueDepth) {
+            return failure("gimbal_queue_full", ErrorClass::Transient, "QUEUE_FULL");
+        }
+        {
+            std::lock_guard<std::mutex> published_lock(published_mutex_);
+            published_status_.snapshot.last_queued_sequence = item->sequence;
+        }
+        queue_.push_back(std::move(item));
+    }
+    queue_cv_.notify_one();
+    if (future.wait_for(std::chrono::milliseconds(std::max(100, caller_timeout_ms))) !=
+        std::future_status::ready) {
+        auto result = failure("gimbal_worker_deadline", ErrorClass::Timeout,
+                              "WORKER_DEADLINE");
+        result.timeout = true;
+        return result;
+    }
+    return future.get();
+}
+
+bool GimbalHardwareService::start(std::string* error) {
+    const auto result = submit([this] { return openLocked(); }, 3000);
+    if (error) *error = result.error;
+    return result.success;
+}
+
+void GimbalHardwareService::stop() noexcept {
+    if (!worker_.joinable()) return;
+    (void)submit([this] { return closeLocked(); }, 3000);
+    {
+        std::lock_guard<std::mutex> lock(queue_mutex_);
+        worker_terminate_ = true;
+    }
+    queue_cv_.notify_all();
+    if (worker_.joinable() && worker_.get_id() != std::this_thread::get_id()) worker_.join();
+}
+
+void GimbalHardwareService::requestEmergencyStop() noexcept {
+    emergency_requested_.store(true);
+    queue_cv_.notify_one();
+}
+
+Status GimbalHardwareService::status() const {
+    std::lock_guard<std::mutex> lock(published_mutex_);
+    auto result = published_status_;
+    if (result.snapshot.last_pose_at_ms > 0) {
+        result.snapshot.last_pose_age_ms =
+            std::max<std::int64_t>(0, defaultClockMs() - result.snapshot.last_pose_at_ms);
+    }
+    return result;
+}
+
+GimbalSnapshot GimbalHardwareService::snapshot() const { return status().snapshot; }
 
 bool GimbalHardwareService::setSafeLinesLocked(std::string& error) {
     if (!io_->setBoot0(false, error)) return false;
     return io_->setEnable(false, error);
 }
 
-bool GimbalHardwareService::start(std::string* error) {
-    std::lock_guard<std::recursive_mutex> lock(operation_mutex_);
-    if (initialized_) return true;
-    std::string local_error;
-    if (!io_ || !io_->open(local_error) || !setSafeLinesLocked(local_error)) {
+CommandResult GimbalHardwareService::openLocked() {
+    if (initialized_) return CommandResult{true};
+    std::string error;
+    if (!io_ || !io_->open(error) || !setSafeLinesLocked(error)) {
         if (io_) io_->close();
-        if (error) *error = local_error.empty() ? "gimbal I/O open failed" : local_error;
-        return false;
+        snapshot_.available = false;
+        snapshot_.link_health = LinkHealth::Unavailable;
+        snapshot_.degraded_reason = error.empty() ? "gimbal_io_open_failed" : error;
+        publishLocked();
+        return failure(snapshot_.degraded_reason, ErrorClass::Link, "IO_OPEN_FAILED");
     }
     initialized_ = true;
-    next_start_attempt_ms_ = 0;
-    machine_.reset(clock_());
     framer_.reset();
-    alignment_yaw_deg_.reset();
-    alignment_pitch_deg_.reset();
+    machine_.reset(clock_());
+    snapshot_ = GimbalSnapshot{};
+    snapshot_.control_mode = io_->controlMode();
+    snapshot_.link_health = LinkHealth::Negotiating;
     next_health_probe_ms_ = 0;
     consecutive_health_failures_ = 0;
     last_uart_errors_.reset();
-    if (error) error->clear();
-    return true;
+    publishLocked();
+    return CommandResult{true};
 }
 
-void GimbalHardwareService::stop() noexcept {
-    std::lock_guard<std::recursive_mutex> lock(operation_mutex_);
-    if (!io_) return;
+CommandResult GimbalHardwareService::closeLocked() {
+    CommandResult result{true};
+    if (!io_) return result;
     if (initialized_) {
         const auto state = machine_.status().state;
-        if (state == State::Ready || state == State::Moving || state == State::Holding) {
-            (void)stopAndDisable(300);
+        if (state == State::Ready || state == State::Moving || state == State::Holding ||
+            state == State::Calibrating) {
+            result = stopAndDisableLocked(500);
         }
         std::string ignored;
         (void)io_->setEnable(false, ignored);
+        io_->close();
     }
-    io_->close();
     initialized_ = false;
+    snapshot_.available = false;
+    snapshot_.link_health = LinkHealth::Unavailable;
+    snapshot_.state = State::Disabled;
+    publishLocked();
+    return result;
 }
 
-Status GimbalHardwareService::status() const {
-    std::lock_guard<std::recursive_mutex> lock(operation_mutex_);
-    return machine_.status();
+void GimbalHardwareService::publishLocked() {
+    auto value = machine_.status();
+    snapshot_.state = value.state;
+    snapshot_.available = initialized_ &&
+        snapshot_.compatibility == ProtocolCompatibility::Protocol3Control &&
+        snapshot_.link_health == LinkHealth::Healthy && value.state != State::Fault;
+    value.snapshot = snapshot_;
+    value.link_healthy = snapshot_.link_health == LinkHealth::Healthy;
+    value.yaw_deg = snapshot_.current_yaw10
+        ? std::optional<double>(*snapshot_.current_yaw10 / 10.0) : std::nullopt;
+    value.pitch_deg = snapshot_.current_pitch10
+        ? std::optional<double>(*snapshot_.current_pitch10 / 10.0) : std::nullopt;
+    std::lock_guard<std::mutex> lock(published_mutex_);
+    published_status_ = std::move(value);
 }
 
-void GimbalHardwareService::dispatchBytes(const std::string& bytes, const Matcher& matcher,
-                                          Event* matched, bool& matched_result,
-                                          Event* device_error,
-                                          std::vector<std::string>* transcript) {
+void GimbalHardwareService::applyEventLocked(const Event& event) {
+    (void)machine_.onEvent(event, clock_());
+    if (!event.protocol_version.empty()) snapshot_.protocol_version = event.protocol_version;
+    if (!event.capabilities.empty()) snapshot_.capabilities = event.capabilities;
+    if (event.arm_profile) snapshot_.arm_profile = *event.arm_profile;
+    if (event.yaw_deg) snapshot_.current_yaw10 = degreeToTenths(*event.yaw_deg);
+    if (event.pitch_deg) snapshot_.current_pitch10 = degreeToTenths(*event.pitch_deg);
+    if (event.target_yaw_deg) snapshot_.target_yaw10 = degreeToTenths(*event.target_yaw_deg);
+    if (event.target_pitch_deg) snapshot_.target_pitch10 = degreeToTenths(*event.target_pitch_deg);
+    if (event.motion_generation) snapshot_.motion_generation = event.motion_generation;
+    if (event.settled) snapshot_.settled = *event.settled;
+    if (event.calibration_valid) snapshot_.calibration_valid = *event.calibration_valid;
+    if (event.origin_valid) snapshot_.origin_valid = *event.origin_valid;
+    if (event.calibration_epoch) snapshot_.calibration_epoch = *event.calibration_epoch;
+    if (event.origin_epoch) snapshot_.origin_epoch = *event.origin_epoch;
+    if (!event.current_protection_state.empty()) {
+        snapshot_.current_protection_state = event.current_protection_state;
+    }
+    if (event.kind == EventKind::Pose) snapshot_.last_pose_at_ms = clock_();
+    if (event.kind == EventKind::Error) {
+        snapshot_.fault_class = event.error_class;
+        snapshot_.fault_code = event.error_code;
+    }
+    if (event.kind == EventKind::FaultStatus && event.fault_active.value_or(false)) {
+        snapshot_.fault_class = ErrorClass::Fault;
+        snapshot_.fault_code = "G431_FAULT_ACTIVE";
+    }
+    publishLocked();
+}
+
+void GimbalHardwareService::dispatchBytesLocked(
+    const std::string& bytes, const Matcher& matcher, Event* matched,
+    bool& matched_result, Event* device_error, std::vector<std::string>* transcript) {
     for (const auto& line : framer_.feed(bytes)) {
         const auto event = parseEvent(line);
         if (transcript) transcript->push_back(event.raw);
-        (void)machine_.onEvent(event, clock_());
+        applyEventLocked(event);
         if (device_error && device_error->raw.empty() && event.kind == EventKind::Error) {
             *device_error = event;
         }
@@ -133,38 +305,43 @@ void GimbalHardwareService::dispatchBytes(const std::string& bytes, const Matche
     }
 }
 
-CommandResult GimbalHardwareService::waitFor(const Matcher& matcher, int timeout_ms, Event* matched,
-                                             bool enforce_fault_pin) {
+CommandResult GimbalHardwareService::waitForLocked(
+    const Matcher& matcher, int timeout_ms, Event* matched, bool enforce_fault_pin) {
     CommandResult result;
     const auto deadline = clock_() + std::max(1, timeout_ms);
     while (clock_() <= deadline) {
+        if (emergency_requested_.exchange(false)) {
+            emergencyStopLocked();
+            return failure("emergency_stop", ErrorClass::Safety, "EMERGENCY_STOP");
+        }
         bool fault_active = false;
         std::string error;
         if (!io_->readFaultActive(fault_active, error)) {
-            result.error = error.empty() ? "failed to read PD6" : error;
-            return result;
+            return failure(error.empty() ? "fault_pin_read_failed" : error,
+                           ErrorClass::Link, "FAULT_PIN_READ_FAILED");
         }
         if (fault_active && enforce_fault_pin) {
-            tripFaultLocked("pd6_low");
-            result.error = "pd6_low";
-            return result;
+            tripFaultLocked("pd6_low", ErrorClass::Fault, "FAULT_PIN_ACTIVE");
+            return failure("pd6_low", ErrorClass::Fault, "FAULT_PIN_ACTIVE");
         }
 
         std::string bytes;
         if (!io_->readBytes(bytes, 25, error)) {
-            result.error = error.empty() ? "UART read failed" : error;
-            return result;
+            return failure(error.empty() ? "uart_read_failed" : error,
+                           ErrorClass::Link, "UART_READ_FAILED");
         }
         bool found = false;
         Event device_error;
-        dispatchBytes(bytes, matcher, matched, found, &device_error, &result.transcript);
+        dispatchBytesLocked(bytes, matcher, matched, found, &device_error, &result.transcript);
         if (!device_error.raw.empty()) {
+            result.error_class = device_error.error_class;
+            result.error_code = device_error.error_code;
             result.error = "device_error:" + device_error.raw;
             return result;
         }
         if (enforce_fault_pin && machine_.status().state == State::Fault) {
-            result.error = machine_.status().fault_latched_reason;
-            return result;
+            return failure(machine_.status().fault_latched_reason,
+                           ErrorClass::Fault, snapshot_.fault_code);
         }
         if (found) {
             result.success = true;
@@ -173,779 +350,564 @@ CommandResult GimbalHardwareService::waitFor(const Matcher& matcher, int timeout
         if (bytes.empty()) sleeper_(std::chrono::milliseconds(1));
     }
     result.timeout = true;
+    result.error_class = ErrorClass::Timeout;
+    result.error_code = "RESPONSE_TIMEOUT";
     result.error = "timeout";
     return result;
 }
 
-CommandResult GimbalHardwareService::probeDiagnostics(int timeout_ms_per_command) {
-    std::lock_guard<std::recursive_mutex> lock(operation_mutex_);
-    CommandResult result;
-    if (!initialized_) {
-        result.error = "not_initialized";
-        return result;
-    }
+CommandResult GimbalHardwareService::sendAndWaitLocked(
+    const std::string& command, const Matcher& matcher, int timeout_ms,
+    Event* matched, bool enforce_fault_pin) {
     std::string error;
-    if (!setSafeLinesLocked(error)) {
-        result.error = error;
-        return result;
+    if (!io_->writeLine(command, error)) {
+        return failure(error.empty() ? "uart_write_failed" : error,
+                       ErrorClass::Link, "UART_WRITE_FAILED");
     }
-
-    sleeper_(std::chrono::milliseconds(500));
-    return runDiagnosticsLocked(timeout_ms_per_command, true, false);
+    return waitForLocked(matcher, timeout_ms, matched, enforce_fault_pin);
 }
 
-CommandResult GimbalHardwareService::runDiagnosticsLocked(int timeout_ms_per_command,
-                                                           bool continue_after_failure,
-                                                           bool enforce_fault_pin) {
-    const struct Step {
-        EventKind command;
-        Matcher matcher;
-    } steps[] = {
-        {EventKind::Version, [](const Event& event) { return event.kind == EventKind::Version; }},
-        {EventKind::Ping, isHealthyPingEvent},
-        {EventKind::Status, [](const Event& event) { return event.kind == EventKind::Status; }},
-        {EventKind::FaultStatus,
-         [](const Event& event) { return event.kind == EventKind::FaultStatus; }},
-        {EventKind::Angle, [](const Event& event) { return event.kind == EventKind::Angle; }},
-    };
-    CommandResult aggregate;
-    for (const auto& step : steps) {
-        const std::string command = diagnosticCommand(step.command);
-        std::string error;
-        if (!io_->writeLine(diagnosticCommand(step.command), error)) {
-            aggregate.failed_steps.push_back(command);
-            if (aggregate.error.empty()) aggregate.error = error;
-            if (!continue_after_failure) break;
-            continue;
-        }
-        auto result = waitFor(step.matcher, timeout_ms_per_command, nullptr,
-                              enforce_fault_pin);
-        aggregate.transcript.insert(aggregate.transcript.end(), result.transcript.begin(),
-                                    result.transcript.end());
-        if (!result.success) {
-            aggregate.failed_steps.push_back(command);
-            aggregate.timeout = aggregate.timeout || result.timeout;
-            if (aggregate.error.empty()) aggregate.error = result.error;
-            if (!continue_after_failure) break;
-        }
-    }
-    aggregate.success = aggregate.failed_steps.empty();
-    return aggregate;
+void GimbalHardwareService::degradeLocked(std::string reason,
+                                          ErrorClass error_class,
+                                          std::string error_code,
+                                          bool hard_fault) {
+    snapshot_.available = false;
+    snapshot_.link_health = LinkHealth::Degraded;
+    snapshot_.degraded_reason = std::move(reason);
+    snapshot_.fault_class = error_class;
+    snapshot_.fault_code = std::move(error_code);
+    if (hard_fault) machine_.tripFault(clock_(), snapshot_.degraded_reason);
+    publishLocked();
 }
 
-void GimbalHardwareService::tripFaultLocked(const std::string& reason) {
+void GimbalHardwareService::tripFaultLocked(const std::string& reason,
+                                            ErrorClass error_class,
+                                            const std::string& error_code) {
     emergencyStopLocked();
     machine_.tripFault(clock_(), reason);
+    snapshot_.link_health = LinkHealth::Degraded;
+    snapshot_.degraded_reason = reason;
+    snapshot_.fault_class = error_class;
+    snapshot_.fault_code = error_code;
+    publishLocked();
 }
 
 void GimbalHardwareService::emergencyStopLocked() noexcept {
     std::string ignored;
-    if (io_->controlMode() == ControlMode::UartOnly) {
+    if (io_ && initialized_) {
         (void)io_->writeEmergencyStop(ignored);
+        (void)io_->setEnable(false, ignored);
     }
-    (void)io_->setEnable(false, ignored);
+    machine_.reset(clock_());
+    snapshot_.available = false;
+    snapshot_.link_health = LinkHealth::Degraded;
+    snapshot_.degraded_reason = "emergency_stop_resync_required";
+    snapshot_.state = State::Disabled;
+    publishLocked();
+}
+
+CommandResult GimbalHardwareService::negotiateLocked(int timeout_ms) {
+    if (!initialized_) return failure("not_initialized", ErrorClass::Link, "NOT_INITIALIZED");
+    machine_.reset(clock_());
+    if (!machine_.beginLinkCheck(clock_())) {
+        return failure("link_check_state_failed", ErrorClass::Command, "INVALID_STATE");
+    }
+    snapshot_.link_health = LinkHealth::Negotiating;
+    snapshot_.available = false;
+    publishLocked();
+
+    CommandResult aggregate;
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        auto ping = sendAndWaitLocked("PING", isHealthyPingEvent,
+                                     std::min(500, timeout_ms), nullptr, false);
+        aggregate.transcript.insert(aggregate.transcript.end(), ping.transcript.begin(),
+                                    ping.transcript.end());
+        if (ping.success) break;
+        if (attempt == 2) {
+            degradeLocked("gimbal_link_unresponsive", ErrorClass::Link,
+                          "PING_TIMEOUT", false);
+            ping.transcript = std::move(aggregate.transcript);
+            return ping;
+        }
+        sleeper_(std::chrono::milliseconds(100));
+    }
+
+    Event version;
+    auto version_result = sendAndWaitLocked(
+        "VER", [](const Event& event) { return event.kind == EventKind::Version; },
+        std::min(500, timeout_ms), &version, false);
+    aggregate.transcript.insert(aggregate.transcript.end(),
+                                version_result.transcript.begin(),
+                                version_result.transcript.end());
+    if (!version_result.success) {
+        degradeLocked("gimbal_version_unavailable", ErrorClass::Link,
+                      "VERSION_TIMEOUT", false);
+        version_result.transcript = std::move(aggregate.transcript);
+        return version_result;
+    }
+
+    snapshot_.protocol_version = version.protocol_version;
+    snapshot_.capabilities = version.capabilities;
+    if (version.protocol_version == "2.0") {
+        snapshot_.compatibility = ProtocolCompatibility::Protocol2DiagnosticOnly;
+        snapshot_.link_health = LinkHealth::Degraded;
+        snapshot_.degraded_reason = "protocol2_diagnostic_only";
+        machine_.reset(clock_());
+        publishLocked();
+        auto result = failure("protocol2_diagnostic_only", ErrorClass::Business,
+                              "PROTOCOL2_READ_ONLY");
+        result.transcript = std::move(aggregate.transcript);
+        return result;
+    }
+    if (!hasRequiredProtocol3Capabilities(version)) {
+        snapshot_.compatibility = ProtocolCompatibility::Unknown;
+        degradeLocked("protocol3_capability_mismatch", ErrorClass::Link,
+                      "CAPABILITY_MISMATCH", false);
+        auto result = failure("protocol3_capability_mismatch", ErrorClass::Link,
+                              "CAPABILITY_MISMATCH");
+        result.transcript = std::move(aggregate.transcript);
+        return result;
+    }
+
+    auto hello = sendAndWaitLocked(
+        helloCommand(), [](const Event& event) { return event.kind == EventKind::HelloAck; },
+        std::min(500, timeout_ms), nullptr, false);
+    aggregate.transcript.insert(aggregate.transcript.end(), hello.transcript.begin(),
+                                hello.transcript.end());
+    if (!hello.success) {
+        degradeLocked("protocol3_negotiation_failed", ErrorClass::Link,
+                      "HELLO_FAILED", false);
+        hello.transcript = std::move(aggregate.transcript);
+        return hello;
+    }
+    snapshot_.compatibility = ProtocolCompatibility::Protocol3Control;
+    snapshot_.link_health = LinkHealth::Healthy;
+    snapshot_.degraded_reason.clear();
+    (void)machine_.markLinkHealthy(clock_());
+
+    auto pose = refreshPoseLocked(std::min(500, timeout_ms));
+    aggregate.transcript.insert(aggregate.transcript.end(), pose.transcript.begin(),
+                                pose.transcript.end());
+    if (!pose.success) {
+        degradeLocked("initial_pose_failed", pose.error_class, pose.error_code, false);
+        pose.transcript = std::move(aggregate.transcript);
+        return pose;
+    }
+    aggregate.success = true;
+    publishLocked();
+    return aggregate;
 }
 
 CommandResult GimbalHardwareService::enableAndAlign(int timeout_ms) {
-    std::lock_guard<std::recursive_mutex> lock(operation_mutex_);
-    CommandResult result;
-    if (!initialized_) {
-        result.error = "not_initialized";
-        return result;
-    }
-    if (!machine_.beginLinkCheck(clock_())) {
-        result.error = "invalid_state:" + std::string(stateName(machine_.status().state));
-        return result;
-    }
+    return submit([this, timeout_ms] { return enableAndAlignLocked(timeout_ms); },
+                  timeout_ms + 3000);
+}
 
+CommandResult GimbalHardwareService::enableAndAlignLocked(int timeout_ms) {
+    auto result = negotiateLocked(timeout_ms);
+    if (!result.success) return result;
+    if (!machine_.beginAlignment(clock_())) {
+        return failure("arm_state_failed", ErrorClass::Command, "INVALID_STATE");
+    }
     std::string error;
-    if (!setSafeLinesLocked(error)) {
-        tripFaultLocked(error.empty() ? "safe_lines_failed" : error);
-        result.error = machine_.status().fault_latched_reason;
-        return result;
-    }
-    bool fault_active = true;
-    if (!io_->readFaultActive(fault_active, error) || fault_active) {
-        tripFaultLocked(fault_active ? "pd6_low" :
-                                   (error.empty() ? "pd6_read_failed" : error));
-        result.error = machine_.status().fault_latched_reason;
-        return result;
-    }
-    // The G431 contract requires a disabled-state PING after power and UART
-    // have settled. Never use an Enable edge as a link probe.
-    sleeper_(std::chrono::milliseconds(500));
-    CommandResult link_result;
-    for (int attempt = 0; attempt < 3; ++attempt) {
-        if (!io_->writeLine(diagnosticCommand(EventKind::Ping), error)) {
-            link_result.error = error.empty() ? "link_check_write_failed" : error;
-            break;
+    if (io_->controlMode() == ControlMode::UartGpioInterlock) {
+        if (!io_->setEnable(true, error)) {
+            tripFaultLocked(error.empty() ? "enable_failed" : error,
+                            ErrorClass::Link, "ENABLE_FAILED");
+            return failure(machine_.status().fault_latched_reason,
+                           ErrorClass::Link, "ENABLE_FAILED");
         }
-        auto attempt_result = waitFor(isHealthyPingEvent, 500);
-        link_result.transcript.insert(link_result.transcript.end(),
-                                      attempt_result.transcript.begin(),
-                                      attempt_result.transcript.end());
-        if (attempt_result.success) {
-            link_result.success = true;
-            break;
-        }
-        link_result.timeout = link_result.timeout || attempt_result.timeout;
-        link_result.error = attempt_result.error;
-        if (!attempt_result.timeout || attempt == 2) break;
         sleeper_(std::chrono::milliseconds(100));
     }
-    if (!link_result.success) {
-        tripFaultLocked(link_result.error.empty() ? "link_check_failed"
-                                                  : link_result.error);
-        link_result.error = machine_.status().fault_latched_reason;
-        return link_result;
-    }
-    (void)machine_.markLinkHealthy(clock_());
-    if (io_->controlMode() == ControlMode::UartOnly) {
-        if (!io_->writeLine(diagnosticCommand(EventKind::Version), error)) {
-            tripFaultLocked(error.empty() ? "version_write_failed" : error);
-            result.error = machine_.status().fault_latched_reason;
-            return result;
-        }
-        Event version;
-        auto version_result = waitFor([](const Event& event) {
-            const auto proto = event.fields.find("PROTO");
-            const auto caps = event.fields.find("CAPS");
-            return event.kind == EventKind::Version && proto != event.fields.end() &&
-                   proto->second == "2.0" && caps != event.fields.end() &&
-                   caps->second.find("UART_ONLY") != std::string::npos &&
-                   caps->second.find("ARM") != std::string::npos &&
-                   caps->second.find("TRACK") != std::string::npos;
-        }, 500, &version);
-        link_result.transcript.insert(link_result.transcript.end(),
-                                      version_result.transcript.begin(),
-                                      version_result.transcript.end());
-        if (!version_result.success) {
-            tripFaultLocked(version_result.timeout ? "protocol2_capability_timeout"
-                                                   : "protocol2_capability_mismatch");
-            version_result.error = machine_.status().fault_latched_reason;
-            return version_result;
-        }
-    }
-
-    sleeper_(std::chrono::milliseconds(100));
-    if (!machine_.beginAlignment(clock_())) {
-        tripFaultLocked("align_state_failed");
-        result.success = false;
-        result.error = machine_.status().fault_latched_reason;
-        return result;
-    }
-    if (io_->controlMode() == ControlMode::UartOnly) {
-        if (!io_->writeLine(armCommand(), error)) {
-            tripFaultLocked(error.empty() ? "arm_write_failed" : error);
-            result.error = machine_.status().fault_latched_reason;
-            return result;
-        }
-        bool aligned = false;
-        bool armed = false;
-        result = waitFor([&](const Event& event) {
-            if (event.kind == EventKind::BootAlignOk) aligned = true;
-            if (event.kind == EventKind::Ok && event.subject == "ARM") armed = true;
-            return aligned && armed;
-        }, std::min(timeout_ms, static_cast<int>(StateMachine::kAlignmentTimeoutMs)));
-    } else {
-        if (!io_->setEnable(true, error)) {
-            tripFaultLocked(error.empty() ? "enable_failed" : error);
-            result.error = machine_.status().fault_latched_reason;
-            return result;
-        }
-        result = waitFor([](const Event& event) {
-            return event.kind == EventKind::BootAlignOk;
-        }, std::min(timeout_ms, static_cast<int>(StateMachine::kAlignmentTimeoutMs)));
-    }
-    result.transcript.insert(result.transcript.begin(), link_result.transcript.begin(),
-                             link_result.transcript.end());
-    if (!result.success) {
-        tripFaultLocked(result.timeout ? "align_timeout" : result.error);
-        return result;
-    }
-
-    auto diagnostics = runDiagnosticsLocked(500, false, true);
-    result.transcript.insert(result.transcript.end(), diagnostics.transcript.begin(),
-                             diagnostics.transcript.end());
-    result.failed_steps = diagnostics.failed_steps;
-    result.timeout = diagnostics.timeout;
-    if (!diagnostics.success) {
-        tripFaultLocked("post_align_diagnostics:" +
-                        (diagnostics.error.empty() ? std::string("failed")
-                                                   : diagnostics.error));
-        result.success = false;
-        result.error = machine_.status().fault_latched_reason;
-        return result;
-    }
-    const auto aligned_status = machine_.status();
-    if (!aligned_status.yaw_deg || !aligned_status.pitch_deg) {
-        tripFaultLocked("alignment_reference_unknown");
-        result.success = false;
-        result.error = machine_.status().fault_latched_reason;
-        return result;
-    }
-    alignment_yaw_deg_ = normalizeAngle(*aligned_status.yaw_deg);
-    alignment_pitch_deg_ = normalizeAngle(*aligned_status.pitch_deg);
-    result.success = true;
-    result.error.clear();
-    return result;
-}
-
-CommandResult GimbalHardwareService::stopAndDisable(int timeout_ms) {
-    std::lock_guard<std::recursive_mutex> lock(operation_mutex_);
-    CommandResult result;
-    if (!initialized_) {
-        result.error = "not_initialized";
-        return result;
-    }
-    const auto state = machine_.status().state;
-    std::string error;
-    if (state != State::Ready && state != State::Moving && state != State::Holding) {
-        if (io_->controlMode() == ControlMode::UartOnly) {
-            if (!io_->writeLine(stopCommand(), error)) {
-                result.error = error.empty() ? "stop_write_failed" : error;
-                return result;
-            }
-            result = waitFor([](const Event& event) {
-                return event.kind == EventKind::Ok && event.subject == "STOP";
-            }, timeout_ms, nullptr, false);
-            if (!result.success) return result;
-            if (!io_->writeLine(diagnosticCommand(EventKind::Status), error)) {
-                result.success = false;
-                result.error = error.empty() ? "stop_status_write_failed" : error;
-                return result;
-            }
-            auto verified = waitFor([](const Event& event) {
-                if (event.kind != EventKind::Status) return false;
-                const auto is_zero = [&](const char* key) {
-                    const auto it = event.fields.find(key);
-                    return it != event.fields.end() && it->second == "0";
-                };
-                return is_zero("BOOST") && is_zero("MOTOR") && is_zero("HOLD") &&
-                       !event.fault_active.value_or(true);
-            }, timeout_ms, nullptr, false);
-            result.transcript.insert(result.transcript.end(), verified.transcript.begin(),
-                                     verified.transcript.end());
-            if (!verified.success) {
-                result.success = false;
-                result.timeout = verified.timeout;
-                result.error = verified.timeout ? "stop_state_verify_timeout"
-                                                : "stop_state_verify_failed";
-            }
-            return result;
-        }
-        result.success = io_->setEnable(false, error);
-        result.error = error;
-        return result;
-    }
-    (void)machine_.beginStop(clock_());
-    if (!io_->writeLine(stopCommand(), error)) {
-        tripFaultLocked(error.empty() ? "stop_write_failed" : error);
-        result.error = machine_.status().fault_latched_reason;
-        return result;
-    }
-    result = waitFor([](const Event& event) {
-        return event.kind == EventKind::Ok && event.subject == "STOP";
-    }, timeout_ms);
-    if (result.success && io_->controlMode() == ControlMode::UartOnly) {
-        if (!io_->writeLine(diagnosticCommand(EventKind::Status), error)) {
-            result.success = false;
-            result.error = error.empty() ? "stop_status_write_failed" : error;
+    Event arm;
+    auto armed = sendAndWaitLocked(
+        armCommand(), [](const Event& event) { return event.kind == EventKind::ArmAck; },
+        std::min(timeout_ms, 2000), &arm);
+    result.transcript.insert(result.transcript.end(), armed.transcript.begin(),
+                             armed.transcript.end());
+    if (!armed.success) {
+        if (armed.error_class == ErrorClass::Fault ||
+            armed.error_class == ErrorClass::Safety ||
+            armed.error_class == ErrorClass::Link) {
+            tripFaultLocked(armed.error.empty() ? "arm_failed" : armed.error,
+                            armed.error_class, armed.error_code);
         } else {
-            auto verified = waitFor([](const Event& event) {
-                if (event.kind != EventKind::Status) return false;
-                const auto is_zero = [&](const char* key) {
-                    const auto it = event.fields.find(key);
-                    return it != event.fields.end() && it->second == "0";
-                };
-                return is_zero("BOOST") && is_zero("MOTOR") && is_zero("HOLD") &&
-                       !event.fault_active.value_or(true);
-            }, timeout_ms, nullptr, false);
-            result.transcript.insert(result.transcript.end(), verified.transcript.begin(),
-                                     verified.transcript.end());
-            if (!verified.success) {
-                result.success = false;
-                result.timeout = verified.timeout;
-                result.error = verified.timeout ? "stop_state_verify_timeout"
-                                                : "stop_state_verify_failed";
-            }
+            degradeLocked(armed.error, armed.error_class, armed.error_code, false);
         }
+        armed.transcript = std::move(result.transcript);
+        return armed;
     }
-    const bool disabled = io_->setEnable(false, error);
-    if (!result.success || !disabled) {
-        tripFaultLocked(!disabled ? error : (result.timeout ? "stop_timeout" : result.error));
-        result.success = false;
-        result.error = machine_.status().fault_latched_reason;
-    }
+    (void)machine_.markReady(clock_());
+    snapshot_.arm_profile = ArmProfile::Production;
+    if (arm.calibration_epoch) snapshot_.calibration_epoch = *arm.calibration_epoch;
+    if (arm.origin_epoch) snapshot_.origin_epoch = *arm.origin_epoch;
+    auto pose = refreshPoseLocked(500);
+    result.transcript.insert(result.transcript.end(), pose.transcript.begin(),
+                             pose.transcript.end());
+    if (!pose.success) return pose;
+    result.success = true;
+    result.firmware_accepted = true;
+    result.settled = snapshot_.settled;
+    publishLocked();
     return result;
 }
 
-CommandResult GimbalHardwareService::moveTo(double yaw_deg, double pitch_deg, int timeout_ms) {
-    std::lock_guard<std::recursive_mutex> lock(operation_mutex_);
-    return moveToInternal(yaw_deg, pitch_deg, timeout_ms, true);
+bool GimbalHardwareService::motionAllowedLocked(CommandResult& result) const {
+    if (snapshot_.compatibility != ProtocolCompatibility::Protocol3Control) {
+        result = failure(snapshot_.compatibility == ProtocolCompatibility::Protocol2DiagnosticOnly
+                             ? "protocol2_diagnostic_only" : "protocol_not_negotiated",
+                         ErrorClass::Business, "MOTION_UNAVAILABLE");
+        return false;
+    }
+    if (snapshot_.link_health != LinkHealth::Healthy) {
+        result = failure("gimbal_link_degraded", ErrorClass::Link, "LINK_DEGRADED");
+        return false;
+    }
+    return true;
 }
 
-CommandResult GimbalHardwareService::moveToInternal(
-    double yaw_deg, double pitch_deg, int timeout_ms, bool enforce_limits) {
+CommandResult GimbalHardwareService::moveTo(double yaw_deg, double pitch_deg,
+                                            int timeout_ms) {
+    return submit([this, yaw_deg, pitch_deg, timeout_ms] {
+        return moveToLocked(yaw_deg, pitch_deg, timeout_ms, true);
+    }, timeout_ms + 1000);
+}
+
+CommandResult GimbalHardwareService::trackTo(double yaw_deg, double pitch_deg,
+                                             int timeout_ms) {
+    return submit([this, yaw_deg, pitch_deg, timeout_ms] {
+        return moveToLocked(yaw_deg, pitch_deg, timeout_ms, true);
+    }, timeout_ms + 1000);
+}
+
+CommandResult GimbalHardwareService::moveToLocked(double yaw_deg, double pitch_deg,
+                                                  int timeout_ms,
+                                                  bool enforce_limits) {
     CommandResult result;
+    if (!motionAllowedLocked(result)) return result;
     if (enforce_limits && !limits_.verified()) {
-        result.error = "motion_limits_unverified";
-        return result;
+        return failure("motion_limits_unverified", ErrorClass::Safety,
+                       "LIMITS_UNVERIFIED");
     }
-    if (!alignment_yaw_deg_ || !alignment_pitch_deg_) {
-        result.error = "alignment_reference_unknown";
-        return result;
-    }
-    if (enforce_limits &&
-        !limits_.contains(*alignment_yaw_deg_, *alignment_pitch_deg_, yaw_deg, pitch_deg)) {
-        result.error = "target_out_of_bounds";
-        return result;
+    if (enforce_limits && !limits_.contains(0.0, 0.0, yaw_deg, pitch_deg)) {
+        return failure("target_out_of_bounds", ErrorClass::Safety,
+                       "TARGET_OUT_OF_BOUNDS");
     }
     if (!machine_.beginMove(clock_())) {
-        result.error = "invalid_state:" + std::string(stateName(machine_.status().state));
+        return failure("invalid_state:" + std::string(stateName(machine_.status().state)),
+                       ErrorClass::Command, "INVALID_STATE");
+    }
+    Event accepted;
+    result = sendAndWaitLocked(
+        trackCommand(yaw_deg, pitch_deg),
+        [](const Event& event) { return event.kind == EventKind::MotionAccepted; },
+        timeout_ms, &accepted);
+    if (!result.success) {
+        if (result.error_class == ErrorClass::Fault ||
+            result.error_class == ErrorClass::Link) {
+            tripFaultLocked(result.error, result.error_class, result.error_code);
+        }
         return result;
     }
-    std::string error;
-    if (!io_->writeLine(moveCommand(yaw_deg, pitch_deg), error)) {
-        tripFaultLocked(error.empty() ? "move_write_failed" : error);
-        result.error = machine_.status().fault_latched_reason;
-        return result;
-    }
-    result = waitFor([](const Event& event) {
-        return event.kind == EventKind::SetAck;
-    }, timeout_ms);
-    if (result.success) {
-        (void)machine_.markHolding(clock_());
-    } else {
-        tripFaultLocked(result.timeout ? "move_timeout" : result.error);
-    }
+    result.firmware_accepted = true;
+    result.motion_generation = accepted.motion_generation;
+    result.settled = false;
+    snapshot_.target_yaw10 = degreeToTenths(yaw_deg);
+    snapshot_.target_pitch10 = degreeToTenths(pitch_deg);
+    snapshot_.motion_generation = accepted.motion_generation;
+    snapshot_.settled = false;
+    publishLocked();
     return result;
-}
-
-CommandResult GimbalHardwareService::refreshAngle(int timeout_ms) {
-    std::lock_guard<std::recursive_mutex> lock(operation_mutex_);
-    CommandResult aggregate;
-    if (!initialized_) {
-        aggregate.error = "not_initialized";
-        return aggregate;
-    }
-    const auto state = machine_.status().state;
-    if (state != State::Ready && state != State::Moving &&
-        state != State::Holding) {
-        aggregate.error = "invalid_state:" + std::string(stateName(state));
-        return aggregate;
-    }
-    const int bounded_timeout = std::max(50, timeout_ms);
-    for (int attempt = 0; attempt < 2; ++attempt) {
-        std::string error;
-        if (!io_->writeLine(diagnosticCommand(EventKind::Angle), error)) {
-            aggregate.error = error.empty() ? "angle_write_failed" : error;
-            break;
-        }
-        auto current = waitFor([](const Event& event) {
-            return event.kind == EventKind::Angle &&
-                   event.yaw_deg.has_value() && event.pitch_deg.has_value();
-        }, bounded_timeout);
-        aggregate.transcript.insert(aggregate.transcript.end(),
-                                    current.transcript.begin(),
-                                    current.transcript.end());
-        if (current.success) {
-            aggregate.success = true;
-            aggregate.timeout = false;
-            aggregate.error.clear();
-            return aggregate;
-        }
-        aggregate.timeout = aggregate.timeout || current.timeout;
-        aggregate.error = current.error.empty() ? "angle_query_failed"
-                                                : current.error;
-        if (attempt == 0) sleeper_(std::chrono::milliseconds(80));
-    }
-    tripFaultLocked(aggregate.error.empty() ? "angle_query_failed"
-                                            : aggregate.error);
-    aggregate.success = false;
-    aggregate.error = machine_.status().fault_latched_reason;
-    return aggregate;
 }
 
 CommandResult GimbalHardwareService::moveToVerified(
-    double yaw_deg, double pitch_deg, int timeout_ms,
-    double tolerance_deg) {
-    std::lock_guard<std::recursive_mutex> lock(operation_mutex_);
-    return moveToVerifiedInternal(
-        yaw_deg, pitch_deg, timeout_ms, tolerance_deg, true);
+    double yaw_deg, double pitch_deg, int timeout_ms, double tolerance_deg) {
+    return submit([this, yaw_deg, pitch_deg, timeout_ms, tolerance_deg] {
+        return moveToVerifiedLocked(yaw_deg, pitch_deg, timeout_ms,
+                                    tolerance_deg, true);
+    }, timeout_ms + 2000);
 }
 
 CommandResult GimbalHardwareService::moveToManualVerified(
-    double yaw_deg, double pitch_deg, int timeout_ms,
-    double tolerance_deg) {
-    std::lock_guard<std::recursive_mutex> lock(operation_mutex_);
-    return moveToVerifiedInternal(
-        yaw_deg, pitch_deg, timeout_ms, tolerance_deg, false);
+    double yaw_deg, double pitch_deg, int timeout_ms, double tolerance_deg) {
+    return submit([this, yaw_deg, pitch_deg, timeout_ms, tolerance_deg] {
+        return moveToVerifiedLocked(yaw_deg, pitch_deg, timeout_ms,
+                                    tolerance_deg, false);
+    }, timeout_ms + 2000);
 }
 
-CommandResult GimbalHardwareService::moveToVerifiedInternal(
-    double yaw_deg, double pitch_deg, int timeout_ms,
-    double tolerance_deg, bool enforce_limits) {
-    CommandResult aggregate;
+CommandResult GimbalHardwareService::moveToVerifiedLocked(
+    double yaw_deg, double pitch_deg, int timeout_ms, double tolerance_deg,
+    bool enforce_limits) {
     if (timeout_ms <= 0 || tolerance_deg <= 0.0 || tolerance_deg > 5.0) {
-        aggregate.error = "invalid_move_verify_parameters";
+        return failure("invalid_move_verify_parameters", ErrorClass::Command,
+                       "BAD_ARGUMENT");
+    }
+    auto aggregate = moveToLocked(yaw_deg, pitch_deg,
+                                  std::min(timeout_ms, 1000), enforce_limits);
+    if (!aggregate.success || !aggregate.motion_generation) return aggregate;
+    const auto generation = *aggregate.motion_generation;
+    const auto deadline = clock_() + timeout_ms;
+    while (clock_() < deadline) {
+        sleeper_(std::chrono::milliseconds(80));
+        Event pose;
+        auto current = sendAndWaitLocked(
+            poseCommand(),
+            [generation](const Event& event) {
+                return event.kind == EventKind::Pose && event.motion_generation &&
+                       *event.motion_generation == generation;
+            }, std::min<int>(250, static_cast<int>(std::max<std::int64_t>(1, deadline - clock_()))),
+            &pose);
+        aggregate.transcript.insert(aggregate.transcript.end(),
+                                    current.transcript.begin(), current.transcript.end());
+        if (!current.success) {
+            if (current.timeout) continue;
+            current.transcript = std::move(aggregate.transcript);
+            return current;
+        }
+        if (!pose.settled.value_or(false)) continue;
+        if (!pose.yaw_deg || !pose.pitch_deg) continue;
+        const double final_error = std::max(
+            std::abs(shortestAngleDelta(*pose.yaw_deg, yaw_deg)),
+            std::abs(shortestAngleDelta(*pose.pitch_deg, pitch_deg)));
+        if (final_error > tolerance_deg) continue;
+        (void)machine_.markHolding(clock_());
+        snapshot_.settled = true;
+        aggregate.success = true;
+        aggregate.settled = true;
+        aggregate.firmware_accepted = true;
+        aggregate.error.clear();
+        publishLocked();
         return aggregate;
     }
-    double command_yaw = yaw_deg;
-    double command_pitch = pitch_deg;
-    auto command = moveToInternal(
-        command_yaw, command_pitch, std::min(timeout_ms, 2000), enforce_limits);
-    aggregate.transcript.insert(aggregate.transcript.end(),
-                                command.transcript.begin(),
-                                command.transcript.end());
-    if (!command.success) return command;
-
-    const auto deadline_ms = clock_() + timeout_ms;
-    std::optional<double> previous_yaw;
-    std::optional<double> previous_pitch;
-    unsigned compensation_count = 0;
-    unsigned samples = 0;
-    while (clock_() < deadline_ms && samples++ < 100) {
-        sleeper_(std::chrono::milliseconds(100));
-        auto angle = refreshAngle(500);
-        aggregate.transcript.insert(aggregate.transcript.end(),
-                                    angle.transcript.begin(),
-                                    angle.transcript.end());
-        if (!angle.success) {
-            aggregate.success = false;
-            aggregate.timeout = angle.timeout;
-            aggregate.error = angle.error;
-            return aggregate;
-        }
-        const auto current = machine_.status();
-        if (!current.yaw_deg || !current.pitch_deg) {
-            tripFaultLocked("move_verify_angle_unknown");
-            aggregate.error = machine_.status().fault_latched_reason;
-            return aggregate;
-        }
-        const double error = std::max(
-            std::abs(shortestAngleDelta(*current.yaw_deg, yaw_deg)),
-            std::abs(shortestAngleDelta(*current.pitch_deg, pitch_deg)));
-        if (error <= tolerance_deg) {
-            aggregate.success = true;
-            aggregate.error.clear();
-            return aggregate;
-        }
-        if (previous_yaw && previous_pitch) {
-            const double stability = std::max(
-                std::abs(shortestAngleDelta(*previous_yaw, *current.yaw_deg)),
-                std::abs(shortestAngleDelta(*previous_pitch, *current.pitch_deg)));
-            if (stability <= 0.5 && compensation_count < 2) {
-                command_yaw = offsetAngle(
-                    command_yaw,
-                    shortestAngleDelta(*current.yaw_deg, yaw_deg));
-                command_pitch = offsetAngle(
-                    command_pitch,
-                    shortestAngleDelta(*current.pitch_deg, pitch_deg));
-                command = moveToInternal(
-                    command_yaw, command_pitch,
-                    std::min(timeout_ms, 2000), enforce_limits);
-                aggregate.transcript.insert(aggregate.transcript.end(),
-                                            command.transcript.begin(),
-                                            command.transcript.end());
-                if (!command.success) return command;
-                ++compensation_count;
-                previous_yaw.reset();
-                previous_pitch.reset();
-                continue;
-            }
-        }
-        previous_yaw = *current.yaw_deg;
-        previous_pitch = *current.pitch_deg;
-    }
-    tripFaultLocked("move_verify_timeout");
     aggregate.success = false;
     aggregate.timeout = true;
-    aggregate.error = machine_.status().fault_latched_reason;
+    aggregate.error_class = ErrorClass::Business;
+    aggregate.error_code = "MOTION_NOT_SETTLED";
+    aggregate.error = "motion_settle_timeout";
     return aggregate;
 }
 
-CommandResult GimbalHardwareService::rebaseAlignmentAtCurrent(int timeout_ms) {
-    std::lock_guard<std::recursive_mutex> lock(operation_mutex_);
-    auto result = refreshAngle(timeout_ms);
+CommandResult GimbalHardwareService::refreshAngle(int timeout_ms) {
+    return submit([this, timeout_ms] { return refreshPoseLocked(timeout_ms); },
+                  timeout_ms + 1000);
+}
+
+CommandResult GimbalHardwareService::refreshPoseLocked(int timeout_ms) {
+    if (!initialized_) return failure("not_initialized", ErrorClass::Link, "NOT_INITIALIZED");
+    return sendAndWaitLocked(
+        poseCommand(), [](const Event& event) { return event.kind == EventKind::Pose; },
+        timeout_ms, nullptr, false);
+}
+
+CommandResult GimbalHardwareService::hold(int timeout_ms) {
+    return submit([this, timeout_ms] { return holdLocked(timeout_ms); },
+                  timeout_ms + 1000);
+}
+
+CommandResult GimbalHardwareService::holdLocked(int timeout_ms) {
+    CommandResult unavailable;
+    if (!motionAllowedLocked(unavailable)) return unavailable;
+    const auto state = machine_.status().state;
+    if (state != State::Ready && state != State::Moving && state != State::Holding) {
+        return failure("invalid_state:" + std::string(stateName(state)),
+                       ErrorClass::Command, "INVALID_STATE");
+    }
+    Event held;
+    auto result = sendAndWaitLocked(
+        holdCommand(), [](const Event& event) { return event.kind == EventKind::HoldAck; },
+        timeout_ms, &held);
     if (!result.success) return result;
-    const auto current = machine_.status();
-    if (current.fault_active || current.state == State::Fault ||
-        current.state == State::RecoveryCheck) {
-        result.success = false;
-        result.error = current.fault_latched_reason.empty()
-            ? "gimbal_fault_active"
-            : current.fault_latched_reason;
-        return result;
-    }
-    if (!current.yaw_deg || !current.pitch_deg) {
-        result.success = false;
-        result.error = "alignment_rebase_angle_unknown";
-        return result;
-    }
-    alignment_yaw_deg_ = normalizeAngle(*current.yaw_deg);
-    alignment_pitch_deg_ = normalizeAngle(*current.pitch_deg);
+    if (state != State::Holding) (void)machine_.markHolding(clock_());
+    result.firmware_accepted = true;
+    result.motion_generation = held.motion_generation;
+    result.settled = true;
+    snapshot_.motion_generation = held.motion_generation;
+    snapshot_.settled = true;
+    publishLocked();
     return result;
 }
 
 CommandResult GimbalHardwareService::freezeAtCurrent(int timeout_ms) {
-    std::lock_guard<std::recursive_mutex> lock(operation_mutex_);
-    CommandResult aggregate;
-    if (timeout_ms <= 0) {
-        aggregate.error = "invalid_freeze_timeout";
-        return aggregate;
-    }
-    auto angle = refreshAngle(500);
-    aggregate.transcript.insert(aggregate.transcript.end(),
-                                angle.transcript.begin(),
-                                angle.transcript.end());
-    if (!angle.success) return angle;
-    auto current = machine_.status();
-    if (!current.yaw_deg || !current.pitch_deg) {
-        tripFaultLocked("freeze_angle_unknown");
-        aggregate.error = machine_.status().fault_latched_reason;
-        return aggregate;
-    }
-    double target_yaw = *current.yaw_deg;
-    double target_pitch = *current.pitch_deg;
-    const auto deadline_ms = clock_() + std::max(timeout_ms, 1600);
-
-    auto set_target = [&]() {
-        auto result = moveTo(target_yaw, target_pitch, 500);
-        aggregate.transcript.insert(aggregate.transcript.end(),
-                                    result.transcript.begin(),
-                                    result.transcript.end());
-        if (!result.success) {
-            aggregate.timeout = result.timeout;
-            aggregate.error = result.error;
-        }
-        return result.success;
-    };
-    if (!set_target()) return aggregate;
-
-    for (unsigned settle_pass = 0; settle_pass < 2; ++settle_pass) {
-        const auto settle_deadline_ms =
-            std::min(deadline_ms, clock_() + 800);
-        std::optional<double> previous_yaw;
-        std::optional<double> previous_pitch;
-        bool mechanically_stable = false;
-        unsigned samples = 0;
-        while (clock_() < settle_deadline_ms && samples++ < 20) {
-            sleeper_(std::chrono::milliseconds(80));
-            angle = refreshAngle(500);
-            aggregate.transcript.insert(aggregate.transcript.end(),
-                                        angle.transcript.begin(),
-                                        angle.transcript.end());
-            if (!angle.success) return angle;
-            current = machine_.status();
-            if (!current.yaw_deg || !current.pitch_deg) {
-                tripFaultLocked("freeze_angle_unknown");
-                aggregate.error = machine_.status().fault_latched_reason;
-                return aggregate;
-            }
-            const double final_error = std::max(
-                std::abs(shortestAngleDelta(target_yaw, *current.yaw_deg)),
-                std::abs(shortestAngleDelta(target_pitch, *current.pitch_deg)));
-            if (previous_yaw && previous_pitch) {
-                const double stability = std::max(
-                    std::abs(shortestAngleDelta(*previous_yaw, *current.yaw_deg)),
-                    std::abs(shortestAngleDelta(*previous_pitch, *current.pitch_deg)));
-                if (stability <= 0.5) {
-                    mechanically_stable = true;
-                    if (final_error <= 1.5) {
-                        aggregate.success = true;
-                        aggregate.error.clear();
-                        return aggregate;
-                    }
-                    break;
-                }
-            }
-            previous_yaw = *current.yaw_deg;
-            previous_pitch = *current.pitch_deg;
-        }
-        if (!mechanically_stable) {
-            tripFaultLocked("freeze_not_stable");
-            aggregate.error = machine_.status().fault_latched_reason;
-            return aggregate;
-        }
-        if (settle_pass == 0) {
-            target_yaw = *current.yaw_deg;
-            target_pitch = *current.pitch_deg;
-            if (!set_target()) return aggregate;
-        }
-    }
-    tripFaultLocked("freeze_final_error_exceeded");
-    aggregate.error = machine_.status().fault_latched_reason;
-    return aggregate;
+    return submit([this, timeout_ms] { return holdLocked(timeout_ms); },
+                  timeout_ms + 1000);
 }
 
-CommandResult GimbalHardwareService::trackTo(
-    double yaw_deg, double pitch_deg, int timeout_ms) {
-    std::lock_guard<std::recursive_mutex> lock(operation_mutex_);
-    CommandResult result;
-    if (!limits_.verified()) {
-        result.error = "motion_limits_unverified";
+CommandResult GimbalHardwareService::rebaseAlignmentAtCurrent(int /*timeout_ms*/) {
+    return submit([] {
+        CommandResult result;
+        result.success = true;
+        result.error_code = "SESSION_REBASE_NOOP_V3";
         return result;
+    });
+}
+
+CommandResult GimbalHardwareService::stopAndDisable(int timeout_ms) {
+    return submit([this, timeout_ms] { return stopAndDisableLocked(timeout_ms); },
+                  timeout_ms + 1000);
+}
+
+CommandResult GimbalHardwareService::stopAndDisableLocked(int timeout_ms) {
+    if (!initialized_) return failure("not_initialized", ErrorClass::Link, "NOT_INITIALIZED");
+    const auto state = machine_.status().state;
+    if (state == State::Ready || state == State::Moving || state == State::Holding) {
+        (void)machine_.beginStop(clock_());
     }
-    if (!alignment_yaw_deg_ || !alignment_pitch_deg_) {
-        result.error = "alignment_reference_unknown";
-        return result;
-    }
-    if (!limits_.contains(*alignment_yaw_deg_, *alignment_pitch_deg_, yaw_deg, pitch_deg)) {
-        result.error = "target_out_of_bounds";
-        return result;
-    }
-    if (!machine_.beginMove(clock_())) {
-        result.error = "invalid_state:" + std::string(stateName(machine_.status().state));
-        return result;
-    }
+    auto result = sendAndWaitLocked(
+        stopCommand(), [](const Event& event) {
+            return event.kind == EventKind::Ok && event.subject == "STOP";
+        }, timeout_ms, nullptr, false);
     std::string error;
-    if (!io_->writeLine(trackCommand(yaw_deg, pitch_deg), error)) {
-        tripFaultLocked(error.empty() ? "track_write_failed" : error);
-        result.error = machine_.status().fault_latched_reason;
+    const bool disabled = io_->setEnable(false, error);
+    if (!result.success || !disabled) {
+        emergencyStopLocked();
+        if (!disabled) return failure(error, ErrorClass::Link, "ENABLE_LOW_FAILED");
         return result;
     }
-    result = waitFor([](const Event& event) {
-        return event.kind == EventKind::TrackAck;
-    }, timeout_ms);
-    if (result.success) {
-        (void)machine_.markHolding(clock_());
-    } else {
-        tripFaultLocked(result.timeout ? "track_timeout" : result.error);
-    }
+    machine_.reset(clock_());
+    snapshot_.state = State::Disabled;
+    snapshot_.arm_profile = ArmProfile::None;
+    snapshot_.settled = false;
+    publishLocked();
     return result;
 }
 
-CommandResult GimbalHardwareService::hold(int timeout_ms) {
-    std::lock_guard<std::recursive_mutex> lock(operation_mutex_);
-    CommandResult result;
-    const auto state = machine_.status().state;
-    if (state != State::Ready && state != State::Moving && state != State::Holding) {
-        result.error = "invalid_state:" + std::string(stateName(state));
-        return result;
-    }
+CommandResult GimbalHardwareService::probeDiagnostics(int timeout_ms_per_command) {
+    return submit([this, timeout_ms_per_command] {
+        return probeDiagnosticsLocked(timeout_ms_per_command);
+    }, timeout_ms_per_command * 8 + 1000);
+}
+
+CommandResult GimbalHardwareService::probeDiagnosticsLocked(int timeout_ms_per_command) {
+    if (!initialized_) return failure("not_initialized", ErrorClass::Link, "NOT_INITIALIZED");
     std::string error;
-    if (!io_->writeLine(holdCommand(), error)) {
-        tripFaultLocked(error.empty() ? "hold_write_failed" : error);
-        result.error = machine_.status().fault_latched_reason;
+    if (!setSafeLinesLocked(error)) return failure(error, ErrorClass::Link, "SAFE_LINES_FAILED");
+    auto result = negotiateLocked(timeout_ms_per_command);
+    if (result.success) {
+        for (const auto& step : std::vector<std::pair<std::string, Matcher>>{
+                 {"FAULT", [](const Event& event) { return event.kind == EventKind::FaultStatus; }},
+                 {"NVM STATUS", [](const Event& event) { return event.kind == EventKind::Nvm; }}}) {
+            auto current = sendAndWaitLocked(step.first, step.second, timeout_ms_per_command,
+                                             nullptr, false);
+            result.transcript.insert(result.transcript.end(), current.transcript.begin(),
+                                     current.transcript.end());
+            if (!current.success) {
+                result.success = false;
+                result.failed_steps.push_back(step.first);
+            }
+        }
         return result;
     }
-    result = waitFor([](const Event& event) {
-        return event.kind == EventKind::Ok && event.subject == "HOLD_ON";
-    }, timeout_ms);
-    if (result.success && state != State::Holding) (void)machine_.markHolding(clock_());
-    if (!result.success) tripFaultLocked(result.timeout ? "hold_timeout" : result.error);
+    if (snapshot_.compatibility != ProtocolCompatibility::Protocol2DiagnosticOnly) return result;
+
+    result.error.clear();
+    result.error_code.clear();
+    result.error_class = ErrorClass::None;
+    result.success = true;
+    for (const auto& step : std::vector<std::pair<std::string, Matcher>>{
+             {"STAT", [](const Event& event) { return event.kind == EventKind::Status; }},
+             {"FAULT", [](const Event& event) { return event.kind == EventKind::FaultStatus; }},
+             {"ANGLE", [](const Event& event) { return event.kind == EventKind::Angle; }}}) {
+        auto current = sendAndWaitLocked(step.first, step.second, timeout_ms_per_command,
+                                         nullptr, false);
+        result.transcript.insert(result.transcript.end(), current.transcript.begin(),
+                                 current.transcript.end());
+        if (!current.success) {
+            result.success = false;
+            result.failed_steps.push_back(step.first);
+        }
+    }
     return result;
 }
 
 CommandResult GimbalHardwareService::probeRecovery() {
-    std::lock_guard<std::recursive_mutex> lock(operation_mutex_);
-    CommandResult result;
-    if (!machine_.beginRecoveryProbe(clock_())) {
-        result.error = "recovery_probe_not_due";
-        return result;
-    }
-    std::string error;
-    if (!setSafeLinesLocked(error)) {
-        (void)machine_.finishRecoveryProbe(clock_(), false);
-        result.error = error;
-        return result;
-    }
-    bool fault_active = true;
-    if (!io_->readFaultActive(fault_active, error) || fault_active) {
-        (void)machine_.finishRecoveryProbe(clock_(), false);
-        result.error = fault_active ? "pd6_low" : error;
-        return result;
-    }
+    return submit([this] { return probeRecoveryLocked(); }, 5000);
+}
 
-    const struct ProbeStep {
-        EventKind command;
-        Matcher matcher;
-    } steps[] = {
-        {EventKind::Ping, isHealthyPingEvent},
-        {EventKind::FaultStatus, isHealthyFaultEvent},
-        {EventKind::Status, isHealthyStatusEvent},
-    };
-    for (const auto& step : steps) {
-        if (!io_->writeLine(diagnosticCommand(step.command), error)) {
-            (void)machine_.finishRecoveryProbe(clock_(), false);
-            result.error = error;
-            return result;
-        }
-        result = waitFor(step.matcher, 500);
-        if (!result.success) {
-            (void)machine_.finishRecoveryProbe(clock_(), false);
-            return result;
-        }
+CommandResult GimbalHardwareService::probeRecoveryLocked() {
+    if (!initialized_) return failure("not_initialized", ErrorClass::Link, "NOT_INITIALIZED");
+    std::string error;
+    if (!setSafeLinesLocked(error)) return failure(error, ErrorClass::Link, "SAFE_LINES_FAILED");
+    machine_.reset(clock_());
+    auto negotiated = negotiateLocked(1500);
+    if (!negotiated.success) return negotiated;
+    Event fault;
+    auto fault_status = sendAndWaitLocked(
+        "FAULT", [](const Event& event) { return event.kind == EventKind::FaultStatus; },
+        500, &fault, false);
+    negotiated.transcript.insert(negotiated.transcript.end(), fault_status.transcript.begin(),
+                                 fault_status.transcript.end());
+    if (!fault_status.success) return fault_status;
+    if (fault.fault_active.value_or(false)) {
+        auto cleared = sendAndWaitLocked(
+            "FAULT CLEAR", [](const Event& event) {
+                return event.kind == EventKind::Ok && event.subject == "FAULT_CLEAR";
+            }, 1000, nullptr, false);
+        negotiated.transcript.insert(negotiated.transcript.end(), cleared.transcript.begin(),
+                                     cleared.transcript.end());
+        if (!cleared.success) return cleared;
     }
-    result.success = machine_.finishRecoveryProbe(clock_(), true) ||
-                     machine_.status().state == State::Fault;
-    return result;
+    machine_.reset(clock_());
+    snapshot_.link_health = LinkHealth::Healthy;
+    snapshot_.degraded_reason.clear();
+    snapshot_.fault_class = ErrorClass::None;
+    snapshot_.fault_code.clear();
+    snapshot_.available = true;
+    publishLocked();
+    negotiated.success = true;
+    return negotiated;
 }
 
 void GimbalHardwareService::pollOnce() {
-    std::lock_guard<std::recursive_mutex> lock(operation_mutex_);
-    if (!initialized_) {
-        sleeper_(std::chrono::milliseconds(25));
-        return;
-    }
+    (void)submit([this] {
+        pollHardwareLocked();
+        return CommandResult{true};
+    }, 1000);
+}
+
+void GimbalHardwareService::pollHardwareLocked() {
+    if (!initialized_) return;
     bool fault_active = false;
     std::string error;
-    if (io_->readFaultActive(fault_active, error)) {
-        const auto state = machine_.status().state;
-        if (fault_active && state != State::Disabled && state != State::Fault &&
-            state != State::RecoveryCheck) {
-            tripFaultLocked("pd6_low");
-        }
-    } else if (machine_.status().state != State::Disabled) {
-        tripFaultLocked(error.empty() ? "pd6_read_failed" : error);
-    }
-
-    if (machine_.recoveryProbeDue(clock_())) {
-        (void)probeRecovery();
+    if (!io_->readFaultActive(fault_active, error)) {
+        degradeLocked(error.empty() ? "fault_pin_read_failed" : error,
+                      ErrorClass::Link, "FAULT_PIN_READ_FAILED", true);
         return;
     }
+    if (fault_active) {
+        tripFaultLocked("pd6_low", ErrorClass::Fault, "FAULT_PIN_ACTIVE");
+        return;
+    }
+    std::string bytes;
+    if (!io_->readBytes(bytes, 5, error)) {
+        degradeLocked(error.empty() ? "uart_read_failed" : error,
+                      ErrorClass::Link, "UART_READ_FAILED", true);
+        return;
+    }
+    bool ignored = false;
+    dispatchBytesLocked(bytes, {}, nullptr, ignored, nullptr, nullptr);
 
-    const auto active_state = machine_.status().state;
     const auto now_ms = clock_();
-    if ((active_state == State::Ready || active_state == State::Moving ||
-         active_state == State::Holding) &&
+    if (snapshot_.compatibility == ProtocolCompatibility::Protocol3Control &&
         (next_health_probe_ms_ == 0 || now_ms >= next_health_probe_ms_)) {
         next_health_probe_ms_ = now_ms + 500;
-        if (!io_->writeLine(diagnosticCommand(EventKind::FaultStatus), error)) {
-            ++consecutive_health_failures_;
-        } else {
-            Event fault;
-            auto health = waitFor(isHealthyFaultEvent, 300, &fault);
-            if (health.success) {
-                consecutive_health_failures_ = 0;
-                if (fault.uart_errors) {
-                    if (last_uart_errors_ && *fault.uart_errors > *last_uart_errors_) {
-                        LOGW("GimbalHardwareService", "G431 UARTERR increased: %u -> %u",
-                             *last_uart_errors_, *fault.uart_errors);
-                    }
-                    last_uart_errors_ = fault.uart_errors;
-                }
-            } else {
-                ++consecutive_health_failures_;
+        Event fault;
+        auto health = sendAndWaitLocked(
+            "FAULT", [](const Event& event) { return event.kind == EventKind::FaultStatus; },
+            250, &fault, false);
+        if (health.success) {
+            consecutive_health_failures_ = 0;
+            if (fault.uart_errors && last_uart_errors_ &&
+                *fault.uart_errors > *last_uart_errors_) {
+                LOGW("GimbalHardwareService", "G431 UARTERR increased: %u -> %u",
+                     *last_uart_errors_, *fault.uart_errors);
             }
-        }
-        if (consecutive_health_failures_ >= 3) {
-            tripFaultLocked("gimbal_health_unresponsive");
-            return;
+            if (fault.uart_errors) last_uart_errors_ = fault.uart_errors;
+        } else if (++consecutive_health_failures_ >= 3) {
+            degradeLocked("gimbal_health_unresponsive", ErrorClass::Link,
+                          "HEALTH_TIMEOUT", true);
         }
     }
-
-    std::string bytes;
-    if (io_->readBytes(bytes, 10, error)) {
-        bool ignored = false;
-        dispatchBytes(bytes, {}, nullptr, ignored, nullptr, nullptr);
-        if (machine_.status().state == State::Fault) emergencyStopLocked();
-    } else if (machine_.status().state != State::Disabled &&
-               machine_.status().state != State::Fault) {
-        tripFaultLocked(error.empty() ? "uart_read_failed" : error);
-    }
-    sleeper_(std::chrono::milliseconds(5));
 }
 
 }  // namespace edgefocus::gimbal

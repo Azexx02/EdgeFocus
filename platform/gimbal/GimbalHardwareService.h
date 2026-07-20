@@ -6,12 +6,17 @@
 #include "platform/gimbal/IGimbalIo.h"
 #include "platform/gimbal/IGimbalSessionHardware.h"
 
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <deque>
 #include <functional>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace edgefocus::gimbal {
@@ -48,11 +53,9 @@ public:
     using Clock = std::function<std::int64_t()>;
     using Sleeper = std::function<void(std::chrono::milliseconds)>;
 
-    explicit GimbalHardwareService(
-        std::unique_ptr<IGimbalIo> io,
-        MotionLimits limits = {},
-        Clock clock = {},
-        Sleeper sleeper = {});
+    explicit GimbalHardwareService(std::unique_ptr<IGimbalIo> io,
+                                   MotionLimits limits = {}, Clock clock = {},
+                                   Sleeper sleeper = {});
     ~GimbalHardwareService() override;
 
     bool init(AppContext& ctx) override;
@@ -62,8 +65,10 @@ public:
     bool start(std::string* error = nullptr);
     void stop() noexcept;
     void pollOnce();
+    void requestEmergencyStop() noexcept;
 
     Status status() const override;
+    GimbalSnapshot snapshot() const;
     CommandResult probeDiagnostics(int timeout_ms_per_command = 500);
     CommandResult enableAndAlign(int timeout_ms = 10000) override;
     CommandResult stopAndDisable(int timeout_ms = 1000) override;
@@ -83,39 +88,82 @@ public:
 
 private:
     using Matcher = std::function<bool(const Event&)>;
+    using Work = std::function<CommandResult()>;
 
-    CommandResult waitFor(const Matcher& matcher, int timeout_ms, Event* matched = nullptr,
-                          bool enforce_fault_pin = true);
-    CommandResult runDiagnosticsLocked(int timeout_ms_per_command,
-                                       bool continue_after_failure,
-                                       bool enforce_fault_pin);
-    CommandResult moveToInternal(double yaw_deg, double pitch_deg, int timeout_ms,
-                                 bool enforce_limits);
-    CommandResult moveToVerifiedInternal(double yaw_deg, double pitch_deg,
-                                         int timeout_ms, double tolerance_deg,
-                                         bool enforce_limits);
-    void dispatchBytes(const std::string& bytes, const Matcher& matcher, Event* matched,
-                       bool& matched_result, Event* device_error,
-                       std::vector<std::string>* transcript);
-    void tripFaultLocked(const std::string& reason);
+    struct QueueItem {
+        std::uint64_t sequence{};
+        Work work;
+        std::promise<CommandResult> completion;
+    };
+
+    static constexpr std::size_t kMaximumQueueDepth = 32;
+
+    void ensureWorker();
+    void workerMain();
+    CommandResult submit(Work work, int caller_timeout_ms = 30000);
+    CommandResult openLocked();
+    CommandResult closeLocked();
+    CommandResult waitForLocked(const Matcher& matcher, int timeout_ms,
+                                Event* matched = nullptr,
+                                bool enforce_fault_pin = true);
+    CommandResult sendAndWaitLocked(const std::string& command,
+                                    const Matcher& matcher, int timeout_ms,
+                                    Event* matched = nullptr,
+                                    bool enforce_fault_pin = true);
+    CommandResult negotiateLocked(int timeout_ms);
+    CommandResult probeDiagnosticsLocked(int timeout_ms_per_command);
+    CommandResult enableAndAlignLocked(int timeout_ms);
+    CommandResult stopAndDisableLocked(int timeout_ms);
+    CommandResult moveToLocked(double yaw_deg, double pitch_deg, int timeout_ms,
+                               bool enforce_limits);
+    CommandResult moveToVerifiedLocked(double yaw_deg, double pitch_deg,
+                                       int timeout_ms, double tolerance_deg,
+                                       bool enforce_limits);
+    CommandResult refreshPoseLocked(int timeout_ms);
+    CommandResult holdLocked(int timeout_ms);
+    CommandResult probeRecoveryLocked();
+    void pollHardwareLocked();
+    void dispatchBytesLocked(const std::string& bytes, const Matcher& matcher,
+                             Event* matched, bool& matched_result,
+                             Event* device_error,
+                             std::vector<std::string>* transcript);
+    void applyEventLocked(const Event& event);
+    void publishLocked();
+    void degradeLocked(std::string reason, ErrorClass error_class,
+                       std::string error_code, bool hard_fault);
+    void tripFaultLocked(const std::string& reason,
+                         ErrorClass error_class = ErrorClass::Fault,
+                         const std::string& error_code = {});
     void emergencyStopLocked() noexcept;
     bool setSafeLinesLocked(std::string& error);
+    bool motionAllowedLocked(CommandResult& result) const;
     static std::int64_t defaultClockMs();
 
     std::unique_ptr<IGimbalIo> io_;
     MotionLimits limits_;
     Clock clock_;
     Sleeper sleeper_;
-    mutable std::recursive_mutex operation_mutex_;
+
+    mutable std::mutex published_mutex_;
+    Status published_status_;
+
+    std::mutex queue_mutex_;
+    std::condition_variable queue_cv_;
+    std::deque<std::unique_ptr<QueueItem>> queue_;
+    std::thread worker_;
+    std::thread::id worker_id_;
+    bool worker_terminate_{};
+    std::atomic<bool> emergency_requested_{false};
+    std::atomic<std::uint64_t> next_sequence_{1};
+
     StateMachine machine_;
     LineFramer framer_;
     bool initialized_{};
     std::int64_t next_start_attempt_ms_{};
-    std::optional<double> alignment_yaw_deg_;
-    std::optional<double> alignment_pitch_deg_;
     std::int64_t next_health_probe_ms_{};
     unsigned consecutive_health_failures_{};
     std::optional<unsigned> last_uart_errors_;
+    GimbalSnapshot snapshot_;
 };
 
 }  // namespace edgefocus::gimbal

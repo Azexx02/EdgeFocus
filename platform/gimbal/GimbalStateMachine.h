@@ -20,6 +20,7 @@ public:
     bool beginLinkCheck(std::int64_t now_ms);
     bool markLinkHealthy(std::int64_t now_ms);
     bool beginAlignment(std::int64_t now_ms);
+    bool markReady(std::int64_t now_ms);
     bool beginMove(std::int64_t now_ms);
     bool markHolding(std::int64_t now_ms);
     bool beginStop(std::int64_t now_ms);

@@ -1,274 +1,375 @@
 #include "platform/gimbal/GimbalHardwareService.h"
-#include "app/AppContext.h"
 
 #include <algorithm>
 #include <cassert>
+#include <chrono>
 #include <deque>
+#include <future>
 #include <iostream>
 #include <memory>
+#include <mutex>
+#include <set>
+#include <sstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace edgefocus::gimbal;
-using edgefocus::AppContext;
 
 namespace {
 
 class FakeIo final : public IGimbalIo {
 public:
     bool open(std::string& error) override {
-        opened = open_ok;
+        recordThread();
+        std::lock_guard<std::mutex> lock(mutex_);
+        opened_ = open_ok;
         error = open_ok ? "" : "open_failed";
         return open_ok;
     }
-    void close() noexcept override { opened = false; }
-    bool isOpen() const noexcept override { return opened; }
+
+    void close() noexcept override {
+        recordThread();
+        std::lock_guard<std::mutex> lock(mutex_);
+        opened_ = false;
+    }
+
+    bool isOpen() const noexcept override {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return opened_;
+    }
+
     ControlMode controlMode() const noexcept override { return mode; }
+
     bool setBoot0(bool high, std::string& error) override {
+        recordThread();
         if (high) {
             error = "boot0_high_forbidden";
             return false;
         }
-        boot0 = false;
         return true;
     }
-    bool setEnable(bool high, std::string& /*error*/) override {
-        enable = high;
+
+    bool setEnable(bool high, std::string& error) override {
+        recordThread();
+        std::lock_guard<std::mutex> lock(mutex_);
+        enable_ = high;
         enable_history.push_back(high);
-        operations.push_back(high ? "enable:1" : "enable:0");
-        return set_enable_ok;
+        error.clear();
+        return true;
     }
+
     bool readFaultActive(bool& active, std::string& error) override {
+        recordThread();
+        std::lock_guard<std::mutex> lock(mutex_);
         active = fault_active;
         error.clear();
-        return fault_read_ok;
+        return true;
     }
+
+    bool writeEmergencyStop(std::string& error) override {
+        recordThread();
+        std::lock_guard<std::mutex> lock(mutex_);
+        ++emergency_count;
+        state_ = "DISABLED";
+        enable_ = false;
+        error.clear();
+        return true;
+    }
+
     bool writeLine(const std::string& line, std::string& error) override {
+        recordThread();
+        std::lock_guard<std::mutex> lock(mutex_);
         writes.push_back(line);
-        operations.push_back("write:" + line);
         error.clear();
-        return write_ok;
-    }
-    bool readBytes(std::string& bytes, int /*timeout_ms*/, std::string& error) override {
-        error.clear();
-        bytes.clear();
-        if (!read_ok) {
-            error = "read_failed";
-            return false;
-        }
-        if (!reads.empty()) {
-            bytes = reads.front();
-            reads.pop_front();
+        if (line == "PING") {
+            reads_.push_back("OK,G431\n");
+        } else if (line == "VER") {
+            if (protocol_version == "3.0") {
+                reads_.push_back(
+                    "VER,PROTO=3.0,FW=G431-GIMBAL,"
+                    "CAPS=ASYNC_MOTION|POSE|ORIGIN|FAULT_CLASS|HOLD_NOW|NVM_V3|NEGOTIATION_REQUIRED\n");
+            } else {
+                reads_.push_back("VER,PROTO=2.0,CAPS=UART_ONLY|ARM|TRACK\n");
+            }
+        } else if (line == "HELLO HOST PROTO=3.0") {
+            reads_.push_back("OK,HELLO,PROTO=3.0\n");
+        } else if (line == "ARM") {
+            state_ = "READY";
+            reads_.push_back("OK,ARM,STATE=READY,CAL_EPOCH=7,ORIGIN_EPOCH=9\n");
+        } else if (line == "HOLD NOW") {
+            state_ = "HOLDING";
+            ++generation_;
+            reads_.push_back("OK,HOLD_NOW,GEN=" + std::to_string(generation_) +
+                             ",YAW10=" + std::to_string(yaw10_) +
+                             ",PITCH10=" + std::to_string(pitch10_) + "\n");
+        } else if (line.rfind("TRACK YP ", 0) == 0) {
+            state_ = "MOVING";
+            std::istringstream stream(line.substr(9));
+            stream >> yaw10_ >> pitch10_;
+            ++generation_;
+            if (!next_track_error.empty()) {
+                reads_.push_back(next_track_error + "\n");
+                next_track_error.clear();
+            } else if (!suppress_track_response) {
+                reads_.push_back("TRACK,ACCEPTED,GEN=" + std::to_string(generation_) +
+                                 ",YAW10=" + std::to_string(yaw10_) +
+                                 ",PITCH10=" + std::to_string(pitch10_) + "\n");
+            }
+        } else if (line == "POSE") {
+            if (!pose_overrides.empty()) {
+                reads_.push_back(pose_overrides.front());
+                pose_overrides.pop_front();
+            } else {
+                reads_.push_back(poseLine(true));
+            }
+        } else if (line == "FAULT") {
+            reads_.push_back("FAULT,STATE=" + state_ +
+                             ",ACTIVE=0,BOOST=0,MOTOR=0,HOLD=0,UARTERR=0,RXDROP=0,TXDROP=0\n");
+        } else if (line == "NVM STATUS") {
+            reads_.push_back("NVM,SCHEMA=3,ACTIVE_SLOT=0,GEN=3,A=VALID,B=EMPTY,"
+                             "FLAGS=7,CAL_EPOCH=7,ORIGIN_EPOCH=9\n");
+        } else if (line == "STAT") {
+            reads_.push_back("STAT,FAULT=0,EN=0,BOOT0=0\n");
+        } else if (line == "ANGLE") {
+            reads_.push_back("ANGLE,Y_DEG=0,P_DEG=0\n");
+        } else if (line == "STOP") {
+            state_ = "DISABLED";
+            reads_.push_back("OK,STOP,STATE=DISABLED,BOOST=0,MOTOR=0,HOLD=0\n");
+        } else if (line == "FAULT CLEAR") {
+            state_ = "DISABLED";
+            reads_.push_back("OK,FAULT_CLEAR,STATE=DISABLED\n");
         }
         return true;
     }
 
-    bool opened{};
+    bool readBytes(std::string& bytes, int, std::string& error) override {
+        recordThread();
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            error.clear();
+            bytes.clear();
+            if (!reads_.empty()) {
+                bytes = reads_.front();
+                reads_.pop_front();
+                if (read_chunk_bytes > 0 && bytes.size() > read_chunk_bytes) {
+                    const auto remainder = bytes.substr(read_chunk_bytes);
+                    bytes.resize(read_chunk_bytes);
+                    reads_.push_front(remainder);
+                }
+                return true;
+            }
+        }
+        if (empty_read_delay_ms > 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(empty_read_delay_ms));
+        }
+        return true;
+    }
+
+    std::string poseLine(bool settled) const {
+        return "POSE,STATE=" + state_ +
+               ",ARM_PROFILE=PRODUCTION,P_RAW=1,Y_RAW=2,P_RAW_VALID=1,Y_RAW_VALID=1,"
+               "YAW10=" + std::to_string(yaw10_) +
+               ",PITCH10=" + std::to_string(pitch10_) +
+               ",TYAW10=" + std::to_string(yaw10_) +
+               ",TPITCH10=" + std::to_string(pitch10_) +
+               ",CURRENT_VALID=1,TARGET_VALID=1,GEN=" + std::to_string(generation_) +
+               ",SETTLED=" + (settled ? "1" : "0") +
+               ",CAL_EPOCH=7,ORIGIN_EPOCH=9,CAL_VALID=1,ORIGIN_VALID=1,"
+               "CURRENT_PROTECTION=VALID,SAMPLE_AGE_MS=2,FAULT=NONE,OP=NONE,"
+               "OP_GEN=0,OP_PROGRESS=0,LAST_OP_STATUS=OK\n";
+    }
+
+    std::set<std::thread::id> ioThreads() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return io_threads_;
+    }
+
+    bool enabled() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return enable_;
+    }
+
+    std::vector<std::string> writesCopy() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return writes;
+    }
+
     bool open_ok{true};
-    bool set_enable_ok{true};
-    bool fault_read_ok{true};
-    bool write_ok{true};
-    bool read_ok{true};
-    bool boot0{};
-    bool enable{};
     bool fault_active{};
-    ControlMode mode{ControlMode::UartGpioInterlock};
+    ControlMode mode{ControlMode::UartOnly};
+    std::string protocol_version{"3.0"};
+    bool suppress_track_response{};
+    std::string next_track_error;
+    std::size_t read_chunk_bytes{};
+    int empty_read_delay_ms{};
+    std::deque<std::string> pose_overrides;
     std::vector<bool> enable_history;
     std::vector<std::string> writes;
-    std::vector<std::string> operations;
-    std::deque<std::string> reads;
+    int emergency_count{};
+
+private:
+    void recordThread() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        io_threads_.insert(std::this_thread::get_id());
+    }
+
+    mutable std::mutex mutex_;
+    mutable std::set<std::thread::id> io_threads_;
+    bool opened_{};
+    bool enable_{};
+    std::string state_{"DISABLED"};
+    unsigned generation_{};
+    unsigned yaw10_{};
+    unsigned pitch10_{};
+    std::deque<std::string> reads_;
 };
+
+GimbalHardwareService::MotionLimits limits() {
+    GimbalHardwareService::MotionLimits result;
+    result.yaw_min_offset_deg = -70.0;
+    result.yaw_max_offset_deg = 70.0;
+    result.pitch_min_offset_deg = -70.0;
+    result.pitch_max_offset_deg = 70.0;
+    return result;
+}
+
+void testProtocol3AckAndSettled() {
+    std::int64_t now = 1000;
+    auto fake = std::make_unique<FakeIo>();
+    auto* io = fake.get();
+    io->read_chunk_bytes = 17;
+    GimbalHardwareService service(
+        std::move(fake), limits(), [&] { return ++now; },
+        [&](std::chrono::milliseconds delay) { now += delay.count(); });
+    std::string error;
+    assert(service.start(&error));
+    auto result = service.enableAndAlign();
+    if (!result.success) {
+        std::cerr << "enable failed: " << result.error << " class="
+                  << errorClassName(result.error_class) << " code="
+                  << result.error_code << "\n";
+        for (const auto& line : result.transcript) std::cerr << "  " << line << "\n";
+    }
+    assert(result.success && result.firmware_accepted);
+    auto snapshot = service.snapshot();
+    assert(snapshot.protocol_version == "3.0");
+    assert(snapshot.compatibility == ProtocolCompatibility::Protocol3Control);
+    assert(snapshot.calibration_epoch == 7 && snapshot.origin_epoch == 9);
+    assert(snapshot.current_protection_state == "VALID");
+
+    result = service.moveTo(10.0, -5.0, 500);
+    assert(result.success && result.firmware_accepted && !result.settled);
+    assert(result.motion_generation == 1);
+    assert(service.status().state == State::Moving);
+
+    io->pose_overrides.push_back(
+        "POSE,STATE=HOLDING,YAW10=100,PITCH10=3550,TYAW10=100,TPITCH10=3550,"
+        "GEN=1,SETTLED=1,CAL_EPOCH=7,ORIGIN_EPOCH=9,CAL_VALID=1,ORIGIN_VALID=1,"
+        "CURRENT_PROTECTION=VALID,SAMPLE_AGE_MS=2,FAULT=NONE\n");
+    io->pose_overrides.push_back(
+        "POSE,STATE=MOVING,YAW10=120,PITCH10=30,TYAW10=120,TPITCH10=30,"
+        "GEN=2,SETTLED=0,CAL_EPOCH=7,ORIGIN_EPOCH=9,CAL_VALID=1,ORIGIN_VALID=1,"
+        "CURRENT_PROTECTION=VALID,SAMPLE_AGE_MS=2,FAULT=NONE\n");
+    io->pose_overrides.push_back(
+        "POSE,STATE=HOLDING,YAW10=120,PITCH10=30,TYAW10=120,TPITCH10=30,"
+        "GEN=2,SETTLED=1,CAL_EPOCH=7,ORIGIN_EPOCH=9,CAL_VALID=1,ORIGIN_VALID=1,"
+        "CURRENT_PROTECTION=VALID,SAMPLE_AGE_MS=2,FAULT=NONE\n");
+    result = service.moveToVerified(12.0, 3.0, 2000, 1.0);
+    assert(result.success && result.settled && result.motion_generation == 2);
+    assert(service.status().state == State::Holding);
+
+    result = service.hold();
+    assert(result.success && result.settled);
+    assert(service.stopAndDisable().success);
+    assert(service.status().state == State::Disabled);
+
+    const auto writes = io->writesCopy();
+    assert(std::find(writes.begin(), writes.end(), "HELLO HOST PROTO=3.0") != writes.end());
+    assert(std::find(writes.begin(), writes.end(), "HOLD NOW") != writes.end());
+    assert(std::none_of(writes.begin(), writes.end(), [](const std::string& command) {
+        return command.rfind("SET ", 0) == 0 || command == "HOLD 1";
+    }));
+    assert(io->ioThreads().size() == 1);
+    assert(io->ioThreads().count(std::this_thread::get_id()) == 0);
+    service.stop();
+}
+
+void testProtocol2ReadOnlyDowngrade() {
+    std::int64_t now = 100;
+    auto fake = std::make_unique<FakeIo>();
+    auto* io = fake.get();
+    io->protocol_version = "2.0";
+    GimbalHardwareService service(
+        std::move(fake), limits(), [&] { return ++now; },
+        [&](std::chrono::milliseconds delay) { now += delay.count(); });
+    std::string error;
+    assert(service.start(&error));
+    auto diagnostic = service.probeDiagnostics();
+    assert(diagnostic.success);
+    const auto snapshot = service.snapshot();
+    assert(snapshot.compatibility == ProtocolCompatibility::Protocol2DiagnosticOnly);
+    assert(!snapshot.available && snapshot.degraded_reason == "protocol2_diagnostic_only");
+    auto result = service.enableAndAlign();
+    assert(!result.success && result.error_code == "PROTOCOL2_READ_ONLY");
+    result = service.moveTo(1.0, 1.0);
+    assert(!result.success && result.error_code == "MOTION_UNAVAILABLE");
+    const auto writes = io->writesCopy();
+    assert(std::find(writes.begin(), writes.end(), "ARM") == writes.end());
+    assert(std::none_of(writes.begin(), writes.end(), [](const std::string& command) {
+        return command.rfind("TRACK ", 0) == 0;
+    }));
+    service.stop();
+}
+
+void testCommandErrorDoesNotLatchHardwareFault() {
+    std::int64_t now = 100;
+    auto fake = std::make_unique<FakeIo>();
+    auto* io = fake.get();
+    GimbalHardwareService service(
+        std::move(fake), limits(), [&] { return ++now; },
+        [&](std::chrono::milliseconds delay) { now += delay.count(); });
+    std::string error;
+    assert(service.start(&error));
+    assert(service.enableAndAlign().success);
+    io->next_track_error = "ERR,CLASS=COMMAND,CODE=INVALID_STATE";
+    const auto result = service.moveTo(5.0, 5.0);
+    assert(!result.success);
+    assert(result.error_class == ErrorClass::Command);
+    assert(result.error_code == "INVALID_STATE");
+    assert(service.status().state != State::Fault);
+    service.stop();
+}
+
+void testEmergencySlotInterruptsWait() {
+    auto fake = std::make_unique<FakeIo>();
+    auto* io = fake.get();
+    io->empty_read_delay_ms = 5;
+    GimbalHardwareService service(std::move(fake), limits());
+    std::string error;
+    assert(service.start(&error));
+    assert(service.enableAndAlign().success);
+    io->suppress_track_response = true;
+    auto moving = std::async(std::launch::async, [&] {
+        return service.moveTo(5.0, 5.0, 2000);
+    });
+    std::this_thread::sleep_for(std::chrono::milliseconds(30));
+    service.requestEmergencyStop();
+    const auto result = moving.get();
+    assert(!result.success && result.error_code == "EMERGENCY_STOP");
+    assert(io->emergency_count >= 1);
+    assert(!io->enabled());
+    assert(service.snapshot().degraded_reason == "emergency_stop_resync_required");
+    service.stop();
+}
 
 }  // namespace
 
 int main() {
-    {
-        std::int64_t uart_now = 1000;
-        auto uart_fake = std::make_unique<FakeIo>();
-        auto* uart_io = uart_fake.get();
-        uart_io->mode = ControlMode::UartOnly;
-        GimbalHardwareService::MotionLimits limits;
-        limits.yaw_min_offset_deg = -30;
-        limits.yaw_max_offset_deg = 30;
-        limits.pitch_min_offset_deg = -30;
-        limits.pitch_max_offset_deg = 30;
-        GimbalHardwareService uart_service(
-            std::move(uart_fake), limits, [&] { uart_now += 10; return uart_now; },
-            [&](std::chrono::milliseconds delay) { uart_now += delay.count(); });
-        std::string uart_error;
-        assert(uart_service.start(&uart_error));
-        uart_io->reads.push_back("OK,STOP\n");
-        uart_io->reads.push_back(
-            "STAT,MODE=UART_ONLY,BOOST=0,MOTOR=0,HOLD=0,FAULT=0\n");
-        assert(uart_service.stopAndDisable().success);
-        assert(uart_io->writes[0] == "STOP" && uart_io->writes[1] == "STAT");
-        uart_io->reads.push_back("OK,G431\n");
-        uart_io->reads.push_back(
-            "VER,PROTO=2.0,FW=G431-GIMBAL,CAPS=UART_ONLY|ARM|YP_CONTINUOUS|FOC_HOLD|TRACK|CIRCLE\n");
-        uart_io->reads.push_back("BOOT_ALIGN,START\n");
-        uart_io->reads.push_back("BOOT_ALIGN,OK\nOK,ARM\n");
-        uart_io->reads.push_back("VER,PROTO=2.0,CAPS=UART_ONLY|ARM|TRACK\n");
-        uart_io->reads.push_back("OK,G431\n");
-        uart_io->reads.push_back("STAT,MODE=UART_ONLY,FAULT=0\n");
-        uart_io->reads.push_back("FAULT,ACTIVE=0,UARTERR=1,RXDROP=0,TXDROP=0\n");
-        uart_io->reads.push_back("ANGLE,P_DEG=20,Y_DEG=10\n");
-        auto uart_result = uart_service.enableAndAlign();
-        assert(uart_result.success);
-        assert(std::find(uart_io->writes.begin(), uart_io->writes.end(), "ARM") !=
-               uart_io->writes.end());
-        assert(std::find(uart_io->enable_history.begin(), uart_io->enable_history.end(), true) ==
-               uart_io->enable_history.end());
-
-        uart_io->reads.push_back("SET,YP_OK,Y=12,P=22\n");
-        uart_io->reads.push_back("ANGLE,P_DEG=22,Y_DEG=12\n");
-        assert(uart_service.moveToVerified(12, 22, 2000, 1.5).success);
-        assert(uart_io->writes[uart_io->writes.size() - 2] == "SET YP 12 22");
-        assert(uart_io->writes.back() == "ANGLE");
-
-        uart_io->reads.push_back("ANGLE,P_DEG=22,Y_DEG=12\n");
-        uart_io->reads.push_back("SET,YP_OK,Y=12,P=22\n");
-        uart_io->reads.push_back("ANGLE,P_DEG=22,Y_DEG=12\n");
-        uart_io->reads.push_back("ANGLE,P_DEG=22,Y_DEG=12\n");
-        assert(uart_service.freezeAtCurrent(2000).success);
-        assert(uart_service.status().state == State::Holding);
-
-        uart_io->reads.push_back("SET,YP_OK,Y=12,P=22\n");
-        assert(uart_service.moveTo(12, 22).success);
-        assert(uart_io->writes.back() == "SET YP 12 22");
-        uart_io->reads.push_back("TRACK,YP_OK,Y10=125,P10=215\n");
-        assert(uart_service.trackTo(12.5, 21.5).success);
-        assert(uart_io->writes.back() == "TRACK YP 125 215");
-        uart_io->reads.push_back("OK,HOLD_ON,P=22,Y=12\n");
-        assert(uart_service.hold().success);
-        uart_io->reads.push_back("OK,STOP\n");
-        uart_io->reads.push_back(
-            "STAT,MODE=UART_ONLY,BOOST=0,MOTOR=0,HOLD=0,FAULT=0\n");
-        assert(uart_service.stopAndDisable().success);
-        uart_service.stop();
-    }
-
-    std::int64_t now = 1000;
-    auto fake = std::make_unique<FakeIo>();
-    auto* io = fake.get();
-    GimbalHardwareService service(
-        std::move(fake), {}, [&] { now += 10; return now; },
-        [&](std::chrono::milliseconds delay) { now += delay.count(); });
-
-    std::string error;
-    assert(service.start(&error));
-    assert(!io->boot0 && !io->enable);
-
-    io->fault_active = true;
-    io->reads.push_back("VER,1.0\n");
-    io->reads.push_back("PONG\n");
-    io->reads.push_back("STAT,FAULT=1,EN=0,BOOT0=0\n");
-    io->reads.push_back("FAULT,ACTIVE=1\n");
-    io->reads.push_back("ANGLE,0,0\n");
-    auto diagnostic = service.probeDiagnostics();
-    assert(diagnostic.success);
-    assert(diagnostic.failed_steps.empty());
-    assert(diagnostic.transcript.size() == 5);
-    assert(!io->enable);
-    assert(service.status().state == State::Fault);
-    service.stop();
-    io->fault_active = false;
-    assert(service.start(&error));
-    io->operations.clear();
-    io->writes.clear();
-
-    io->reads.push_back("OK,G431\n");
-    io->reads.push_back("BOOT_ALIGN,START\n");
-    io->reads.push_back("BOOT_ALIGN,OK\n");
-    io->reads.push_back("VER,1.0\n");
-    io->reads.push_back("PONG\n");
-    io->reads.push_back("STAT,FAULT=0,EN=1,BOOT0=0\n");
-    io->reads.push_back("FAULT,ACTIVE=0\n");
-    io->reads.push_back("ANGLE,YAW=0,PITCH=0\n");
-    auto result = service.enableAndAlign();
-    assert(result.success);
-    assert(service.status().state == State::Ready);
-    assert(io->enable);
-    const auto enable_it = std::find(io->operations.begin(), io->operations.end(), "enable:1");
-    const auto ping_it = std::find(io->operations.begin(), io->operations.end(), "write:PING");
-    assert(enable_it != io->operations.end() && ping_it != io->operations.end());
-    assert(ping_it < enable_it);
-
-    result = service.moveTo(0, 0);
-    assert(!result.success && result.error == "motion_limits_unverified");
-    assert(io->writes.back() != moveCommand(0, 0));
-
-    io->reads.push_back("OK,STOP\n");
-    result = service.stopAndDisable();
-    assert(result.success);
-    assert(service.status().state == State::Disabled);
-    assert(!io->enable);
-
-    io->reads.push_back("OK,G431\n");
-    io->reads.push_back("BOOT_ALIGN,OK\n");
-    io->reads.push_back("VER,1.0\n");
-    io->reads.push_back("PONG\n");
-    io->reads.push_back("STAT,FAULT=0,EN=1,BOOT0=0\n");
-    io->reads.push_back("FAULT,ACTIVE=0\n");
-    io->reads.push_back("ANGLE,YAW=0,PITCH=0\n");
-    assert(service.enableAndAlign().success);
-    io->fault_active = true;
-    service.pollOnce();
-    assert(service.status().state == State::Fault);
-    assert(!io->enable);
-
-    io->fault_active = false;
-    for (int probe = 0; probe < 3; ++probe) {
-        now += StateMachine::kRecoveryIntervalMs;
-        io->reads.push_back("PONG\n");
-        io->reads.push_back("FAULT,ACTIVE=0\n");
-        io->reads.push_back("STAT,FAULT=0,EN=0,BOOT0=0\n");
-        result = service.probeRecovery();
-        assert(result.success);
-        assert(!io->enable);
-    }
-    assert(service.status().state == State::Disabled);
-    assert(service.status().recoverable);
-
-    for (const auto& command : io->writes) {
-        assert(command.rfind("SET ", 0) != 0);
-        assert(command.rfind("TRACK ", 0) != 0);
-    }
-
-    service.stop();
-    assert(!io->opened);
-    assert(!io->enable);
-
-    auto no_ping_fake = std::make_unique<FakeIo>();
-    auto* no_ping_io = no_ping_fake.get();
-    std::int64_t no_ping_now = 100;
-    GimbalHardwareService no_ping_service(
-        std::move(no_ping_fake), {}, [&] { no_ping_now += 10; return no_ping_now; },
-        [&](std::chrono::milliseconds delay) { no_ping_now += delay.count(); });
-    assert(no_ping_service.start(&error));
-    const auto no_ping_result = no_ping_service.enableAndAlign();
-    assert(!no_ping_result.success);
-    assert(no_ping_service.status().state == State::Fault);
-    assert(std::count(no_ping_io->writes.begin(), no_ping_io->writes.end(), "PING") == 3);
-    assert(std::find(no_ping_io->enable_history.begin(), no_ping_io->enable_history.end(), true) ==
-           no_ping_io->enable_history.end());
-    no_ping_service.stop();
-
-    auto retry_fake = std::make_unique<FakeIo>();
-    auto* retry_io = retry_fake.get();
-    retry_io->open_ok = false;
-    std::int64_t retry_now = 100;
-    GimbalHardwareService retry_service(
-        std::move(retry_fake), {}, [&] { return retry_now; },
-        [&](std::chrono::milliseconds delay) { retry_now += delay.count(); });
-    AppContext app_context;
-    assert(retry_service.init(app_context));
-    assert(!retry_io->opened);
-    retry_io->open_ok = true;
-    retry_now += StateMachine::kRecoveryIntervalMs;
-    retry_service.runOnce(app_context);
-    assert(retry_io->opened);
-    retry_service.shutdown(app_context);
-
-    std::cout << "gimbal hardware service tests passed\n";
+    testProtocol3AckAndSettled();
+    testProtocol2ReadOnlyDowngrade();
+    testCommandErrorDoesNotLatchHardwareFault();
+    testEmergencySlotInterruptsWait();
+    std::cout << "gimbal protocol 3 hardware service tests passed\n";
     return 0;
 }

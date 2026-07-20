@@ -1,6 +1,7 @@
 #include "platform/gimbal/LinuxGimbalIo.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cerrno>
 #include <cstring>
 #include <utility>
@@ -113,18 +114,8 @@ bool LinuxGimbalIo::readFaultActive(bool& active, std::string& error) {
 
 bool LinuxGimbalIo::writeEmergencyStop(std::string& error) {
 #ifdef __linux__
-    if (uart_fd_ < 0) {
-        error = "UART is not open";
-        return false;
-    }
     const char stop = '!';
-    const auto count = ::write(uart_fd_, &stop, 1);
-    if (count == 1) {
-        error.clear();
-        return true;
-    }
-    error = "UART emergency stop failed: " + std::string(std::strerror(errno));
-    return false;
+    return writeAll(&stop, 1, 50, error);
 #else
     error = "UART unavailable on this platform";
     return false;
@@ -133,26 +124,68 @@ bool LinuxGimbalIo::writeEmergencyStop(std::string& error) {
 
 bool LinuxGimbalIo::writeLine(const std::string& line, std::string& error) {
 #ifdef __linux__
+    const std::string framed = line + "\r\n";
+    return writeAll(framed.data(), framed.size(), 200, error);
+#else
+    (void)line;
+    error = "UART unavailable on this platform";
+    return false;
+#endif
+}
+
+bool LinuxGimbalIo::writeAll(const char* data, std::size_t size, int timeout_ms,
+                             std::string& error) {
+#ifdef __linux__
     if (uart_fd_ < 0) {
         error = "UART is not open";
         return false;
     }
-    const std::string framed = line + "\r\n";
+    const auto deadline = std::chrono::steady_clock::now() +
+                          std::chrono::milliseconds(std::max(1, timeout_ms));
     std::size_t written = 0;
-    while (written < framed.size()) {
-        const auto count = ::write(uart_fd_, framed.data() + written, framed.size() - written);
+    while (written < size) {
+        const auto count = ::write(uart_fd_, data + written, size - written);
         if (count > 0) {
             written += static_cast<std::size_t>(count);
             continue;
         }
         if (count < 0 && errno == EINTR) continue;
+        if (count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+                deadline - std::chrono::steady_clock::now()).count();
+            if (remaining <= 0) {
+                error = "UART write deadline exceeded";
+                return false;
+            }
+            pollfd descriptor{};
+            descriptor.fd = uart_fd_;
+            descriptor.events = POLLOUT;
+            int ready = 0;
+            do {
+                ready = ::poll(&descriptor, 1, static_cast<int>(remaining));
+            } while (ready < 0 && errno == EINTR);
+            if (ready == 0) {
+                error = "UART write deadline exceeded";
+                return false;
+            }
+            if (ready < 0 ||
+                (descriptor.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
+                error = ready < 0 ?
+                    "UART write poll failed: " + std::string(std::strerror(errno)) :
+                    "UART disconnected during write";
+                return false;
+            }
+            continue;
+        }
         error = "UART write failed: " + std::string(std::strerror(errno));
         return false;
     }
     error.clear();
     return true;
 #else
-    (void)line;
+    (void)data;
+    (void)size;
+    (void)timeout_ms;
     error = "UART unavailable on this platform";
     return false;
 #endif
@@ -185,7 +218,10 @@ bool LinuxGimbalIo::readBytes(std::string& bytes, int timeout_ms, std::string& e
         return false;
     }
     char buffer[256];
-    const auto count = ::read(uart_fd_, buffer, sizeof(buffer));
+    ssize_t count = 0;
+    do {
+        count = ::read(uart_fd_, buffer, sizeof(buffer));
+    } while (count < 0 && errno == EINTR);
     if (count > 0) {
         bytes.assign(buffer, static_cast<std::size_t>(count));
         error.clear();

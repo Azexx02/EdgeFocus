@@ -15,17 +15,20 @@ int main() {
     assert(machine.beginAlignment(13));
     assert(machine.status().state == State::Aligning);
 
-    Event start{EventKind::BootAlignStart};
+    Event start;
+    start.kind = EventKind::BootAlignStart;
     assert(machine.onEvent(start, 20));
     assert(machine.status().state == State::Aligning);
-    Event ok{EventKind::BootAlignOk};
+    Event ok;
+    ok.kind = EventKind::BootAlignOk;
     assert(machine.onEvent(ok, 30));
     assert(machine.status().state == State::Ready);
 
     assert(machine.beginMove(40));
     assert(machine.markHolding(50));
     assert(machine.beginStop(60));
-    Event stop{EventKind::Ok};
+    Event stop;
+    stop.kind = EventKind::Ok;
     stop.subject = "STOP";
     assert(machine.onEvent(stop, 70));
     assert(machine.status().state == State::Disabled);

@@ -34,6 +34,8 @@ public:
 
 private:
     bool configureSerial(std::string& error);
+    bool writeAll(const char* data, std::size_t size, int timeout_ms,
+                  std::string& error);
 
     Options options_;
     device::GpioLine boot0_;
