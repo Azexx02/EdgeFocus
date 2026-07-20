@@ -23,6 +23,14 @@ public:
     virtual CommandResult refreshAngle(int timeout_ms = 500) = 0;
     virtual CommandResult freezeAtCurrent(int timeout_ms = 2000) = 0;
     virtual CommandResult recover(int timeout_ms = 5000) = 0;
+    virtual CommandResult executeMaintenance(
+        const MaintenanceRequest&, int = 30000) {
+        CommandResult result;
+        result.error = "maintenance_unsupported";
+        result.error_class = ErrorClass::Command;
+        result.error_code = "UNSUPPORTED";
+        return result;
+    }
 };
 
 }  // namespace edgefocus::gimbal

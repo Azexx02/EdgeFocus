@@ -8,19 +8,22 @@ namespace edgefocus {
 
 namespace {
 
-constexpr std::size_t kRegistryCapacity = 32;
-constexpr std::size_t kOutboxCapacity = 8;
+constexpr std::size_t kRegistryCapacity = 64;
+constexpr std::size_t kOutboxCapacity = 32;
 constexpr std::int64_t kAckTtlMs = 120000;
 constexpr std::array<std::int64_t, 4> kRetryAtMs{{0, 500, 1500, 3000}};
 
 }  // namespace
 
 bool AppEventOutbox::isCritical(const std::string& command) {
-    return command == "push_alert" || command == "push_session_end";
+    return command == "push_alert" || command == "push_session_end" ||
+           command == "push_gimbal_command_result";
 }
 
 std::int64_t AppEventOutbox::deliveryTtl(const std::string& command) {
-    return command == "push_session_end" ? 60000 : 10000;
+    if (command == "push_session_end") return 60000;
+    if (command == "push_gimbal_command_result") return 30000;
+    return 10000;
 }
 
 int AppEventOutbox::stageValue(const std::string& stage) {

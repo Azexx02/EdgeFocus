@@ -142,6 +142,8 @@ public:
                                std::int64_t now_ms);
     void holdForSession(std::int64_t now_ms);
     void stop() noexcept;
+    CommandResult executeMaintenance(const MaintenanceRequest& request,
+                                     int timeout_ms = 30000);
     PrecheckStatus snapshot() const;
     Status snapshotHardware() const;
 

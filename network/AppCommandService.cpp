@@ -625,9 +625,20 @@ AppCommandService::AppCommandService(SystemStateStore& store, SQLiteStore& sqlit
     , event_outbox_(event_outbox)
     , workload_policy_(workload_policy)
     , gimbal_precheck_(gimbal_precheck)
-    , device_manager_(device_manager) {}
+    , device_manager_(device_manager) {
+    if (gimbal_precheck_) {
+        gimbal_command_worker_ = std::thread(
+            &AppCommandService::gimbalCommandWorkerLoop, this);
+    }
+}
 
 AppCommandService::~AppCommandService() {
+    {
+        std::lock_guard<std::mutex> lock(gimbal_command_mutex_);
+        stop_gimbal_command_worker_ = true;
+    }
+    gimbal_command_cv_.notify_all();
+    if (gimbal_command_worker_.joinable()) gimbal_command_worker_.join();
     if (gimbal_task_thread_.joinable()) {
         gimbal_task_thread_.join();
     }
@@ -944,6 +955,115 @@ std::string AppCommandService::handleGimbalPrecheckCommand(
     }
     const auto phase = session_orchestrator_->phase();
     if (phase != session::Phase::Precheck && phase != session::Phase::Focusing) {
+        return makeError(req_id,
+                         "Gimbal control is only available during PRECHECK or FOCUSING");
+    }
+    if (!data.contains("session_id") || !data["session_id"].is_string()) {
+        return makeError(req_id, "session_id is required");
+    }
+    if (!data.contains("sequence") || !data["sequence"].is_number_unsigned() ||
+        data["sequence"].get<std::uint64_t>() == 0) {
+        return makeError(req_id, "sequence must be a positive unsigned integer");
+    }
+    const bool identity_free = command == "precheck_skip_auto_adjust" ||
+                               command == "gimbal_recover";
+    const bool takeover = command == "gimbal_manual_takeover";
+    if (!identity_free &&
+        (!data.contains("owner_id") || !data["owner_id"].is_string())) {
+        return makeError(req_id, "owner_id is required");
+    }
+    if (!identity_free && !takeover &&
+        (!data.contains("lease_token") || !data["lease_token"].is_string())) {
+        return makeError(req_id, "lease_token is required");
+    }
+    if (command == "gimbal_nudge" &&
+        (!data.contains("direction") || !data["direction"].is_string())) {
+        return makeError(req_id, "direction must be UP, DOWN, LEFT or RIGHT");
+    }
+    if (command == "gimbal_force_release" && !data.value("confirmed", false)) {
+        return makeError(req_id, "gimbal_force_release requires confirmed=true");
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(gimbal_command_mutex_);
+        constexpr std::size_t kMaxQueuedGimbalCommands = 32;
+        if (gimbal_command_queue_.size() >= kMaxQueuedGimbalCommands) {
+            return makeError(req_id, "gimbal_command_queue_full");
+        }
+        QueuedGimbalCommand queued{command, data, req_id};
+        if (command == "gimbal_stop" || command == "gimbal_force_release") {
+            gimbal_command_queue_.push_front(std::move(queued));
+        } else {
+            gimbal_command_queue_.push_back(std::move(queued));
+        }
+    }
+    gimbal_command_cv_.notify_one();
+    return makeResponse(req_id, {
+        {"queued", true},
+        {"command", command},
+        {"request_sequence", data["sequence"]},
+        {"session_id", data["session_id"]}
+    });
+}
+
+void AppCommandService::gimbalCommandWorkerLoop() {
+    while (true) {
+        QueuedGimbalCommand queued;
+        {
+            std::unique_lock<std::mutex> lock(gimbal_command_mutex_);
+            gimbal_command_cv_.wait(lock, [this] {
+                return stop_gimbal_command_worker_ || !gimbal_command_queue_.empty();
+            });
+            if (stop_gimbal_command_worker_) {
+                gimbal_command_queue_.clear();
+                return;
+            }
+            queued = std::move(gimbal_command_queue_.front());
+            gimbal_command_queue_.pop_front();
+        }
+
+        json event_data = {
+            {"command", queued.command},
+            {"request_id", queued.request_id},
+            {"request_sequence", queued.data.value("sequence", std::uint64_t{})},
+            {"session_id", queued.data.value("session_id", "")},
+            {"owner_id", queued.data.value("owner_id", "")}
+        };
+        try {
+            const auto response_text = executeGimbalPrecheckCommand(
+                queued.command, queued.data, queued.request_id);
+            const auto response = json::parse(response_text);
+            const bool accepted = response.value("status", "error") == "success";
+            event_data["accepted"] = accepted;
+            if (accepted && response.contains("data") && response["data"].is_object()) {
+                for (const auto& item : response["data"].items()) {
+                    event_data[item.key()] = item.value();
+                }
+                if (event_data.value("firmware_accepted", false)) {
+                    event_data["acked_through_sequence"] =
+                        queued.data.value("sequence", std::uint64_t{});
+                }
+            } else {
+                event_data["error"] = response.value("error", "gimbal_command_failed");
+            }
+        } catch (const std::exception& e) {
+            event_data["accepted"] = false;
+            event_data["error"] = e.what();
+        } catch (...) {
+            event_data["accepted"] = false;
+            event_data["error"] = "unknown_gimbal_command_error";
+        }
+        store_.pushEvent(makePush("push_gimbal_command_result", event_data));
+    }
+}
+
+std::string AppCommandService::executeGimbalPrecheckCommand(
+    const std::string& command, const json& data, int req_id) {
+    if (!gimbal_precheck_ || !session_orchestrator_) {
+        return makeError(req_id, "Gimbal PRECHECK feature disabled");
+    }
+    const auto phase = session_orchestrator_->phase();
+    if (phase != session::Phase::Precheck && phase != session::Phase::Focusing) {
         return makeError(req_id, "Gimbal control is only available during PRECHECK or FOCUSING");
     }
     if (!data.contains("session_id") || !data["session_id"].is_string()) {
@@ -1011,6 +1131,7 @@ std::string AppCommandService::handleGimbalPrecheckCommand(
         return makeError(req_id, result.error.empty() ? "Gimbal command failed" : result.error);
     }
     const auto status = gimbal_precheck_->snapshot();
+    const auto hardware = gimbal_precheck_->snapshotHardware();
     return makeResponse(req_id, {
         {"accepted", true},
         {"state", gimbal::precheckStateName(status.state)},
@@ -1028,6 +1149,10 @@ std::string AppCommandService::handleGimbalPrecheckCommand(
         {"settled", result.settled},
         {"motion_generation", result.motion_generation
              ? json(*result.motion_generation) : json(nullptr)},
+        {"target_yaw10", hardware.snapshot.target_yaw10
+             ? json(*hardware.snapshot.target_yaw10) : json(nullptr)},
+        {"target_pitch10", hardware.snapshot.target_pitch10
+             ? json(*hardware.snapshot.target_pitch10) : json(nullptr)},
         {"detail", status.detail}
     });
 }
@@ -1397,6 +1522,7 @@ std::string AppCommandService::handleClientHello(const json& data, int req_id) {
     if (gimbal_precheck_) {
         server_capabilities.push_back("gimbal_session_control_v3");
         server_capabilities.push_back("gimbal_manual_lease_v1");
+        server_capabilities.push_back("gimbal_async_result_v1");
     }
     if (device_manager_) server_capabilities.push_back("band_proxy_control_v1");
     return makeResponse(req_id, {{"schema_version", "2.1"},
@@ -1766,6 +1892,13 @@ std::string AppCommandService::handleGetGimbalStatus(int req_id) {
         status["last_queued_sequence"] = hardware.snapshot.last_queued_sequence;
         status["acked_through_sequence"] = hardware.snapshot.acked_through_sequence;
         status["current_protection_state"] = hardware.snapshot.current_protection_state;
+        status["maintenance_operation"] = hardware.snapshot.operation;
+        status["maintenance_operation_generation"] = hardware.snapshot.operation_generation
+            ? json(*hardware.snapshot.operation_generation) : json(nullptr);
+        status["maintenance_operation_progress"] = hardware.snapshot.operation_progress
+            ? json(*hardware.snapshot.operation_progress) : json(nullptr);
+        status["last_maintenance_operation_status"] =
+            hardware.snapshot.last_operation_status;
         status["detail"] = precheck.detail;
     }
     return makeResponse(req_id, status);

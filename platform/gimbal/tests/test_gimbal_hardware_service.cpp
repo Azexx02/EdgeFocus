@@ -94,7 +94,7 @@ public:
             }
         } else if (line == "HELLO HOST PROTO=3.0") {
             reads_.push_back("OK,HELLO,PROTO=3.0\n");
-        } else if (line == "ARM") {
+        } else if (line == "ARM" || line == "ARM MAINTENANCE") {
             state_ = "READY";
             reads_.push_back("OK,ARM,STATE=READY,CAL_EPOCH=7,ORIGIN_EPOCH=9\n");
         } else if (line == "HOLD NOW") {
@@ -139,6 +139,19 @@ public:
         } else if (line == "FAULT CLEAR") {
             state_ = "DISABLED";
             reads_.push_back("OK,FAULT_CLEAR,STATE=DISABLED\n");
+        } else if (line == "CAL ELECTRICAL ALL") {
+            reads_.push_back("CAL,ACCEPTED,AXIS=ALL,OP_GEN=12\n");
+        } else if (line == "ORIGIN CAPTURE") {
+            reads_.push_back("OK,ORIGIN_CAPTURE,ORIGIN_EPOCH=10\n");
+        } else if (line == "CURRENT RESET") {
+            reads_.push_back("OK,CURRENT_RESET\n");
+        } else if (line == "CURRENT") {
+            reads_.push_back(
+                "CURRENT,P_RAW=101,P_AVG=82,P_PEAK=130,Y_RAW=99,Y_AVG=77,"
+                "Y_PEAK=125,WINDOW_MS=1200,SAMPLES=120,VALID=1,SATURATED=0,"
+                "SAMPLE_AGE_MS=3\n");
+        } else if (line.rfind("PROTECT CURRENT SET ", 0) == 0) {
+            reads_.push_back("OK,PROTECT_CURRENT_SET\n");
         }
         return true;
     }
@@ -363,6 +376,50 @@ void testEmergencySlotInterruptsWait() {
     service.stop();
 }
 
+void testTypedMaintenanceCommandsAndTelemetry() {
+    std::int64_t now = 100;
+    auto fake = std::make_unique<FakeIo>();
+    auto* io = fake.get();
+    GimbalHardwareService service(
+        std::move(fake), limits(), [&] { return ++now; },
+        [&](std::chrono::milliseconds delay) { now += delay.count(); });
+    std::string error;
+    assert(service.start(&error));
+    auto result = service.executeMaintenance({MaintenanceOperation::Probe});
+    assert(result.success);
+    result = service.executeMaintenance({MaintenanceOperation::CalibrateElectricalAll});
+    assert(result.success && result.firmware_accepted);
+    assert(result.motion_generation == 12);
+
+    result = service.executeMaintenance({MaintenanceOperation::CaptureOrigin});
+    assert(result.success && service.snapshot().origin_epoch == 10);
+
+    result = service.executeMaintenance({MaintenanceOperation::ArmMaintenance});
+    assert(result.success && result.firmware_accepted);
+
+    result = service.executeMaintenance({MaintenanceOperation::CurrentReset});
+    assert(result.success);
+    result = service.executeMaintenance({MaintenanceOperation::VerifyMotionPattern});
+    assert(result.success && result.settled);
+    result = service.executeMaintenance({MaintenanceOperation::CurrentRead});
+    assert(result.success && result.current);
+    assert(result.current->valid && !result.current->saturated);
+    assert(result.current->window_ms == 1200 && result.current->samples == 120);
+
+    MaintenanceRequest protection{MaintenanceOperation::ProtectCurrentSet};
+    protection.protection = CurrentProtectionConfig{130, 82, 125, 77, 250};
+    result = service.executeMaintenance(protection);
+    assert(result.success && result.firmware_accepted);
+    assert(service.snapshot().current_protection_state == "CONFIGURED");
+
+    const auto writes = io->writesCopy();
+    assert(std::find(writes.begin(), writes.end(), "ARM MAINTENANCE") != writes.end());
+    assert(std::find(writes.begin(), writes.end(), "CAL ELECTRICAL ALL") != writes.end());
+    assert(std::find(writes.begin(), writes.end(), "CURRENT") != writes.end());
+    assert(service.stopAndDisable().success);
+    service.stop();
+}
+
 }  // namespace
 
 int main() {
@@ -370,6 +427,7 @@ int main() {
     testProtocol2ReadOnlyDowngrade();
     testCommandErrorDoesNotLatchHardwareFault();
     testEmergencySlotInterruptsWait();
+    testTypedMaintenanceCommandsAndTelemetry();
     std::cout << "gimbal protocol 3 hardware service tests passed\n";
     return 0;
 }

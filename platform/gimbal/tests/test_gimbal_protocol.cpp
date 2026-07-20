@@ -59,6 +59,20 @@ int main() {
     assert(event.calibration_valid == true && event.origin_valid == true);
     assert(event.current_protection_state == "VALID");
     assert(event.sample_age_ms == 4);
+    assert(event.operation == "NONE");
+    assert(event.operation_generation == 0);
+    assert(event.operation_progress == 0);
+    assert(event.last_operation_status == "OK");
+
+    event = parseEvent(
+        "CURRENT,P_RAW=101,P_AVG=82,P_PEAK=130,Y_RAW=99,Y_AVG=77,Y_PEAK=125,"
+        "WINDOW_MS=1200,SAMPLES=120,VALID=1,SATURATED=0,SAMPLE_AGE_MS=3");
+    assert(event.kind == EventKind::Current);
+    assert(event.pitch_current_raw == 101 && event.pitch_current_average == 82);
+    assert(event.pitch_current_peak == 130 && event.yaw_current_raw == 99);
+    assert(event.yaw_current_average == 77 && event.yaw_current_peak == 125);
+    assert(event.current_window_ms == 1200 && event.current_samples == 120);
+    assert(event.current_valid == true && event.current_saturated == false);
 
     event = parseEvent("ERR,CLASS=COMMAND,CODE=INVALID_STATE");
     assert(event.kind == EventKind::Error);

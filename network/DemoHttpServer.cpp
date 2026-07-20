@@ -289,6 +289,21 @@ $('mode-live').onclick=()=>post('/api/demo/mode',{mode:'live'});$('mode-recorded
 async function poll(){const serial=++pollSerial;try{const state=await api('/api/demo/state');if(serial<appliedPollSerial)return;appliedPollSerial=serial;render(state)}catch(e){$('health').textContent='OFFLINE';$('health').className='badge warn'}}poll();setInterval(poll,180);setInterval(keepGimbalLease,5000);new ResizeObserver(()=>{syncMediaRect();if(lastOverlayVisual)drawOverlay(lastOverlayVisual);drawTimeline()}).observe(videoStage);addEventListener('resize',()=>{syncMediaRect();if(lastOverlayVisual)drawOverlay(lastOverlayVisual);drawTimeline()});
 </script></body></html>)HTML";
 }
+
+std::string maintenancePageHtml() {
+    return R"HTML(<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>EdgeFocus 云台维护</title>
+<style>body{margin:0;background:#071018;color:#dcebed;font:14px system-ui}.wrap{max-width:900px;margin:32px auto;padding:24px}.card{border:1px solid #29404d;background:#0b1621;padding:18px;margin:12px 0}h1{font-size:25px}button,input{background:#0a131b;color:#dcebed;border:1px solid #41606f;padding:9px;margin:4px}button.danger{border-color:#a34b4b;color:#ff908d}pre{white-space:pre-wrap;color:#71e7ad}.muted{color:#78909d}</style></head><body><div class="wrap">
+<h1>EdgeFocus · 云台维护向导</h1><p class="muted">隐藏维护入口。仅在无正式会话、无预录演示时开放；解锁 60 秒后自动失效。</p>
+<div class="card"><b>一次性口令</b><p id="challenge">读取中</p><input id="phrase" placeholder="输入上方完整口令"><button onclick="unlock()">停止云台并解锁</button></div>
+<div class="card"><button onclick="act('probe')">诊断</button><button onclick="act('arm_maintenance')">维护使能</button><button onclick="act('calibrate_electrical')">电气校准</button><button onclick="act('capture_origin')">保存机械正前方</button><button onclick="act('current_sample')">采集 1 秒电流</button><button onclick="act('stop')">STOP</button><br>
+<input id="pp" placeholder="P_PEAK"><input id="pa" placeholder="P_AVG"><input id="yp" placeholder="Y_PEAK"><input id="ya" placeholder="Y_AVG"><input id="stall" placeholder="STALL_MS"><button onclick="protect()">写入电流保护</button><br>
+<button class="danger" onclick="clearNvm('clear_origin')">清除原点</button><button class="danger" onclick="clearNvm('clear_all')">清除全部 NVM</button></div>
+<pre id="out">等待状态</pre></div><script>
+let token='';const out=document.getElementById('out');async function call(url,body){const r=await fetch(url,{method:body?'POST':'GET',headers:{'Content-Type':'application/json'},body:body?JSON.stringify(body):undefined});const j=await r.json();out.textContent=JSON.stringify(j,null,2);if(!r.ok)throw Error(j.error||'request failed');return j}
+async function status(){try{const s=await call('/api/maintenance/status');challenge.textContent=s.challenge||s.reason||'不可用'}catch(e){challenge.textContent=e.message}}async function unlock(){const r=await call('/api/maintenance/unlock',{phrase:phrase.value});token=r.token||''}async function act(operation,extra={}){return call('/api/maintenance/action',{operation,token,...extra})}async function protect(){return act('protect_current_set',{pitch_peak:+pp.value,pitch_average:+pa.value,yaw_peak:+yp.value,yaw_average:+ya.value,stall_ms:+stall.value})}async function clearNvm(operation){if(!confirm('该操作会修改永久参数，确认继续？'))return;return act(operation,{confirmation:'CLEAR GIMBAL NVM'})}status();setInterval(status,2000)
+</script></body></html>)HTML";
+}
 } // namespace
 
 DemoHttpServer::DemoHttpServer(SystemStateStore& store, SQLiteStore& sqlite_store,
@@ -673,6 +688,26 @@ std::string DemoHttpServer::handleRequest(const std::string& method, const std::
         if (method == "GET" && (path == "/" || path == "/demo")) {
             return httpResponse(200, runtimeDemoPageHtml(), "text/html; charset=utf-8");
         }
+        if (method == "GET" && path == "/maintenance") {
+            return httpResponse(200, maintenancePageHtml(), "text/html; charset=utf-8");
+        }
+        if (method == "GET" && path == "/api/maintenance/status") {
+            const auto response = maintenanceStatus();
+            return httpResponse(response.value("eligible", false) ? 200 : 409,
+                                response.dump());
+        }
+        if (method == "POST" && path == "/api/maintenance/unlock") {
+            const json data = body.empty() ? json::object() : json::parse(body);
+            const auto response = handleMaintenanceUnlock(data);
+            return httpResponse(response.value("success", false) ? 200 : 409,
+                                response.dump());
+        }
+        if (method == "POST" && path == "/api/maintenance/action") {
+            const json data = body.empty() ? json::object() : json::parse(body);
+            const auto response = handleMaintenanceAction(data);
+            return httpResponse(response.value("success", false) ? 200 : 409,
+                                response.dump());
+        }
         if (method == "GET" && path == "/api/demo/state") {
             return httpResponse(200, runtimeSnapshotJson().dump());
         }
@@ -712,6 +747,221 @@ std::string DemoHttpServer::handleRequest(const std::string& method, const std::
     } catch (const std::exception& e) {
         return httpResponse(400, json{{"status", "error"}, {"error", e.what()}}.dump());
     }
+}
+
+bool DemoHttpServer::maintenanceEligible(std::string& reason) const {
+    if (!gimbal_precheck_) {
+        reason = "gimbal_unavailable";
+        return false;
+    }
+    if (sessions_.active()) {
+        reason = "formal_session_active";
+        return false;
+    }
+    if (demo_runtime_.status().mode != BoardDemoRuntime::Mode::LiveCamera) {
+        reason = "demo_runtime_active";
+        return false;
+    }
+    const auto state = gimbal_precheck_->snapshot().state;
+    if (state != gimbal::PrecheckState::Inactive &&
+        state != gimbal::PrecheckState::MaintenanceRequired &&
+        state != gimbal::PrecheckState::Degraded) {
+        reason = "gimbal_controller_busy";
+        return false;
+    }
+    reason = "ready";
+    return true;
+}
+
+std::string DemoHttpServer::nextMaintenanceNonce() {
+    std::ostringstream value;
+    value << std::hex << static_cast<std::uint64_t>(nowMs()) << '-'
+          << maintenance_nonce_.fetch_add(1);
+    return value.str();
+}
+
+DemoHttpServer::json DemoHttpServer::maintenanceStatus() {
+    std::string reason;
+    const bool eligible = maintenanceEligible(reason);
+    std::lock_guard<std::mutex> lock(maintenance_mutex_);
+    const auto now = nowMs();
+    if (maintenance_token_expires_ms_ <= now) {
+        maintenance_token_.clear();
+        maintenance_token_expires_ms_ = 0;
+    }
+    if (maintenance_challenge_.empty()) {
+        maintenance_challenge_ = "EDGEFOCUS-MAINT-" + nextMaintenanceNonce();
+    }
+    json response{{"eligible", eligible}, {"reason", reason},
+                  {"challenge", eligible ? maintenance_challenge_ : ""},
+                  {"unlocked", !maintenance_token_.empty()},
+                  {"expires_at_ms", maintenance_token_expires_ms_}};
+    if (gimbal_precheck_) {
+        const auto hardware = gimbal_precheck_->snapshotHardware();
+        response["gimbal"] = {
+            {"state", gimbal::stateName(hardware.state)},
+            {"protocol", hardware.snapshot.protocol_version},
+            {"calibration_valid", hardware.snapshot.calibration_valid},
+            {"origin_valid", hardware.snapshot.origin_valid},
+            {"calibration_epoch", hardware.snapshot.calibration_epoch},
+            {"origin_epoch", hardware.snapshot.origin_epoch},
+            {"current_protection", hardware.snapshot.current_protection_state},
+            {"operation", hardware.snapshot.operation},
+            {"operation_generation", hardware.snapshot.operation_generation
+                ? json(*hardware.snapshot.operation_generation) : json(nullptr)},
+            {"operation_progress", hardware.snapshot.operation_progress
+                ? json(*hardware.snapshot.operation_progress) : json(nullptr)},
+            {"last_operation_status", hardware.snapshot.last_operation_status},
+        };
+    }
+    return response;
+}
+
+DemoHttpServer::json DemoHttpServer::handleMaintenanceUnlock(const json& data) {
+    std::string reason;
+    if (!maintenanceEligible(reason)) {
+        return {{"success", false}, {"error", reason}};
+    }
+    if (!data.contains("phrase") || !data["phrase"].is_string()) {
+        return {{"success", false}, {"error", "maintenance_phrase_required"}};
+    }
+    {
+        std::lock_guard<std::mutex> lock(maintenance_mutex_);
+        if (maintenance_challenge_.empty() ||
+            data["phrase"].get<std::string>() != maintenance_challenge_) {
+            return {{"success", false}, {"error", "maintenance_phrase_mismatch"}};
+        }
+    }
+    const auto stopped = gimbal_precheck_->executeMaintenance(
+        {gimbal::MaintenanceOperation::Stop}, 2000);
+    const auto hardware = gimbal_precheck_->snapshotHardware();
+    if (!stopped.success || hardware.state != gimbal::State::Disabled) {
+        return {{"success", false}, {"error", "gimbal_stop_before_unlock_failed"}};
+    }
+    std::lock_guard<std::mutex> lock(maintenance_mutex_);
+    maintenance_token_ = "maint-token-" + nextMaintenanceNonce();
+    maintenance_token_expires_ms_ = nowMs() + 60000;
+    maintenance_challenge_.clear();
+    return {{"success", true}, {"token", maintenance_token_},
+            {"expires_at_ms", maintenance_token_expires_ms_}};
+}
+
+DemoHttpServer::json DemoHttpServer::handleMaintenanceAction(const json& data) {
+    std::string reason;
+    if (!maintenanceEligible(reason)) {
+        return {{"success", false}, {"error", reason}};
+    }
+    if (!data.contains("token") || !data["token"].is_string()) {
+        return {{"success", false}, {"error", "maintenance_token_required"}};
+    }
+    {
+        std::lock_guard<std::mutex> lock(maintenance_mutex_);
+        if (maintenance_token_.empty() || nowMs() >= maintenance_token_expires_ms_ ||
+            data["token"].get<std::string>() != maintenance_token_) {
+            return {{"success", false}, {"error", "maintenance_token_invalid_or_expired"}};
+        }
+    }
+    const auto operation = lowerCopy(data.value("operation", ""));
+    gimbal::CommandResult result;
+    if (operation == "probe") {
+        result = gimbal_precheck_->executeMaintenance({gimbal::MaintenanceOperation::Probe});
+    } else if (operation == "stop") {
+        result = gimbal_precheck_->executeMaintenance({gimbal::MaintenanceOperation::Stop});
+    } else if (operation == "arm_maintenance") {
+        result = gimbal_precheck_->executeMaintenance(
+            {gimbal::MaintenanceOperation::Probe});
+    } else if (operation == "calibrate_electrical") {
+        result = gimbal_precheck_->executeMaintenance(
+            {gimbal::MaintenanceOperation::ArmMaintenance});
+        if (result.success) {
+            result = gimbal_precheck_->executeMaintenance(
+                {gimbal::MaintenanceOperation::CalibrateElectricalAll}, 5000);
+        }
+    } else if (operation == "capture_origin") {
+        result = gimbal_precheck_->executeMaintenance(
+            {gimbal::MaintenanceOperation::Probe});
+        if (result.success) result = gimbal_precheck_->executeMaintenance(
+            {gimbal::MaintenanceOperation::CaptureOrigin});
+        const auto stopped = gimbal_precheck_->executeMaintenance(
+            {gimbal::MaintenanceOperation::Stop});
+        if (result.success && !stopped.success) result = stopped;
+    } else if (operation == "current_sample") {
+        result = gimbal_precheck_->executeMaintenance(
+            {gimbal::MaintenanceOperation::ArmMaintenance});
+        if (result.success) result = gimbal_precheck_->executeMaintenance(
+            {gimbal::MaintenanceOperation::Hold});
+        auto sample_started = std::chrono::steady_clock::now();
+        if (result.success) {
+            sample_started = std::chrono::steady_clock::now();
+            result = gimbal_precheck_->executeMaintenance(
+                {gimbal::MaintenanceOperation::CurrentReset});
+        }
+        if (result.success) result = gimbal_precheck_->executeMaintenance(
+            {gimbal::MaintenanceOperation::VerifyMotionPattern}, 30000);
+        if (result.success) {
+            const auto elapsed = std::chrono::steady_clock::now() - sample_started;
+            if (elapsed < std::chrono::milliseconds(1100)) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1100) - elapsed);
+            }
+            result = gimbal_precheck_->executeMaintenance(
+                {gimbal::MaintenanceOperation::CurrentRead});
+        }
+        if (result.success && (!result.current || !result.current->valid ||
+                               result.current->saturated ||
+                               result.current->window_ms < 1000)) {
+            result.success = false;
+            result.error = "current_sample_not_usable";
+        }
+        const auto stopped = gimbal_precheck_->executeMaintenance(
+            {gimbal::MaintenanceOperation::Stop});
+        if (result.success && !stopped.success) result = stopped;
+    } else if (operation == "protect_current_set") {
+        const auto p_peak = data.value("pitch_peak", 0u);
+        const auto p_average = data.value("pitch_average", 0u);
+        const auto y_peak = data.value("yaw_peak", 0u);
+        const auto y_average = data.value("yaw_average", 0u);
+        const auto stall_ms = data.value("stall_ms", 0u);
+        if (p_peak > 65535u || p_average > 65535u || y_peak > 65535u ||
+            y_average > 65535u || stall_ms > 65535u) {
+            return {{"success", false}, {"error", "current_protection_value_out_of_range"}};
+        }
+        gimbal::MaintenanceRequest request{gimbal::MaintenanceOperation::ProtectCurrentSet};
+        request.protection = gimbal::CurrentProtectionConfig{
+            static_cast<std::uint16_t>(p_peak), static_cast<std::uint16_t>(p_average),
+            static_cast<std::uint16_t>(y_peak), static_cast<std::uint16_t>(y_average),
+            static_cast<std::uint16_t>(stall_ms)};
+        result = gimbal_precheck_->executeMaintenance({gimbal::MaintenanceOperation::Probe});
+        if (result.success) result = gimbal_precheck_->executeMaintenance(request);
+    } else if (operation == "clear_origin" || operation == "clear_all") {
+        if (data.value("confirmation", "") != "CLEAR GIMBAL NVM") {
+            return {{"success", false}, {"error", "nvm_second_confirmation_required"}};
+        }
+        result = gimbal_precheck_->executeMaintenance({gimbal::MaintenanceOperation::Probe});
+        if (result.success) {
+            result = gimbal_precheck_->executeMaintenance({
+                operation == "clear_all" ? gimbal::MaintenanceOperation::ClearAll
+                                         : gimbal::MaintenanceOperation::ClearOrigin});
+        }
+    } else {
+        return {{"success", false}, {"error", "unknown_maintenance_operation"}};
+    }
+
+    json response{{"success", result.success}, {"error", result.error},
+                  {"firmware_accepted", result.firmware_accepted},
+                  {"settled", result.settled}, {"transcript", result.transcript}};
+    if (result.current) {
+        response["current"] = {{"pitch_raw", result.current->pitch_raw},
+                               {"pitch_average", result.current->pitch_average},
+                               {"pitch_peak", result.current->pitch_peak},
+                               {"yaw_raw", result.current->yaw_raw},
+                               {"yaw_average", result.current->yaw_average},
+                               {"yaw_peak", result.current->yaw_peak},
+                               {"window_ms", result.current->window_ms},
+                               {"samples", result.current->samples},
+                               {"valid", result.current->valid},
+                               {"saturated", result.current->saturated}};
+    }
+    return response;
 }
 
 DemoHttpServer::json DemoHttpServer::runtimeSnapshotJson() const {

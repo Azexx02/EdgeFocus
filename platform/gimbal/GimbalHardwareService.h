@@ -85,6 +85,8 @@ public:
     CommandResult refreshAngle(int timeout_ms = 500) override;
     CommandResult freezeAtCurrent(int timeout_ms = 2000) override;
     CommandResult recover(int timeout_ms = 5000) override;
+    CommandResult executeMaintenance(const MaintenanceRequest& request,
+                                     int timeout_ms = 30000) override;
     CommandResult probeRecovery();
 
 private:
@@ -123,6 +125,9 @@ private:
     CommandResult refreshPoseLocked(int timeout_ms);
     CommandResult holdLocked(int timeout_ms);
     CommandResult probeRecoveryLocked();
+    CommandResult executeMaintenanceLocked(const MaintenanceRequest& request,
+                                           int timeout_ms);
+    CommandResult armMaintenanceLocked(int timeout_ms);
     void pollHardwareLocked();
     void dispatchBytesLocked(const std::string& bytes, const Matcher& matcher,
                              Event* matched, bool& matched_result,

@@ -8,7 +8,9 @@
 
 #include <nlohmann/json.hpp>
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
+#include <deque>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -90,6 +92,9 @@ private:
     std::string handleBandControl(const json& data, int req_id);
     std::string handleGimbalPrecheckCommand(const std::string& command,
                                             const json& data, int req_id);
+    std::string executeGimbalPrecheckCommand(const std::string& command,
+                                             const json& data, int req_id);
+    void gimbalCommandWorkerLoop();
     void applyManualPowerProfile(power::WorkloadProfile profile);
     std::string startGimbalTask(const std::string& action,
                                 std::vector<std::pair<std::string, int>> commands,
@@ -100,6 +105,17 @@ private:
     std::thread gimbal_task_thread_;
     std::atomic<bool> gimbal_task_running_{false};
     std::atomic<int64_t> gimbal_task_seq_{0};
+
+    struct QueuedGimbalCommand {
+        std::string command;
+        json data;
+        int request_id{};
+    };
+    std::mutex gimbal_command_mutex_;
+    std::condition_variable gimbal_command_cv_;
+    std::deque<QueuedGimbalCommand> gimbal_command_queue_;
+    std::thread gimbal_command_worker_;
+    bool stop_gimbal_command_worker_{};
 };
 
 } // namespace edgefocus

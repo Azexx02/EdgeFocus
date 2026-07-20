@@ -115,6 +115,16 @@ struct Event {
     std::optional<unsigned> uart_errors;
     std::optional<unsigned> rx_drops;
     std::optional<unsigned> tx_drops;
+    std::optional<std::uint32_t> pitch_current_raw;
+    std::optional<std::uint32_t> pitch_current_average;
+    std::optional<std::uint32_t> pitch_current_peak;
+    std::optional<std::uint32_t> yaw_current_raw;
+    std::optional<std::uint32_t> yaw_current_average;
+    std::optional<std::uint32_t> yaw_current_peak;
+    std::optional<std::uint32_t> current_window_ms;
+    std::optional<std::uint32_t> current_samples;
+    std::optional<bool> current_valid;
+    std::optional<bool> current_saturated;
 };
 
 struct GimbalSnapshot {
@@ -144,6 +154,10 @@ struct GimbalSnapshot {
     std::uint64_t last_queued_sequence{};
     std::uint64_t acked_through_sequence{};
     std::string current_protection_state;
+    std::string operation;
+    std::optional<std::uint32_t> operation_generation;
+    std::optional<unsigned> operation_progress;
+    std::string last_operation_status;
 };
 
 struct Status {
@@ -162,6 +176,54 @@ struct Status {
     GimbalSnapshot snapshot;
 };
 
+enum class MaintenanceOperation : std::uint8_t {
+    Probe,
+    Stop,
+    CalibrateElectricalAll,
+    CaptureOrigin,
+    ArmMaintenance,
+    ArmProduction,
+    Hold,
+    CurrentReset,
+    CurrentRead,
+    VerifyMotionPattern,
+    ProtectCurrentSet,
+    ClearOrigin,
+    ClearAll,
+};
+
+struct CurrentProtectionConfig {
+    std::uint16_t pitch_peak{};
+    std::uint16_t pitch_average{};
+    std::uint16_t yaw_peak{};
+    std::uint16_t yaw_average{};
+    std::uint16_t stall_ms{};
+
+    bool valid() const noexcept {
+        return pitch_peak > pitch_average && yaw_peak > yaw_average &&
+               pitch_average > 0 && yaw_average > 0 && stall_ms >= 50;
+    }
+};
+
+struct CurrentTelemetry {
+    std::uint32_t pitch_raw{};
+    std::uint32_t pitch_average{};
+    std::uint32_t pitch_peak{};
+    std::uint32_t yaw_raw{};
+    std::uint32_t yaw_average{};
+    std::uint32_t yaw_peak{};
+    std::uint32_t window_ms{};
+    std::uint32_t samples{};
+    bool valid{};
+    bool saturated{};
+    std::uint32_t sample_age_ms{};
+};
+
+struct MaintenanceRequest {
+    MaintenanceOperation operation{MaintenanceOperation::Probe};
+    std::optional<CurrentProtectionConfig> protection;
+};
+
 struct CommandResult {
     bool success{};
     bool timeout{};
@@ -173,6 +235,7 @@ struct CommandResult {
     bool settled{};
     std::uint64_t request_sequence{};
     std::optional<std::uint32_t> motion_generation;
+    std::optional<CurrentTelemetry> current;
     ErrorClass error_class{ErrorClass::None};
     std::string error_code;
 };

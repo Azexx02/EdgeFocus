@@ -800,7 +800,10 @@ CommandResult GimbalPrecheckController::nudge(
     if (direction == NudgeDirection::Down) {
         pitch = offsetAngle(pitch, -config_.nudge_step_deg);
     }
-    result = hardware_.moveToManualVerified(yaw, pitch, 5000, 1.5);
+    // Manual input is acknowledged at the firmware target-acceptance boundary.
+    // Settlement remains observable through the shared gimbal snapshot, so a
+    // BLE/network callback never waits several seconds for the motor to arrive.
+    result = hardware_.moveTo(yaw, pitch, 500);
     if (result.success) {
         manual_target_yaw_deg_ = yaw;
         manual_target_pitch_deg_ = pitch;
@@ -830,8 +833,7 @@ CommandResult GimbalPrecheckController::center(
     if (!config_.center) return rejected("gimbal_center_unverified");
     const auto center = resolveWaypointLocked(*config_.center);
     if (!center) return rejected("gimbal_alignment_reference_unknown");
-    result = hardware_.moveToVerified(
-        center->yaw_deg, center->pitch_deg, 8000, 1.5);
+    result = hardware_.moveTo(center->yaw_deg, center->pitch_deg, 500);
     if (result.success) {
         manual_target_yaw_deg_ = center->yaw_deg;
         manual_target_pitch_deg_ = center->pitch_deg;
@@ -1117,6 +1119,17 @@ void GimbalPrecheckController::stop() noexcept {
     status_ = {};
     alignment_reference_.reset();
     status_.generation = next_generation;
+}
+
+CommandResult GimbalPrecheckController::executeMaintenance(
+    const MaintenanceRequest& request, int timeout_ms) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (status_.state != PrecheckState::Inactive &&
+        status_.state != PrecheckState::MaintenanceRequired &&
+        status_.state != PrecheckState::Degraded) {
+        return rejected("maintenance_requires_inactive_gimbal");
+    }
+    return hardware_.executeMaintenance(request, timeout_ms);
 }
 
 PrecheckStatus GimbalPrecheckController::snapshot() const {

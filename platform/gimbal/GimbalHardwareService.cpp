@@ -276,6 +276,16 @@ void GimbalHardwareService::applyEventLocked(const Event& event) {
     if (!event.current_protection_state.empty()) {
         snapshot_.current_protection_state = event.current_protection_state;
     }
+    if (!event.operation.empty()) snapshot_.operation = event.operation;
+    if (event.operation_generation) {
+        snapshot_.operation_generation = *event.operation_generation;
+    }
+    if (event.operation_progress) {
+        snapshot_.operation_progress = *event.operation_progress;
+    }
+    if (!event.last_operation_status.empty()) {
+        snapshot_.last_operation_status = event.last_operation_status;
+    }
     if (event.kind == EventKind::Pose) snapshot_.last_pose_at_ms = clock_();
     if (event.kind == EventKind::Error) {
         snapshot_.fault_class = event.error_class;
@@ -548,6 +558,241 @@ CommandResult GimbalHardwareService::enableAndAlignLocked(int timeout_ms) {
     result.success = true;
     result.firmware_accepted = true;
     result.settled = snapshot_.settled;
+    publishLocked();
+    return result;
+}
+
+CommandResult GimbalHardwareService::armMaintenanceLocked(int timeout_ms) {
+    auto result = negotiateLocked(timeout_ms);
+    if (!result.success) return result;
+    if (!machine_.beginAlignment(clock_())) {
+        return failure("maintenance_arm_state_failed", ErrorClass::Command,
+                       "INVALID_STATE");
+    }
+    std::string error;
+    if (io_->controlMode() == ControlMode::UartGpioInterlock) {
+        if (!io_->setEnable(true, error)) {
+            tripFaultLocked(error.empty() ? "enable_failed" : error,
+                            ErrorClass::Link, "ENABLE_FAILED");
+            return failure(machine_.status().fault_latched_reason,
+                           ErrorClass::Link, "ENABLE_FAILED");
+        }
+        sleeper_(std::chrono::milliseconds(100));
+    }
+    Event arm;
+    auto armed = sendAndWaitLocked(
+        armCommand(true),
+        [](const Event& event) { return event.kind == EventKind::ArmAck; },
+        std::min(timeout_ms, 2000), &arm);
+    result.transcript.insert(result.transcript.end(), armed.transcript.begin(),
+                             armed.transcript.end());
+    if (!armed.success) {
+        std::string ignored;
+        if (io_->controlMode() == ControlMode::UartGpioInterlock) {
+            (void)io_->setEnable(false, ignored);
+        }
+        armed.transcript = std::move(result.transcript);
+        return armed;
+    }
+    (void)machine_.markReady(clock_());
+    snapshot_.arm_profile = ArmProfile::Maintenance;
+    if (arm.calibration_epoch) snapshot_.calibration_epoch = *arm.calibration_epoch;
+    if (arm.origin_epoch) snapshot_.origin_epoch = *arm.origin_epoch;
+    result.success = true;
+    result.firmware_accepted = true;
+    publishLocked();
+    return result;
+}
+
+CommandResult GimbalHardwareService::executeMaintenance(
+    const MaintenanceRequest& request, int timeout_ms) {
+    return submit([this, request, timeout_ms] {
+        return executeMaintenanceLocked(request, timeout_ms);
+    }, timeout_ms + 2000);
+}
+
+CommandResult GimbalHardwareService::executeMaintenanceLocked(
+    const MaintenanceRequest& request, int timeout_ms) {
+    if (timeout_ms <= 0) {
+        return failure("invalid_maintenance_timeout", ErrorClass::Command,
+                       "BAD_ARGUMENT");
+    }
+    if (request.operation == MaintenanceOperation::Probe) {
+        return probeDiagnosticsLocked(std::min(timeout_ms, 1000));
+    }
+    if (request.operation == MaintenanceOperation::Stop) {
+        return stopAndDisableLocked(std::min(timeout_ms, 2000));
+    }
+    if (request.operation == MaintenanceOperation::ArmProduction) {
+        return enableAndAlignLocked(timeout_ms);
+    }
+    if (request.operation == MaintenanceOperation::ArmMaintenance) {
+        return armMaintenanceLocked(timeout_ms);
+    }
+    if (request.operation == MaintenanceOperation::Hold) {
+        return holdLocked(std::min(timeout_ms, 1000));
+    }
+    if (!initialized_ ||
+        snapshot_.compatibility != ProtocolCompatibility::Protocol3Control) {
+        return failure("maintenance_protocol3_unavailable", ErrorClass::Link,
+                       "PROTOCOL_UNAVAILABLE");
+    }
+
+    Event event;
+    CommandResult result;
+    switch (request.operation) {
+        case MaintenanceOperation::CalibrateElectricalAll:
+            result = sendAndWaitLocked(
+                "CAL ELECTRICAL ALL",
+                [](const Event& value) {
+                    return value.kind == EventKind::CalibrationAccepted;
+                }, std::min(timeout_ms, 2000), &event);
+            if (result.success) {
+                result.firmware_accepted = true;
+                result.motion_generation = event.operation_generation;
+            }
+            break;
+        case MaintenanceOperation::CaptureOrigin:
+            result = sendAndWaitLocked(
+                "ORIGIN CAPTURE",
+                [](const Event& value) {
+                    return value.kind == EventKind::Ok &&
+                           value.subject == "ORIGIN_CAPTURE";
+                }, std::min(timeout_ms, 2000), &event);
+            if (result.success) {
+                result.firmware_accepted = true;
+                snapshot_.origin_valid = true;
+                if (event.origin_epoch) snapshot_.origin_epoch = *event.origin_epoch;
+            }
+            break;
+        case MaintenanceOperation::CurrentReset:
+            result = sendAndWaitLocked(
+                "CURRENT RESET",
+                [](const Event& value) {
+                    return value.kind == EventKind::Ok &&
+                           value.subject == "CURRENT_RESET";
+                }, std::min(timeout_ms, 1000), &event);
+            if (result.success) result.firmware_accepted = true;
+            break;
+        case MaintenanceOperation::CurrentRead:
+            result = sendAndWaitLocked(
+                "CURRENT",
+                [](const Event& value) { return value.kind == EventKind::Current; },
+                std::min(timeout_ms, 1000), &event);
+            if (result.success && event.pitch_current_raw &&
+                event.pitch_current_average && event.pitch_current_peak &&
+                event.yaw_current_raw && event.yaw_current_average &&
+                event.yaw_current_peak && event.current_window_ms &&
+                event.current_samples && event.current_valid &&
+                event.current_saturated) {
+                result.current = CurrentTelemetry{
+                    *event.pitch_current_raw, *event.pitch_current_average,
+                    *event.pitch_current_peak, *event.yaw_current_raw,
+                    *event.yaw_current_average, *event.yaw_current_peak,
+                    *event.current_window_ms, *event.current_samples,
+                    *event.current_valid, *event.current_saturated,
+                    event.sample_age_ms.value_or(0)};
+                result.firmware_accepted = true;
+            } else if (result.success) {
+                result = failure("incomplete_current_telemetry",
+                                 ErrorClass::Transient,
+                                 "CURRENT_TELEMETRY_INCOMPLETE");
+            }
+            break;
+        case MaintenanceOperation::VerifyMotionPattern: {
+            if (snapshot_.arm_profile != ArmProfile::Maintenance ||
+                (machine_.status().state != State::Holding &&
+                 machine_.status().state != State::Ready)) {
+                return failure("maintenance_motion_requires_holding",
+                               ErrorClass::Command, "INVALID_STATE");
+            }
+            auto refreshed = refreshPoseLocked(std::min(timeout_ms, 1000));
+            if (!refreshed.success || !snapshot_.current_yaw10 ||
+                !snapshot_.current_pitch10) {
+                return refreshed.success
+                    ? failure("maintenance_angle_unknown", ErrorClass::Transient,
+                              "SAMPLE_STALE")
+                    : refreshed;
+            }
+            const double origin_yaw = *snapshot_.current_yaw10 / 10.0;
+            const double origin_pitch = *snapshot_.current_pitch10 / 10.0;
+            const std::pair<double, double> targets[] = {
+                {offsetAngle(origin_yaw, 3.0), origin_pitch},
+                {offsetAngle(origin_yaw, -3.0), origin_pitch},
+                {origin_yaw, origin_pitch},
+                {origin_yaw, offsetAngle(origin_pitch, 3.0)},
+                {origin_yaw, offsetAngle(origin_pitch, -3.0)},
+                {origin_yaw, origin_pitch},
+            };
+            result.success = true;
+            for (const auto& target : targets) {
+                auto moved = moveToVerifiedLocked(target.first, target.second,
+                                                  std::min(timeout_ms, 5000),
+                                                  1.0, true);
+                result.transcript.insert(result.transcript.end(),
+                                         moved.transcript.begin(),
+                                         moved.transcript.end());
+                if (!moved.success) {
+                    moved.transcript = std::move(result.transcript);
+                    return moved;
+                }
+                result.firmware_accepted = moved.firmware_accepted;
+                result.settled = moved.settled;
+                result.motion_generation = moved.motion_generation;
+            }
+            break;
+        }
+        case MaintenanceOperation::ProtectCurrentSet: {
+            if (!request.protection || !request.protection->valid()) {
+                return failure("invalid_current_protection", ErrorClass::Command,
+                               "BAD_ARGUMENT");
+            }
+            const auto& value = *request.protection;
+            const auto command =
+                std::string("PROTECT CURRENT SET P_PEAK=") +
+                std::to_string(value.pitch_peak) + " P_AVG=" +
+                std::to_string(value.pitch_average) + " Y_PEAK=" +
+                std::to_string(value.yaw_peak) + " Y_AVG=" +
+                std::to_string(value.yaw_average) + " STALL_MS=" +
+                std::to_string(value.stall_ms);
+            result = sendAndWaitLocked(
+                command,
+                [](const Event& item) {
+                    return item.kind == EventKind::Ok &&
+                           item.subject == "PROTECT_CURRENT_SET";
+                }, std::min(timeout_ms, 2000), &event);
+            if (result.success) {
+                result.firmware_accepted = true;
+                snapshot_.current_protection_state = "CONFIGURED";
+            }
+            break;
+        }
+        case MaintenanceOperation::ClearOrigin:
+        case MaintenanceOperation::ClearAll: {
+            const bool clear_all = request.operation == MaintenanceOperation::ClearAll;
+            const auto expected = clear_all ? "NVM_CLEAR_ALL" : "NVM_CLEAR_ORIGIN";
+            result = sendAndWaitLocked(
+                clear_all ? "NVM CLEAR ALL" : "NVM CLEAR ORIGIN",
+                [expected](const Event& item) {
+                    return item.kind == EventKind::Ok && item.subject == expected;
+                }, std::min(timeout_ms, 2000), &event);
+            if (result.success) {
+                result.firmware_accepted = true;
+                snapshot_.origin_valid = false;
+                if (clear_all) {
+                    snapshot_.calibration_valid = false;
+                    snapshot_.current_protection_state = "MISSING";
+                }
+            }
+            break;
+        }
+        case MaintenanceOperation::Probe:
+        case MaintenanceOperation::Stop:
+        case MaintenanceOperation::ArmMaintenance:
+        case MaintenanceOperation::ArmProduction:
+        case MaintenanceOperation::Hold:
+            break;
+    }
     publishLocked();
     return result;
 }

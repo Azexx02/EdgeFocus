@@ -184,6 +184,16 @@ void parseFields(const std::vector<std::string>& parts, std::size_t begin, Event
     if (const auto value = read_u32("UARTERR")) event.uart_errors = *value;
     if (const auto value = read_u32("RXDROP")) event.rx_drops = *value;
     if (const auto value = read_u32("TXDROP")) event.tx_drops = *value;
+    event.pitch_current_raw = read_u32("P_RAW");
+    event.pitch_current_average = read_u32("P_AVG");
+    event.pitch_current_peak = read_u32("P_PEAK");
+    event.yaw_current_raw = read_u32("Y_RAW");
+    event.yaw_current_average = read_u32("Y_AVG");
+    event.yaw_current_peak = read_u32("Y_PEAK");
+    event.current_window_ms = read_u32("WINDOW_MS");
+    event.current_samples = read_u32("SAMPLES");
+    event.current_valid = read_bool("VALID");
+    event.current_saturated = read_bool("SATURATED");
 }
 
 long ringTenths(double value) {

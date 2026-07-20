@@ -30,6 +30,15 @@ std::string alertPayload(int level, const std::string& session_id = "session_1")
                           {"phone_actions", json::array({"SCREEN", "SOUND"})}}}}.dump();
 }
 
+std::string gimbalResultPayload(const std::string& session_id = "session_1") {
+    return json{{"cmd", "push_gimbal_command_result"},
+                {"data", {{"session_id", session_id},
+                          {"request_sequence", 7},
+                          {"accepted", true},
+                          {"firmware_accepted", true},
+                          {"settled", false}}}}.dump();
+}
+
 void test_capability_gated_retry_and_ack() {
     AppEventOutbox outbox;
     auto queued = outbox.enqueue(alertPayload(2), "fallback", 1000);
@@ -74,6 +83,22 @@ void test_legacy_client_gets_one_send() {
     assert(outbox.due(2000).empty());
 }
 
+void test_gimbal_result_is_reliable_and_uses_extended_ttl() {
+    AppEventOutbox outbox;
+    outbox.setSubscribed(true);
+    assert(outbox.negotiate({"event_ack_v1", "event_dedupe_v1"}));
+    const auto queued = outbox.enqueue(gimbalResultPayload(), "fallback", 2500);
+    assert(queued.critical && !queued.send_once);
+    const auto due = outbox.due(2500);
+    assert(due.size() == 1);
+    const auto payload = json::parse(due.front());
+    assert(payload["data"]["ttl_ms"] == 30000);
+    assert(payload["data"]["remaining_ttl_ms"] == 30000);
+    const auto ack = outbox.acknowledge(
+        payload["data"]["event_id"], "session_1", "received", 2600);
+    assert(ack.status == "accepted");
+}
+
 void test_outbox_is_bounded_and_preserves_session_end() {
     AppEventOutbox outbox;
     outbox.setSubscribed(true);
@@ -93,7 +118,7 @@ void test_outbox_is_bounded_and_preserves_session_end() {
             if (event["command"] == "push_session_end") session_end_pending = true;
         }
     }
-    assert(pending <= 8);
+    assert(pending <= 32);
     assert(session_end_pending);
 }
 
@@ -102,6 +127,7 @@ void test_outbox_is_bounded_and_preserves_session_end() {
 int main() {
     test_capability_gated_retry_and_ack();
     test_legacy_client_gets_one_send();
+    test_gimbal_result_is_reliable_and_uses_extended_ttl();
     test_outbox_is_bounded_and_preserves_session_end();
     std::cout << "All AppEventOutbox tests passed!\n";
     return 0;

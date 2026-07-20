@@ -16,7 +16,10 @@
 #include <iostream>
 #include <cassert>
 #include <cmath>
+#include <chrono>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 #include <nlohmann/json.hpp>
 #ifdef _MSC_VER
@@ -47,7 +50,16 @@ public:
         state.state = gimbal::State::Holding;
         state.yaw_deg = yaw;
         state.pitch_deg = pitch;
-        return {true};
+        state.snapshot.target_yaw10 = static_cast<std::int32_t>(std::lround(yaw * 10.0));
+        state.snapshot.target_pitch10 = static_cast<std::int32_t>(std::lround(pitch * 10.0));
+        state.snapshot.motion_generation = ++motion_generation;
+        state.snapshot.settled = false;
+        gimbal::CommandResult result{true};
+        result.queued = true;
+        result.firmware_accepted = true;
+        result.settled = false;
+        result.motion_generation = motion_generation;
+        return result;
     }
     gimbal::CommandResult moveToVerified(double yaw, double pitch,
                                          int timeout_ms, double) override {
@@ -70,6 +82,7 @@ public:
     gimbal::CommandResult freezeAtCurrent(int) override { return {true}; }
     gimbal::CommandResult recover(int) override { return {true}; }
     gimbal::Status state{gimbal::State::Ready, false, false, true, {}, 0.0, 0.0};
+    std::uint32_t motion_generation{};
 };
 
 std::string decodeBase64(const std::string& input) {
@@ -464,6 +477,44 @@ int main() {
         assert(std::find(hello["data"]["server_capabilities"].begin(),
                          hello["data"]["server_capabilities"].end(),
                          "gimbal_session_control_v3") != hello["data"]["server_capabilities"].end());
+        assert(std::find(hello["data"]["server_capabilities"].begin(),
+                         hello["data"]["server_capabilities"].end(),
+                         "gimbal_async_result_v1") != hello["data"]["server_capabilities"].end());
+
+        const auto wait_until = [](const auto& predicate) {
+            for (int i = 0; i < 100; ++i) {
+                if (predicate()) return true;
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
+            return false;
+        };
+        std::mutex pushed_mutex;
+        std::vector<json> pushed_results;
+        typed_store.setPushCallback([&](const std::string& payload) {
+            const auto parsed = json::parse(payload, nullptr, false);
+            if (parsed.is_discarded() ||
+                parsed.value("cmd", "") != "push_gimbal_command_result") return;
+            std::lock_guard<std::mutex> lock(pushed_mutex);
+            pushed_results.push_back(parsed["data"]);
+        });
+        const auto wait_for_result = [&](const std::string& command,
+                                         std::uint64_t sequence,
+                                         std::size_t occurrence = 1) {
+            for (int i = 0; i < 100; ++i) {
+                {
+                    std::lock_guard<std::mutex> lock(pushed_mutex);
+                    std::size_t matches = 0;
+                    for (const auto& item : pushed_results) {
+                        if (item.value("command", "") == command &&
+                            item.value("request_sequence", std::uint64_t{}) == sequence) {
+                            if (++matches == occurrence) return item;
+                        }
+                    }
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
+            return json::object();
+        };
 
         const auto skip_payload = std::string(
             "{\"cmd\":\"precheck_skip_auto_adjust\",\"id\":48,\"data\":{"
@@ -471,8 +522,12 @@ int main() {
             "\",\"sequence\":1}}";
         json skipped = parseResponse(typed_server.handleCommand(skip_payload));
         assertSuccess(skipped, 48);
-        assert(skipped["data"]["state"] == "manual_available");
-        assert(skipped["data"]["manual_lease"] == false);
+        assert(skipped["data"]["queued"] == true);
+        assert(wait_until([&] {
+            return controller.snapshot().state == gimbal::PrecheckState::ManualAvailable;
+        }));
+        const auto skip_result = wait_for_result("precheck_skip_auto_adjust", 1);
+        assert(skip_result.value("accepted", false));
 
         const auto takeover_payload = std::string(
             "{\"cmd\":\"gimbal_manual_takeover\",\"id\":481,\"data\":{"
@@ -480,8 +535,12 @@ int main() {
             "\",\"owner_id\":\"app-test\",\"sequence\":1}}";
         json takeover = parseResponse(typed_server.handleCommand(takeover_payload));
         assertSuccess(takeover, 481);
-        assert(takeover["data"]["manual_lease"] == true);
-        const auto lease_token = takeover["data"]["lease_token"].get<std::string>();
+        assert(takeover["data"]["queued"] == true);
+        assert(wait_until([&] { return controller.snapshot().manual_lease; }));
+        const auto takeover_result = wait_for_result("gimbal_manual_takeover", 1);
+        assert(takeover_result.value("accepted", false));
+        const auto lease_token = takeover_result.value("lease_token", "");
+        assert(!lease_token.empty());
 
         const auto nudge_payload = std::string(
             "{\"cmd\":\"gimbal_nudge\",\"id\":49,\"data\":{"
@@ -490,13 +549,22 @@ int main() {
             "\",\"sequence\":2,\"direction\":\"RIGHT\"}}";
         json nudged = parseResponse(typed_server.handleCommand(nudge_payload));
         assertSuccess(nudged, 49);
-        assert(hardware.state.yaw_deg == 2.0);
+        assert(nudged["data"]["queued"] == true);
+        assert(wait_until([&] { return hardware.state.yaw_deg == 2.0; }));
+        const auto nudge_result = wait_for_result("gimbal_nudge", 2);
+        assert(nudge_result.value("accepted", false));
+        assert(nudge_result.value("firmware_accepted", false));
+        assert(nudge_result.value("acked_through_sequence", std::uint64_t{}) == 2);
+        assert(nudge_result["settled"] == false);
 
         assert(typed_orchestrator.confirmReady().success);
         controller.holdForSession(monotonic);
         json wrong_phase = parseResponse(typed_server.handleCommand(nudge_payload));
-        assert(wrong_phase["status"] == "error");
-        assert(wrong_phase["error"] == "manual_lease_unavailable");
+        assertSuccess(wrong_phase, 49);
+        assert(wrong_phase["data"]["queued"] == true);
+        const auto rejected_replay = wait_for_result("gimbal_nudge", 2, 2);
+        assert(!rejected_replay.value("accepted", true));
+        assert(rejected_replay.value("error", "") == "manual_lease_unavailable");
 
         typed_orchestrator.end(session::StopReason::Cancelled);
         monotonic += 1000;
@@ -523,6 +591,7 @@ int main() {
         assert(cancelled_precheck["data"]["formal_session_started"] == false);
         assert(!cancelled_precheck["data"].contains("session_id"));
         controller.stop();
+        typed_store.setPushCallback({});
         typed_server.shutdown(typed_ctx);
         typed_sqlite.shutdown(typed_ctx);
         std::cout << "  typed PRECHECK gimbal command surface: OK\n";

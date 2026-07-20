@@ -150,7 +150,7 @@ external_power_v1
 power_profile_override_v1
 ```
 
-`gimbal_precheck_v1` 仅在当前硬件/服务门开放时出现。
+国赛协议 3 主机会在云台控制器存在时声明 `gimbal_session_control_v3`、`gimbal_manual_lease_v1` 和 `gimbal_async_result_v1`。App 必须按异步契约处理，不能再把命令入队响应当作电机已执行。
 
 当前主机可能在 `client_hello` 前推一次 `push_state`。App 可临时缓存，但必须以 hello 后的 `get_current_state` 覆盖，随后才进入 READY。
 
@@ -458,18 +458,26 @@ App 必须忽略当前源码仍可能返回的旧输出能力字段，不恢复�
 - PRECHECK 期间 1–2 FPS 的可取消低优先级刷新；
 - 页面退出、断线或进入 RUNNING 时立即停拉。
 
-云台只在 hello 返回 `gimbal_precheck_v1` 时出现。命令保持当前主机：
+云台只在 hello 同时返回 `gimbal_session_control_v3`、`gimbal_manual_lease_v1` 和 `gimbal_async_result_v1` 时出现。国赛版命令为：
 
 ```text
-precheck_skip_auto_adjust
+gimbal_manual_takeover
+gimbal_lease_keepalive
 gimbal_nudge
 gimbal_center
 gimbal_stop
-gimbal_realign
+gimbal_release
+gimbal_force_release
+gimbal_recover
+precheck_skip_auto_adjust
 precheck_confirm_position
 ```
 
-每条命令带当前 `session_id` 和严格递增 sequence。App 只发方向，不发步长、角度、UART、BOOT0 或复位控制。能力消失/故障后按钮立即禁用，以主机低频恢复探测为准。
+每条命令带当前 `session_id` 和严格递增 `sequence`。接管成功结果提供 `lease_token`；除接管、恢复和跳过自动调整外，人工命令还必须携带稳定的 `owner_id` 与当前 token。App 每 5 秒发送 keepalive，租约过期后停止运动输入并重新接管。
+
+命令立即响应只表示 `queued=true`。最终结果以可靠事件 `push_gimbal_command_result` 为准，并按普通可靠事件发送 `event_ack`。只有事件中的 `firmware_accepted=true` 才表示 G431 已接受目标；`settled=true` 才表示同一 generation 已物理到位。STOP 和 force-release 在主机队列中优先，旧的低 sequence 运动会被拒绝，不能在 STOP 后补执行。
+
+App 只发方向，不发步长、角度、UART、BOOT0、维护或 NVM 命令。维护能力只存在于板端 CLI 与隐藏网页，不属于 App 产品协议。完整字段见 [gimbal-app-protocol-v3.md](gimbal-app-protocol-v3.md)。
 
 ## 13. App 屏保与系统生命周期
 

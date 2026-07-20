@@ -214,6 +214,11 @@ private:
     json handleDemoMode(const json& data);
     json handleRuntimePhone(const json& data);
     json handleRuntimeGimbal(const json& data);
+    json maintenanceStatus();
+    json handleMaintenanceUnlock(const json& data);
+    json handleMaintenanceAction(const json& data);
+    bool maintenanceEligible(std::string& reason) const;
+    std::string nextMaintenanceNonce();
     PreviewSourceSelection previewSourceSelection() const;
     void previewEncoderLoop();
     bool startPreviewStreamClient(int client_fd);
@@ -244,6 +249,11 @@ private:
     std::shared_ptr<const EncodedPreviewFrame> encoded_preview_;
     std::mutex stream_clients_mutex_;
     std::vector<StreamClient> stream_clients_;
+    mutable std::mutex maintenance_mutex_;
+    std::string maintenance_challenge_;
+    std::string maintenance_token_;
+    std::int64_t maintenance_token_expires_ms_{};
+    std::atomic<std::uint64_t> maintenance_nonce_{1};
 };
 
 } // namespace edgefocus

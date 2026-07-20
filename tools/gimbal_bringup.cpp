@@ -5,10 +5,12 @@
 #include <nlohmann/json.hpp>
 
 #include <fstream>
+#include <chrono>
 #include <iostream>
 #include <memory>
 #include <optional>
 #include <string>
+#include <thread>
 #include <utility>
 
 namespace {
@@ -16,6 +18,9 @@ namespace {
 using edgefocus::gimbal::CommandResult;
 using edgefocus::gimbal::GimbalHardwareService;
 using edgefocus::gimbal::LinuxGimbalIo;
+using edgefocus::gimbal::MaintenanceOperation;
+using edgefocus::gimbal::MaintenanceRequest;
+using edgefocus::gimbal::CurrentProtectionConfig;
 using edgefocus::gimbal::diagnostic::GimbalOnewayStopDiagnostic;
 
 constexpr const char* kDefaultConfig = "/opt/edgefocus/config/gimbal-board.json";
@@ -29,6 +34,14 @@ void printUsage() {
            "--allow-motion --confirm-board [--config PATH]\n"
         << "  gimbal_bringup stop [--config PATH]\n"
         << "  gimbal_bringup recovery-watch [--config PATH]\n"
+        << "  gimbal_bringup calibrate-electrical --allow-motion --confirm-board [--config PATH]\n"
+        << "  gimbal_bringup capture-origin --confirm-origin-capture [--config PATH]\n"
+        << "  gimbal_bringup current-sample --allow-motion --confirm-board [--config PATH]\n"
+        << "  gimbal_bringup protect-current-set --p-peak N --p-avg N --y-peak N --y-avg N "
+           "--stall-ms N --confirm-current-protection [--config PATH]\n"
+        << "  gimbal_bringup nvm-clear-origin|nvm-clear-all --confirm-nvm-clear "
+           "--confirm-second [--config PATH]\n"
+        << "  gimbal_bringup arm-production --allow-motion --confirm-board [--config PATH]\n"
         << "  gimbal_bringup oneway-stop --allow-motion --confirm-board "
            "--diagnose-no-rx\n"
         << "  gimbal_bringup oneway-pitch5 --allow-motion --confirm-board "
@@ -93,9 +106,23 @@ bool motionConfirmed(int argc, char** argv) {
            containsArg(argc, argv, "--confirm-board");
 }
 
+std::optional<std::uint16_t> uint16After(int argc, char** argv,
+                                         const std::string& key) {
+    try {
+        const auto text = valueAfter(argc, argv, key);
+        if (text.empty()) return std::nullopt;
+        const auto value = std::stoul(text);
+        if (value > 65535) return std::nullopt;
+        return static_cast<std::uint16_t>(value);
+    } catch (...) {
+        return std::nullopt;
+    }
+}
+
 int report(const char* operation, const CommandResult& result,
            const GimbalHardwareService& service) {
     const auto status = service.status();
+    const auto snapshot = service.snapshot();
     nlohmann::json output = {
         {"operation", operation},
         {"success", result.success},
@@ -110,7 +137,39 @@ int report(const char* operation, const CommandResult& result,
         {"yaw_deg", status.yaw_deg ? nlohmann::json(*status.yaw_deg) : nlohmann::json(nullptr)},
         {"pitch_deg",
          status.pitch_deg ? nlohmann::json(*status.pitch_deg) : nlohmann::json(nullptr)},
+        {"protocol", snapshot.protocol_version},
+        {"arm_profile", snapshot.arm_profile == edgefocus::gimbal::ArmProfile::Production
+                            ? "PRODUCTION"
+                            : (snapshot.arm_profile == edgefocus::gimbal::ArmProfile::Maintenance
+                                   ? "MAINTENANCE"
+                                   : "NONE")},
+        {"calibration_valid", snapshot.calibration_valid},
+        {"origin_valid", snapshot.origin_valid},
+        {"calibration_epoch", snapshot.calibration_epoch},
+        {"origin_epoch", snapshot.origin_epoch},
+        {"current_protection", snapshot.current_protection_state},
+        {"maintenance_operation", snapshot.operation},
+        {"maintenance_operation_generation", snapshot.operation_generation
+            ? nlohmann::json(*snapshot.operation_generation) : nlohmann::json(nullptr)},
+        {"maintenance_progress", snapshot.operation_progress
+            ? nlohmann::json(*snapshot.operation_progress) : nlohmann::json(nullptr)},
+        {"last_operation_status", snapshot.last_operation_status},
     };
+    if (result.current) {
+        output["current"] = {
+            {"pitch_raw", result.current->pitch_raw},
+            {"pitch_average", result.current->pitch_average},
+            {"pitch_peak", result.current->pitch_peak},
+            {"yaw_raw", result.current->yaw_raw},
+            {"yaw_average", result.current->yaw_average},
+            {"yaw_peak", result.current->yaw_peak},
+            {"window_ms", result.current->window_ms},
+            {"samples", result.current->samples},
+            {"valid", result.current->valid},
+            {"saturated", result.current->saturated},
+            {"sample_age_ms", result.current->sample_age_ms},
+        };
+    }
     std::cout << output.dump(2) << '\n';
     return result.success ? 0 : 2;
 }
@@ -198,6 +257,156 @@ int main(int argc, char** argv) {
         const auto result = service.probeRecovery();
         service.stop();
         return report("recovery-watch", result, service);
+    }
+    if (command == "calibrate-electrical") {
+        if (!motionConfirmed(argc, argv)) {
+            std::cerr << "Calibration refused: --allow-motion and --confirm-board are required\n";
+            service.stop();
+            return 65;
+        }
+        auto result = service.executeMaintenance({MaintenanceOperation::Probe});
+        if (result.success) {
+            result = service.executeMaintenance(
+                {MaintenanceOperation::CalibrateElectricalAll}, 5000);
+        }
+        if (result.success) {
+            const auto accepted_generation = result.motion_generation;
+            const auto deadline = std::chrono::steady_clock::now() +
+                                  std::chrono::seconds(60);
+            while (std::chrono::steady_clock::now() < deadline) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(250));
+                const auto poll = service.refreshAngle(1000);
+                if (!poll.success) {
+                    result = poll;
+                    break;
+                }
+                const auto snapshot = service.snapshot();
+                const bool same_operation = accepted_generation &&
+                    snapshot.operation_generation == accepted_generation;
+                if (!same_operation && snapshot.calibration_valid) break;
+                if (snapshot.last_operation_status == "FAILED" ||
+                    snapshot.last_operation_status == "ABORTED") {
+                    result.success = false;
+                    result.error = "electrical_calibration_failed";
+                    break;
+                }
+            }
+            if (result.success && !service.snapshot().calibration_valid) {
+                result.success = false;
+                result.timeout = true;
+                result.error = "electrical_calibration_timeout";
+            }
+        }
+        result = finishMotion(std::move(result), service);
+        const int exit_code = report(command.c_str(), result, service);
+        service.stop();
+        return exit_code;
+    }
+    if (command == "capture-origin") {
+        if (!containsArg(argc, argv, "--confirm-origin-capture")) {
+            std::cerr << "Origin capture refused: --confirm-origin-capture is required\n";
+            service.stop();
+            return 65;
+        }
+        auto result = service.executeMaintenance({MaintenanceOperation::Probe});
+        if (result.success) {
+            result = service.executeMaintenance({MaintenanceOperation::CaptureOrigin});
+        }
+        result = finishMotion(std::move(result), service);
+        const int exit_code = report(command.c_str(), result, service);
+        service.stop();
+        return exit_code;
+    }
+    if (command == "current-sample") {
+        if (!motionConfirmed(argc, argv)) {
+            std::cerr << "Current sampling refused: --allow-motion and --confirm-board are required\n";
+            service.stop();
+            return 65;
+        }
+        auto result = service.executeMaintenance({MaintenanceOperation::ArmMaintenance});
+        if (result.success) result = service.executeMaintenance({MaintenanceOperation::Hold});
+        auto sample_started = std::chrono::steady_clock::now();
+        if (result.success) {
+            sample_started = std::chrono::steady_clock::now();
+            result = service.executeMaintenance({MaintenanceOperation::CurrentReset});
+        }
+        if (result.success) {
+            result = service.executeMaintenance(
+                {MaintenanceOperation::VerifyMotionPattern}, 30000);
+        }
+        if (result.success) {
+            const auto elapsed = std::chrono::steady_clock::now() - sample_started;
+            if (elapsed < std::chrono::milliseconds(1100)) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1100) - elapsed);
+            }
+            result = service.executeMaintenance({MaintenanceOperation::CurrentRead});
+        }
+        if (result.success && (!result.current || !result.current->valid ||
+                               result.current->saturated ||
+                               result.current->window_ms < 1000)) {
+            result.success = false;
+            result.error = "current_sample_not_usable";
+        }
+        result = finishMotion(std::move(result), service);
+        const int exit_code = report(command.c_str(), result, service);
+        service.stop();
+        return exit_code;
+    }
+    if (command == "protect-current-set") {
+        if (!containsArg(argc, argv, "--confirm-current-protection")) {
+            std::cerr << "Current protection write refused: confirmation is required\n";
+            service.stop();
+            return 65;
+        }
+        const auto p_peak = uint16After(argc, argv, "--p-peak");
+        const auto p_avg = uint16After(argc, argv, "--p-avg");
+        const auto y_peak = uint16After(argc, argv, "--y-peak");
+        const auto y_avg = uint16After(argc, argv, "--y-avg");
+        const auto stall = uint16After(argc, argv, "--stall-ms");
+        if (!p_peak || !p_avg || !y_peak || !y_avg || !stall) {
+            std::cerr << "All current protection thresholds must be valid uint16 values\n";
+            service.stop();
+            return 64;
+        }
+        auto result = service.executeMaintenance({MaintenanceOperation::Probe});
+        if (result.success) {
+            MaintenanceRequest request{MaintenanceOperation::ProtectCurrentSet};
+            request.protection = CurrentProtectionConfig{
+                *p_peak, *p_avg, *y_peak, *y_avg, *stall};
+            result = service.executeMaintenance(request);
+        }
+        const int exit_code = report(command.c_str(), result, service);
+        service.stop();
+        return exit_code;
+    }
+    if (command == "nvm-clear-origin" || command == "nvm-clear-all") {
+        if (!containsArg(argc, argv, "--confirm-nvm-clear") ||
+            !containsArg(argc, argv, "--confirm-second")) {
+            std::cerr << "NVM clear refused: both confirmation flags are required\n";
+            service.stop();
+            return 65;
+        }
+        auto result = service.executeMaintenance({MaintenanceOperation::Probe});
+        if (result.success) {
+            result = service.executeMaintenance({
+                command == "nvm-clear-all" ? MaintenanceOperation::ClearAll
+                                           : MaintenanceOperation::ClearOrigin});
+        }
+        const int exit_code = report(command.c_str(), result, service);
+        service.stop();
+        return exit_code;
+    }
+    if (command == "arm-production") {
+        if (!motionConfirmed(argc, argv)) {
+            std::cerr << "Production arm refused: --allow-motion and --confirm-board are required\n";
+            service.stop();
+            return 65;
+        }
+        auto result = service.executeMaintenance({MaintenanceOperation::ArmProduction});
+        result = finishMotion(std::move(result), service);
+        const int exit_code = report(command.c_str(), result, service);
+        service.stop();
+        return exit_code;
     }
     if (command != "align" && command != "move") {
         printUsage();
