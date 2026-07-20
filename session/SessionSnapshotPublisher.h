@@ -13,6 +13,7 @@ public:
     explicit SessionSnapshotPublisher(std::string boot_id = {});
 
     SessionSnapshot read() const;
+    SessionSnapshot read(std::int64_t now_ms) const;
     void begin(const SessionContext& context, std::int64_t now_ms,
                std::uint64_t start_generation = 0,
                std::string operation_id = {});
@@ -35,6 +36,7 @@ public:
 private:
     void mutate(std::int64_t now_ms, const std::function<void(SessionSnapshot&)>& change);
     void updateTimingLocked(std::int64_t now_ms);
+    void projectTimingLocked(SessionSnapshot& snapshot, std::int64_t now_ms) const;
 
     mutable std::mutex mutex_;
     SessionSnapshot snapshot_;

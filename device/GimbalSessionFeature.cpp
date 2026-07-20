@@ -41,6 +41,7 @@ session::PrepareResult GimbalSessionFeature::prepare(const session::SessionConte
     std::string error;
     const bool ready = controller_.start(context.session_id, clock_(), &error);
     phase_.store(session::Phase::Idle);
+    tracking_accept_after_ms_.store(0);
     running_.store(true);
     worker_ = std::thread(&GimbalSessionFeature::workerLoop, this);
     if (!ready) {
@@ -52,8 +53,14 @@ session::PrepareResult GimbalSessionFeature::prepare(const session::SessionConte
 }
 
 void GimbalSessionFeature::enterPhase(session::Phase phase) {
-    phase_.store(phase);
     const auto now_ms = clock_();
+    if (phase == session::Phase::Focusing) {
+        // Publish the fresh-evidence gate before the worker can observe the
+        // FOCUSING phase. Frames captured during PRECHECK/manual positioning
+        // must never drive formal-session tracking.
+        tracking_accept_after_ms_.store(now_ms);
+    }
+    phase_.store(phase);
     if (phase == session::Phase::Focusing || phase == session::Phase::Paused) {
         controller_.holdForSession(now_ms);
         tracker_.reset();
@@ -71,7 +78,16 @@ void GimbalSessionFeature::workerLoop() {
         if (current_phase == session::Phase::Precheck) {
             controller_.observe(now_ms, snapshots_.read().visual);
         } else if (current_phase == session::Phase::Focusing) {
-            (void)tracker_.update(now_ms, snapshots_.read().visual);
+            // A browser/App manual lease temporarily owns motion.  The formal
+            // session and visual inference continue, but automatic tracking
+            // must not race manual nudge commands on the shared UART.
+            if (!controller_.snapshot().manual_lease) {
+                const auto visual = snapshots_.read().visual;
+                if (visual.evidence_timestamp_ms >
+                    tracking_accept_after_ms_.load()) {
+                    (void)tracker_.update(now_ms, visual);
+                }
+            }
         }
         if (current_phase == session::Phase::Precheck ||
             current_phase == session::Phase::Focusing ||
@@ -119,6 +135,7 @@ void GimbalSessionFeature::stop(session::StopReason /*reason*/) noexcept {
     controller_.stop();
     tracker_.reset();
     phase_.store(session::Phase::Idle);
+    tracking_accept_after_ms_.store(0);
     setHealth(false, false, "stopped");
 }
 

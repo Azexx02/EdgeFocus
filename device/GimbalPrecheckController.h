@@ -58,6 +58,7 @@ struct PrecheckStatus {
     std::size_t waypoint_index{};
     bool subject_found{};
     bool manual_lease{};
+    std::uint64_t last_command_sequence{};
     std::string detail;
 };
 
@@ -85,6 +86,12 @@ public:
                                   std::int64_t now_ms);
     CommandResult realign(const std::string& session_id, std::uint64_t sequence,
                           std::int64_t now_ms);
+    CommandResult acquireSessionManualControl(
+        const std::string& session_id, std::uint64_t sequence,
+        session::Phase phase, std::int64_t now_ms);
+    CommandResult releaseSessionManualControl(
+        const std::string& session_id, std::uint64_t sequence,
+        session::Phase phase, std::int64_t now_ms);
     void holdForSession(std::int64_t now_ms);
     void stop() noexcept;
     PrecheckStatus snapshot() const;

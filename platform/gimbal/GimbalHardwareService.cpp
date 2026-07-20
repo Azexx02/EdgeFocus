@@ -482,8 +482,13 @@ CommandResult GimbalHardwareService::stopAndDisable(int timeout_ms) {
 
 CommandResult GimbalHardwareService::moveTo(double yaw_deg, double pitch_deg, int timeout_ms) {
     std::lock_guard<std::recursive_mutex> lock(operation_mutex_);
+    return moveToInternal(yaw_deg, pitch_deg, timeout_ms, true);
+}
+
+CommandResult GimbalHardwareService::moveToInternal(
+    double yaw_deg, double pitch_deg, int timeout_ms, bool enforce_limits) {
     CommandResult result;
-    if (!limits_.verified()) {
+    if (enforce_limits && !limits_.verified()) {
         result.error = "motion_limits_unverified";
         return result;
     }
@@ -491,7 +496,8 @@ CommandResult GimbalHardwareService::moveTo(double yaw_deg, double pitch_deg, in
         result.error = "alignment_reference_unknown";
         return result;
     }
-    if (!limits_.contains(*alignment_yaw_deg_, *alignment_pitch_deg_, yaw_deg, pitch_deg)) {
+    if (enforce_limits &&
+        !limits_.contains(*alignment_yaw_deg_, *alignment_pitch_deg_, yaw_deg, pitch_deg)) {
         result.error = "target_out_of_bounds";
         return result;
     }
@@ -565,6 +571,21 @@ CommandResult GimbalHardwareService::moveToVerified(
     double yaw_deg, double pitch_deg, int timeout_ms,
     double tolerance_deg) {
     std::lock_guard<std::recursive_mutex> lock(operation_mutex_);
+    return moveToVerifiedInternal(
+        yaw_deg, pitch_deg, timeout_ms, tolerance_deg, true);
+}
+
+CommandResult GimbalHardwareService::moveToManualVerified(
+    double yaw_deg, double pitch_deg, int timeout_ms,
+    double tolerance_deg) {
+    std::lock_guard<std::recursive_mutex> lock(operation_mutex_);
+    return moveToVerifiedInternal(
+        yaw_deg, pitch_deg, timeout_ms, tolerance_deg, false);
+}
+
+CommandResult GimbalHardwareService::moveToVerifiedInternal(
+    double yaw_deg, double pitch_deg, int timeout_ms,
+    double tolerance_deg, bool enforce_limits) {
     CommandResult aggregate;
     if (timeout_ms <= 0 || tolerance_deg <= 0.0 || tolerance_deg > 5.0) {
         aggregate.error = "invalid_move_verify_parameters";
@@ -572,7 +593,8 @@ CommandResult GimbalHardwareService::moveToVerified(
     }
     double command_yaw = yaw_deg;
     double command_pitch = pitch_deg;
-    auto command = moveTo(command_yaw, command_pitch, std::min(timeout_ms, 2000));
+    auto command = moveToInternal(
+        command_yaw, command_pitch, std::min(timeout_ms, 2000), enforce_limits);
     aggregate.transcript.insert(aggregate.transcript.end(),
                                 command.transcript.begin(),
                                 command.transcript.end());
@@ -620,8 +642,9 @@ CommandResult GimbalHardwareService::moveToVerified(
                 command_pitch = offsetAngle(
                     command_pitch,
                     shortestAngleDelta(*current.pitch_deg, pitch_deg));
-                command = moveTo(command_yaw, command_pitch,
-                                 std::min(timeout_ms, 2000));
+                command = moveToInternal(
+                    command_yaw, command_pitch,
+                    std::min(timeout_ms, 2000), enforce_limits);
                 aggregate.transcript.insert(aggregate.transcript.end(),
                                             command.transcript.begin(),
                                             command.transcript.end());
@@ -640,6 +663,29 @@ CommandResult GimbalHardwareService::moveToVerified(
     aggregate.timeout = true;
     aggregate.error = machine_.status().fault_latched_reason;
     return aggregate;
+}
+
+CommandResult GimbalHardwareService::rebaseAlignmentAtCurrent(int timeout_ms) {
+    std::lock_guard<std::recursive_mutex> lock(operation_mutex_);
+    auto result = refreshAngle(timeout_ms);
+    if (!result.success) return result;
+    const auto current = machine_.status();
+    if (current.fault_active || current.state == State::Fault ||
+        current.state == State::RecoveryCheck) {
+        result.success = false;
+        result.error = current.fault_latched_reason.empty()
+            ? "gimbal_fault_active"
+            : current.fault_latched_reason;
+        return result;
+    }
+    if (!current.yaw_deg || !current.pitch_deg) {
+        result.success = false;
+        result.error = "alignment_rebase_angle_unknown";
+        return result;
+    }
+    alignment_yaw_deg_ = normalizeAngle(*current.yaw_deg);
+    alignment_pitch_deg_ = normalizeAngle(*current.pitch_deg);
+    return result;
 }
 
 CommandResult GimbalHardwareService::freezeAtCurrent(int timeout_ms) {

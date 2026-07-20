@@ -5,6 +5,7 @@
 #include "app/Logger.h"
 #include "behavior/PhoneFactBuffer.h"
 #include "camera/PreviewFrameStore.h"
+#include "device/GimbalPrecheckController.h"
 #include "network/PhoneSyncParser.h"
 #include "policy/NotificationRouter.h"
 #include "session/SessionOrchestrator.h"
@@ -117,6 +118,44 @@ std::string httpResponse(int status, const std::string& body,
     return out.str();
 }
 
+#ifdef EDGEFOCUS_WITH_OPENCV
+bool encodePreviewJpeg(const CameraFrame& frame, int quality,
+                       std::vector<std::uint8_t>& jpeg) {
+    if (!frame.valid()) return false;
+    cv::Mat image;
+    if (frame.channels == 1 && frame.format == PixelFormat::GRAY8) {
+        cv::Mat gray(frame.height, frame.width, CV_8UC1,
+                     const_cast<std::uint8_t*>(frame.data.data()));
+        cv::cvtColor(gray, image, cv::COLOR_GRAY2BGR);
+    } else if (frame.channels == 3) {
+        cv::Mat packed(frame.height, frame.width, CV_8UC3,
+                       const_cast<std::uint8_t*>(frame.data.data()));
+        if (frame.format == PixelFormat::RGB24) {
+            cv::cvtColor(packed, image, cv::COLOR_RGB2BGR);
+        } else {
+            image = packed;
+        }
+    } else {
+        return false;
+    }
+    jpeg.clear();
+    return cv::imencode(".jpg", image, jpeg, {cv::IMWRITE_JPEG_QUALITY, quality});
+}
+#endif
+
+#ifdef __linux__
+bool sendNoSignal(int fd, const void* data, std::size_t size) {
+    const auto* bytes = static_cast<const char*>(data);
+    std::size_t sent_total = 0;
+    while (sent_total < size) {
+        const ssize_t sent = ::send(fd, bytes + sent_total, size - sent_total, MSG_NOSIGNAL);
+        if (sent <= 0) return false;
+        sent_total += static_cast<std::size_t>(sent);
+    }
+    return true;
+}
+#endif
+
 std::string demoPageHtml() {
     return R"HTML(<!doctype html>
 <html lang="en">
@@ -193,47 +232,63 @@ snapshot()
 }
 
 std::string runtimeDemoPageHtml() {
-    return R"HTML(<!doctype html>
+    return std::string(R"HTML(<!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>EdgeFocus 视觉推理链</title><link rel="icon" href="data:,"><style>
 :root{--bg:#071018;--panel:#0b1621;--line:#203343;--ink:#e7f3f4;--muted:#78909d;--cyan:#49d6ff;--green:#5ee6a8;--amber:#ffca61;--red:#ff625f;--violet:#9f83ff}
-*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 15% 0,#102737 0,transparent 38%),var(--bg);color:var(--ink);font-family:"Microsoft YaHei UI",sans-serif;min-height:100vh;overflow:hidden}body:before{content:"";position:fixed;inset:0;pointer-events:none;opacity:.18;background-image:linear-gradient(#5f82920d 1px,transparent 1px),linear-gradient(90deg,#5f82920d 1px,transparent 1px);background-size:24px 24px}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 15% 0,#102737 0,transparent 38%),var(--bg);color:var(--ink);font-family:"Microsoft YaHei UI",sans-serif;min-height:100vh;overflow:auto}body:before{content:"";position:fixed;inset:0;pointer-events:none;opacity:.18;background-image:linear-gradient(#5f82920d 1px,transparent 1px),linear-gradient(90deg,#5f82920d 1px,transparent 1px);background-size:24px 24px}
 header{height:68px;padding:0 22px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;background:#071018e8}.brand{display:flex;gap:13px;align-items:center}.mark{width:27px;height:34px;display:flex;align-items:end;gap:3px}.mark i{display:block;width:7px;background:var(--cyan)}.mark i:nth-child(1){height:15px}.mark i:nth-child(2){height:30px}.mark i:nth-child(3){height:22px}.eyebrow{font:700 9px/1.2 Consolas;letter-spacing:2px;color:var(--cyan)}.brand h1{font:600 22px/1 "Bahnschrift Condensed","Microsoft YaHei UI";margin:4px 0 0}.brand h1 span{font-weight:300;color:#91a5ae}.metrics{display:flex;align-items:center;gap:24px}.metric{border-left:1px solid var(--line);padding-left:16px}.metric small{display:block;font:9px Consolas;color:var(--muted)}.metric b{font:700 13px Consolas}.badge{padding:7px 11px;border:1px solid #285c48;color:var(--green);font:700 10px Consolas}.badge.warn{border-color:#694d26;color:var(--amber)}.badge.replay{border-color:#674c99;color:#bca8ff}
-main{height:calc(100vh - 68px);display:grid;grid-template-columns:minmax(0,1.78fr) minmax(350px,.82fr);grid-template-rows:minmax(0,1fr) 150px;gap:9px;padding:9px}.panel{background:#0a141ed9;border:1px solid var(--line);min-width:0}.stage{padding:10px;display:flex;min-height:0;flex-direction:column}.panel-head{height:32px;display:flex;align-items:center;justify-content:space-between;font:700 10px Consolas;letter-spacing:1px;color:#9ab0bb}.index{color:var(--cyan);margin-right:10px}.source{color:var(--green)}
-.video{position:relative;flex:1;min-height:300px;background:#020609;display:grid;place-items:center;overflow:hidden;border:1px solid #263b49}.video img,.video video{display:none;width:100%;height:100%;object-fit:contain}.empty{position:absolute;color:#526977;font:12px Consolas;letter-spacing:1px}.scan{position:absolute;inset:0;background:linear-gradient(transparent 49.7%,#49d6ff18 50%,transparent 50.3%);background-size:100% 9px;pointer-events:none}.overlay{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}.hud{position:absolute;left:14px;top:13px;font:700 12px Consolas;text-shadow:0 1px 4px #000}.hud b{color:var(--cyan)}.stamp{position:absolute;bottom:12px;left:12px;display:flex;gap:8px}.stamp span{background:#071018e8;border:1px solid var(--line);padding:5px 8px;font:9px Consolas;color:var(--green)}
+main{height:calc(100vh - 68px);display:grid;grid-template-columns:minmax(0,1.78fr) minmax(390px,.82fr);grid-template-rows:minmax(0,1fr) clamp(150px,22vh,232px);gap:9px;padding:9px}.panel{background:#0a141ed9;border:1px solid var(--line);min-width:0}.stage{padding:10px;display:flex;min-height:0;overflow:hidden;flex-direction:column}.panel-head{height:32px;display:flex;align-items:center;justify-content:space-between;font:700 10px Consolas;letter-spacing:1px;color:#9ab0bb}.index{color:var(--cyan);margin-right:10px}.source{color:var(--green)}
+.video{position:relative;flex:1;min-height:0;background:#020609;display:grid;place-items:center;overflow:hidden;border:1px solid #263b49}.video img,.video video{display:none;position:absolute;max-width:none;max-height:none;object-fit:contain}.empty{position:absolute;color:#526977;font:12px Consolas;letter-spacing:1px}.scan{position:absolute;inset:0;background:linear-gradient(transparent 49.7%,#49d6ff18 50%,transparent 50.3%);background-size:100% 9px;pointer-events:none}.overlay{position:absolute;left:0;top:0;width:0;height:0;pointer-events:none}.hud{position:absolute;left:14px;top:13px;font:700 12px Consolas;text-shadow:0 1px 4px #000}.hud b{color:var(--cyan)}.stamp{position:absolute;bottom:12px;left:12px;display:flex;gap:8px}.stamp span{background:#071018e8;border:1px solid var(--line);padding:5px 8px;font:9px Consolas;color:var(--green)}
 .toolbar{display:flex;align-items:center;gap:7px;padding-top:9px;min-height:48px}.mode-btn,.phone-buttons button{cursor:pointer;border:1px solid #315063;background:#0b1721;color:#9eb1ba;padding:7px 10px;font:10px "Microsoft YaHei UI"}.mode-btn:hover,.phone-buttons button:hover{border-color:var(--cyan);color:#fff}.mode-btn.active,.phone-buttons button.selected{border-color:var(--green);color:var(--green);background:#0c241c}.mode-btn[disabled],.phone-buttons button[disabled]{cursor:not-allowed;opacity:.38}.switch{display:flex;gap:6px;align-items:center;margin-left:8px;color:#718893;font:9px Consolas}.note{margin-left:auto;color:#5f7682;font:9px Consolas;text-align:right}
 aside{display:grid;grid-template-columns:1fr 1fr;grid-template-rows:auto auto;gap:8px;min-height:0}.evidence{position:relative;padding:15px 16px;border-top:2px solid var(--green);min-height:0}.evidence.amber{border-color:var(--amber)}.evidence.violet{border-color:var(--violet)}.evidence.red{border-color:var(--red)}.evidence .code{position:absolute;right:12px;top:9px;font:25px Georgia;color:#314755}.evidence p{margin:0 0 7px;font:9px Consolas;letter-spacing:1.3px;color:#78909d}.evidence h2{margin:0 0 5px;font:600 20px "Bahnschrift Condensed","Microsoft YaHei UI"}.evidence small{font-size:10px;color:#718893}.score{position:absolute;right:14px;bottom:13px;font:700 14px Consolas;color:var(--green)}.phone-buttons{display:flex;gap:4px;flex-wrap:wrap;margin-top:9px}.phone-buttons button{padding:6px 8px}.level{display:flex;gap:12px;align-items:center}.orb{width:49px;height:49px;border:1px solid #365064;display:grid;place-items:center;font:700 27px Consolas;color:var(--red)}.reason{font:9px Consolas;color:#9aaeb5;word-break:break-all}.truth{margin-top:10px;padding-top:8px;border-top:1px solid #1c303d;font:9px Consolas;color:#607783}
-.timeline{grid-column:1/3;padding:8px 12px 10px;display:flex;flex-direction:column}.timeline .panel-head{height:27px}.legend{display:flex;gap:14px;font:9px Consolas}.legend i{display:inline-block;width:10px;height:2px;margin-right:5px;vertical-align:middle}.timeline canvas{width:100%;height:100px;display:block}
-@media(max-width:980px){body{overflow:auto}main{height:auto;grid-template-columns:1fr;grid-template-rows:auto}.timeline{grid-column:1}.video{height:55vh}.metrics .metric{display:none}aside{grid-template-columns:1fr 1fr}}
+.control-deck{grid-column:2;grid-row:2;display:grid;grid-template-rows:76px minmax(0,1fr);min-height:0}.session-control{padding:7px 11px;border-top:2px solid var(--green);border-bottom:1px solid var(--line)}.session-head,.gimbal-head{height:23px;display:flex;align-items:center;justify-content:space-between;font:700 10px Consolas;letter-spacing:1px;color:#9ab0bb}.session-clock,.gimbal-angle{color:var(--cyan)}.session-body{display:flex;align-items:center;gap:5px}.session-body input{width:49px;height:27px;margin:0;padding:4px 5px;border:1px solid #315063;background:#08131c;color:var(--ink);font:11px Consolas}.session-unit{font:9px Consolas;color:#718893;margin-right:3px}.session-actions{display:flex;gap:4px}.session-actions button{height:27px;cursor:pointer;border:1px solid #315063;background:#0b1721;color:#b8c9d0;padding:4px 7px;font:10px "Microsoft YaHei UI"}.session-actions button:hover{border-color:var(--cyan);color:#fff}.session-actions button[disabled]{cursor:not-allowed;opacity:.3}.session-actions .start{border-color:#2b7959;color:var(--green)}.session-actions .confirm{border-color:#34728a;color:var(--cyan)}.session-actions .end{border-color:#7d4a4a;color:#ff8d88}.session-detail{margin-left:auto;max-width:130px;text-align:right;color:#718893;font:9px Consolas;line-height:1.25}.gimbal-control{padding:7px 11px;display:flex;flex-direction:column;min-height:0}.gimbal-body{display:grid;grid-template-columns:98px minmax(0,1fr) auto;align-items:center;gap:12px;min-height:0;flex:1}.dpad{display:grid;grid-template-columns:repeat(3,28px);grid-template-rows:repeat(3,28px);gap:3px}.dpad button,.gimbal-actions button{cursor:pointer;border:1px solid #315063;background:#0b1721;color:#b8c9d0;font:700 13px Consolas}.dpad button:hover,.gimbal-actions button:hover{border-color:var(--cyan);color:#fff}.dpad button[disabled],.gimbal-actions button[disabled]{cursor:not-allowed;opacity:.3}.dpad .up{grid-column:2}.dpad .left{grid-column:1;grid-row:2}.dpad .center{grid-column:2;grid-row:2;color:var(--green)}.dpad .right{grid-column:3;grid-row:2}.dpad .down{grid-column:2;grid-row:3}.gimbal-info b{display:block;font:600 17px "Bahnschrift Condensed","Microsoft YaHei UI";margin-bottom:5px}.gimbal-info small{display:block;color:#718893;font:9px Consolas;line-height:1.45}.gimbal-actions{display:grid;gap:4px}.gimbal-actions button{min-width:80px;padding:5px 7px;font:10px "Microsoft YaHei UI"}.gimbal-actions .takeover{border-color:#786329;color:var(--amber)}.gimbal-actions .release{display:none;border-color:#2b7959;color:var(--green)}.gimbal-actions .release.show{display:block}.gimbal-actions .realign{display:none;border-color:#7d4a4a;color:#ff8d88}.gimbal-actions .realign.show{display:block}
+.timeline{grid-column:1;grid-row:2;padding:8px 12px 10px;display:flex;flex-direction:column}.timeline .panel-head{height:27px}.legend{display:flex;gap:14px;font:9px Consolas}.legend i{display:inline-block;width:10px;height:2px;margin-right:5px;vertical-align:middle}.timeline canvas{width:100%;height:100px;display:block}
+@media(max-height:700px) and (min-width:981px){header{height:54px}main{height:calc(100vh - 54px);grid-template-rows:minmax(0,1fr) 150px}.timeline canvas{height:70px}.control-deck{grid-template-rows:68px minmax(0,1fr)}.toolbar{min-height:38px}.panel-head{height:26px}}
+@media(max-width:980px){body{overflow:auto}main{height:auto;grid-template-columns:1fr;grid-template-rows:auto}.timeline,.control-deck{grid-column:1;grid-row:auto}.video{height:55vh;min-height:260px}.metrics .metric{display:none}aside{grid-template-columns:1fr 1fr}}
 </style></head><body>
 <header><div class="brand"><div class="mark"><i></i><i></i><i></i></div><div><div class="eyebrow">EDGE AI · LIVE EVIDENCE</div><h1>EdgeFocus <span>视觉推理链</span></h1></div></div><div class="metrics"><div class="metric"><small>PREVIEW</small><b id="preview-fps">-- FPS</b></div><div class="metric"><small>NPU INFERENCE</small><b id="npu-metric">-- FPS · -- ms</b></div><div id="health" class="badge warn">IDLE</div></div></header>
-<main><section class="panel stage"><div class="panel-head"><span><b class="index">01</b>视觉输入与证据叠加</span><span id="source" class="source">LIVE CAMERA</span></div><div class="video"><div id="empty" class="empty">等待 App 启动正式会话，或选择预录演示</div><img id="frame" alt="板端视觉输入"><video id="replay" muted playsinline preload="auto"></video><div class="scan"></div><svg id="overlay" class="overlay" viewBox="0 0 1000 1000" preserveAspectRatio="none"><rect id="subject-box" fill="none" stroke="#ffca61" stroke-width="4" visibility="hidden"/><g id="skeleton"></g></svg><div class="hud"><span id="runtime-kind">FORMAL SESSION</span><br>RUN <b id="run-id">--</b><br>FRAME <b id="frame-id">--</b></div><div class="stamp"><span id="phase">IDLE</span><span id="frame-age">NO EVIDENCE</span></div></div><div class="toolbar"><button id="mode-live" class="mode-btn active">现场摄像头</button><button id="mode-recorded" class="mode-btn">预录 NPU</button><button id="mode-replay" class="mode-btn">纯前端演示</button><label class="switch"><input id="show-overlay" type="checkbox" checked>显示证据叠加</label><span id="mode-note" class="note">现场模式只读，正式会话由 App 启动</span></div></section>
+<main><section class="panel stage"><div class="panel-head"><span><b class="index">01</b>视觉输入与证据叠加</span><span id="source" class="source">LIVE CAMERA</span></div><div id="video-stage" class="video"><div id="empty" class="empty">等待启动正式会话，或选择预录演示</div><img id="frame" alt="板端视觉输入"><video id="replay" muted playsinline preload="auto"></video><div class="scan"></div><svg id="overlay" class="overlay" preserveAspectRatio="none"><rect id="subject-box" fill="none" stroke="#ffca61" visibility="hidden"/><g id="skeleton"></g></svg><div class="hud"><span id="runtime-kind">FORMAL SESSION</span><br>RUN <b id="run-id">--</b><br>FRAME <b id="frame-id">--</b></div><div class="stamp"><span id="phase">IDLE</span><span id="frame-age">NO EVIDENCE</span></div></div><div class="toolbar"><button id="mode-live" class="mode-btn active">现场摄像头</button><button id="mode-recorded" class="mode-btn">预录 NPU</button><button id="mode-replay" class="mode-btn">纯前端演示</button><label class="switch"><input id="show-overlay" type="checkbox" checked>显示证据叠加</label><span id="mode-note" class="note">现场模式可由 App 或本页面启动正式会话</span></div></section>
 <aside><section class="panel evidence"><span class="code">A</span><p>VISUAL · PRESENCE</p><h2 id="presence">等待证据</h2><small id="presence-detail">会话外不运行现场 NPU</small><b id="presence-score" class="score">--</b></section><section class="panel evidence amber"><span class="code">B</span><p>TEMPORAL MLP · PRONE</p><h2 id="prone">等待时序窗口</h2><small>时序模型持续确认，单帧不直接触发</small><b id="prone-score" class="score">--</b></section><section class="panel evidence violet"><span class="code">C</span><p>EXTERNAL FACT · PHONE</p><h2 id="phone">未使用</h2><small id="phone-source">现场模式由 App 蓝牙同步</small><div class="phone-buttons"><button data-phone="OFF">未使用</button><button data-phone="LEARNING">学习</button><button data-phone="ENTERTAINMENT">娱乐</button><button data-phone="GENERAL_OR_UNKNOWN">其他</button></div></section><section class="panel evidence red"><span class="code">D</span><p>FUSED DISTRACTION</p><div class="level"><div id="level" class="orb">—</div><div><h2 id="level-title">当前无分神等级</h2><div id="reasons" class="reason">UNKNOWN</div></div></div><div id="delivery" class="truth">正式会话：等待 App/手环投递状态</div></section></aside>
-<section class="panel timeline"><div class="panel-head"><span><b class="index">02</b>近 30 秒证据时间线</span><span class="legend"><span><i style="background:#5ee6a8"></i>人在</span><span><i style="background:#ffca61"></i>趴下</span><span><i style="background:#9f83ff"></i>手机上报</span><span><i style="background:#ff625f"></i>综合等级</span></span></div><canvas id="timeline"></canvas></section></main>
-<script>
-const $=id=>document.getElementById(id), frame=$('frame'), replay=$('replay'), overlay=$('overlay');let previewFrames=0,previewAt=performance.now(),previewEnabled=false,frameBusy=false,lastRun='',lastSampleAt=0,history=[],lastState=null,replayTrace=null,replayTraceClip='',replayTraceLoading='',replayVideoClip='',replayAdvanceBusy=false;
+<section class="panel control-deck"><div class="session-control"><div class="session-head"><span><b class="index">02</b>现场会话控制</span><span id="session-clock" class="session-clock">00:00 / --:--</span></div><div class="session-body"><input id="session-duration" type="number" min="1" max="240" value="25" aria-label="专注时长"><span class="session-unit">分钟</span><div class="session-actions"><button class="start" data-session="start">启动</button><button class="confirm" data-session="confirm_precheck">确认预检</button><button data-session="pause">暂停</button><button data-session="resume">继续</button><button class="end" data-session="end">结束</button></div><span id="session-detail" class="session-detail">等待现场会话</span></div></div><div class="gimbal-control"><div class="gimbal-head"><span><b class="index">03</b><span id="gimbal-title">PRECHECK 云台微调</span></span><span id="gimbal-angle" class="gimbal-angle">X --° · Y --°</span></div><div class="gimbal-body"><div class="dpad"><button class="up" data-gimbal="up" aria-label="向上">↑</button><button class="left" data-gimbal="left" aria-label="向左">←</button><button class="center" data-gimbal="center" aria-label="回中">◎</button><button class="right" data-gimbal="right" aria-label="向右">→</button><button class="down" data-gimbal="down" aria-label="向下">↓</button></div><div class="gimbal-info"><b id="gimbal-state">等待预检</b><small id="gimbal-detail">正式会话进入 PRECHECK 后可用</small></div><div class="gimbal-actions"><button id="gimbal-takeover" class="takeover" data-gimbal="takeover">接管微调</button><button id="gimbal-release" class="release" data-gimbal="release">恢复跟踪</button><button data-gimbal="stop">停止</button><button id="gimbal-realign" class="realign" data-gimbal="realign">重新对齐</button></div></div></div></section>
+<section class="panel timeline"><div class="panel-head"><span><b class="index">04</b>近 30 秒证据时间线</span><span class="legend"><span><i style="background:#5ee6a8"></i>人在</span><span><i style="background:#ffca61"></i>趴下</span><span><i style="background:#9f83ff"></i>手机上报</span><span><i style="background:#ff625f"></i>综合等级</span></span></div><canvas id="timeline"></canvas></section></main>
+)HTML") + R"HTML(<script>
+const $=id=>document.getElementById(id), frame=$('frame'), replay=$('replay'), overlay=$('overlay'), videoStage=$('video-stage');let previewEnabled=false,previewStreamKey='',previewReconnectTimer=0,previewRetry=0,lastPreviewSequence=0,lastPreviewAdvanceAt=performance.now(),mediaWidth=0,mediaHeight=0,heldVisual=null,heldVisualKey='',lastOverlayVisual=null,lastRun='',lastSampleAt=0,history=[],lastState=null,replayTrace=null,replayTraceClip='',replayTraceLoading='',replayVideoClip='',replayAdvanceBusy=false,gimbalBusy=false,sessionBusy=false,durationTouched=false,pollSerial=0,appliedPollSerial=0;
 async function api(url,opt){const r=await fetch(url,opt),x=await r.json();if(!r.ok)throw Error(x.error||r.status);return x}const post=(url,data)=>api(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(data)});const pct=v=>v==null?'--':Math.round(v*100)+'%';
-function stopPreview(){previewEnabled=false;frameBusy=false;frame.style.display='none';frame.removeAttribute('src')}
+function stopPreview(){previewEnabled=false;previewStreamKey='';previewRetry=0;clearTimeout(previewReconnectTimer);frame.style.display='none';if(frame.getAttribute('src'))frame.removeAttribute('src')}
+function rebuildPreviewStream(){if(!previewEnabled||!previewStreamKey)return;frame.style.display='block';frame.src=`/api/demo/stream.mjpg?run=${encodeURIComponent(previewStreamKey)}&t=${Date.now()}`}
+function schedulePreviewReconnect(){if(!previewEnabled||previewReconnectTimer)return;const delay=[500,1000,2000][Math.min(previewRetry,2)];previewRetry++;previewReconnectTimer=setTimeout(()=>{previewReconnectTimer=0;rebuildPreviewStream()},delay)}
+function startPreview(key){previewEnabled=true;if(previewStreamKey===key&&frame.getAttribute('src'))return;frame.style.display='none';if(frame.getAttribute('src'))frame.removeAttribute('src');previewStreamKey=key;previewRetry=0;clearTimeout(previewReconnectTimer);previewReconnectTimer=0;rebuildPreviewStream()}
 function unloadReplay(){replay.pause();replay.style.display='none';replayVideoClip='';replayAdvanceBusy=false;if(replay.getAttribute('src')){replay.removeAttribute('src');replay.load()}}
 function requestReplayTrace(clip){if(!clip||replayTraceClip===clip||replayTraceLoading===clip)return;replayTraceLoading=clip;api('/api/demo/trace.json?clip='+encodeURIComponent(clip)).then(trace=>{if(replayTraceLoading!==clip)return;replayTrace=trace;replayTraceClip=clip;replayTraceLoading=''}).catch(()=>{if(replayTraceLoading===clip){replayTrace=null;replayTraceClip=clip;replayTraceLoading=''}})}
 function scriptedState(s){if(s.source.mode!=='FRONTEND_REPLAY')return s;const clip=s.source.clip||'';requestReplayTrace(clip);if(!replay.duration||replayTraceClip!==clip||!replayTrace?.samples?.length)return s;const t=Math.round(replay.currentTime*1000),samples=replayTrace.samples;let sample=samples[0];for(const item of samples){if(item.media_timestamp_ms>t)break;sample=item}const x=structuredClone(s);x.source.media_timestamp_ms=t;x.visual=structuredClone(sample.visual);x.visual.media_timestamp_ms=t;x.phone=structuredClone(sample.phone);x.assessment=structuredClone(sample.assessment);return x}
-function drawOverlay(v){const box=$('subject-box'),g=$('skeleton');g.replaceChildren();if(!$('show-overlay').checked||!v.subject_box){box.setAttribute('visibility','hidden');return}const b=v.subject_box;box.setAttribute('x',b.x1*1000);box.setAttribute('y',b.y1*1000);box.setAttribute('width',(b.x2-b.x1)*1000);box.setAttribute('height',(b.y2-b.y1)*1000);box.setAttribute('visibility','visible');const pts=v.keypoints||[],links=[[5,6],[5,7],[7,9],[6,8],[8,10],[5,11],[6,12],[11,12],[11,13],[13,15],[12,14],[14,16],[0,5],[0,6]];for(const [a,bx] of links){if(pts[a]?.confidence>.25&&pts[bx]?.confidence>.25){const l=document.createElementNS('http://www.w3.org/2000/svg','line');for(const [k,val] of [['x1',pts[a].x*1000],['y1',pts[a].y*1000],['x2',pts[bx].x*1000],['y2',pts[bx].y*1000]])l.setAttribute(k,val);l.setAttribute('stroke','#49d6ff');l.setAttribute('stroke-width','4');g.append(l)}}pts.forEach(p=>{if(p.confidence<=.25)return;const c=document.createElementNS('http://www.w3.org/2000/svg','circle');c.setAttribute('cx',p.x*1000);c.setAttribute('cy',p.y*1000);c.setAttribute('r','6');c.setAttribute('fill','#49d6ff');g.append(c)})}
+function syncMediaRect(width=mediaWidth,height=mediaHeight){width=Number(width);height=Number(height);if(!(width>0&&height>0&&videoStage.clientWidth>0&&videoStage.clientHeight>0))return;mediaWidth=width;mediaHeight=height;const scale=Math.min(videoStage.clientWidth/width,videoStage.clientHeight/height),displayWidth=width*scale,displayHeight=height*scale,left=(videoStage.clientWidth-displayWidth)/2,top=(videoStage.clientHeight-displayHeight)/2;for(const el of [frame,replay,overlay]){el.style.left=left+'px';el.style.top=top+'px';el.style.width=displayWidth+'px';el.style.height=displayHeight+'px'}overlay.setAttribute('viewBox',`0 0 ${width} ${height}`)}
+function visualForOverlay(s,replayMode){if(replayMode){heldVisual=null;heldVisualKey='';return s.visual}const key=`${s.source.mode}:${s.source.run_id}`;if(key!==heldVisualKey){heldVisualKey=key;heldVisual=null}const id=Number(s.visual?.frame_id||0);if(id>0&&(!heldVisual||id>Number(heldVisual.frame_id||0)))heldVisual=structuredClone(s.visual);return heldVisual||s.visual}
+function drawOverlay(v){lastOverlayVisual=v;const box=$('subject-box'),g=$('skeleton');g.replaceChildren();if(!$('show-overlay').checked||!v?.subject_box||!(mediaWidth>0&&mediaHeight>0)){box.setAttribute('visibility','hidden');return}const b=v.subject_box,stroke=Math.max(2,Math.min(mediaWidth,mediaHeight)*.006),radius=Math.max(3,Math.min(mediaWidth,mediaHeight)*.009);box.setAttribute('x',b.x1*mediaWidth);box.setAttribute('y',b.y1*mediaHeight);box.setAttribute('width',(b.x2-b.x1)*mediaWidth);box.setAttribute('height',(b.y2-b.y1)*mediaHeight);box.setAttribute('stroke-width',stroke);box.setAttribute('vector-effect','non-scaling-stroke');box.setAttribute('visibility','visible');const pts=v.keypoints||[],links=[[5,6],[5,7],[7,9],[6,8],[8,10],[5,11],[6,12],[11,12],[11,13],[13,15],[12,14],[14,16],[0,5],[0,6]];for(const [a,bx] of links){if(pts[a]?.confidence>.25&&pts[bx]?.confidence>.25){const l=document.createElementNS('http://www.w3.org/2000/svg','line');for(const [k,val] of [['x1',pts[a].x*mediaWidth],['y1',pts[a].y*mediaHeight],['x2',pts[bx].x*mediaWidth],['y2',pts[bx].y*mediaHeight]])l.setAttribute(k,val);l.setAttribute('stroke','#49d6ff');l.setAttribute('stroke-width',stroke);l.setAttribute('vector-effect','non-scaling-stroke');g.append(l)}}pts.forEach(p=>{if(p.confidence<=.25)return;const c=document.createElementNS('http://www.w3.org/2000/svg','circle');c.setAttribute('cx',p.x*mediaWidth);c.setAttribute('cy',p.y*mediaHeight);c.setAttribute('r',radius);c.setAttribute('fill','#49d6ff');g.append(c)})}
 function sample(s){const now=performance.now();if(now-lastSampleAt<240)return;lastSampleAt=now;const run=s.source.run_id;if(run!==lastRun){history=[];lastRun=run}history.push({t:Date.now(),p:s.visual.presence,q:s.visual.prone,phone:s.phone.active?1:0,l:s.assessment.level});const cutoff=Date.now()-30000;history=history.filter(x=>x.t>=cutoff);drawTimeline()}
 function drawTimeline(){const c=$('timeline'),d=devicePixelRatio||1,w=c.clientWidth,h=c.clientHeight;c.width=w*d;c.height=h*d;const x=c.getContext('2d');x.scale(d,d);x.clearRect(0,0,w,h);const rows=[['PRES','#5ee6a8','p'],['PRONE','#ffca61','q'],['PHONE','#9f83ff','phone'],['LEVEL','#ff625f','l']],left=44,rowH=h/4,now=Date.now();x.font='9px Consolas';rows.forEach((r,i)=>{const y=i*rowH+rowH/2;x.fillStyle='#607783';x.fillText(r[0],2,y+3);x.strokeStyle='#203343';x.beginPath();x.moveTo(left,y);x.lineTo(w,y);x.stroke();x.strokeStyle=r[1];x.lineWidth=2;x.beginPath();let started=false;history.forEach(v=>{const val=v[r[2]];if(val==null){started=false;return}const px=left+(w-left)*(1-(now-v.t)/30000),py=y-(r[2]==='l'?Math.min(3,val)/3:Math.max(0,Math.min(1,val)))*(rowH*.34);if(!started){x.moveTo(px,py);started=true}else x.lineTo(px,py)});x.stroke()})}
-function render(raw){let s=scriptedState(raw);lastState=s;const replayMode=s.source.mode==='FRONTEND_REPLAY',liveMode=s.source.mode==='LIVE_CAMERA',recordedMode=s.source.mode==='RECORDED_NPU';$('run-id').textContent=String(s.source.run_id||'--').slice(-12);$('runtime-kind').textContent=s.source.formal?'FORMAL SESSION':liveMode?'FORMAL SESSION WINDOW':replayMode?'FRONTEND REPLAY':'DEMO RUNTIME';$('phase').textContent=s.session.phase;$('source').textContent=s.source.label;$('frame-id').textContent=s.visual.frame_id||'--';$('npu-metric').textContent=replayMode?'NPU BYPASSED':`${Number(s.health.inference_fps||0).toFixed(1)} FPS · ${Number(s.health.inference_latency_ms||0).toFixed(0)} ms`;$('health').textContent=s.health.status;$('health').className='badge '+(s.health.status==='RUNNING'?'':replayMode?'replay':'warn');
+)HTML" + R"HTML(
+const gimbalStateText={inactive:'未启用',searching:'自动搜索',centering:'自动居中',framing:'构图确认',manual:'手动微调',holding:'位置保持',degraded:'故障降级'};const gimbalReasonText={waiting_for_precheck:'等待预检',gimbal_unavailable:'云台能力不可用',formal_session_required:'等待启动正式会话',precheck_or_focusing_only:'仅预检或专注中可微调',gimbal_session_starting:'云台正在进入会话',gimbal_degraded:'云台已降级，等待恢复',manual_control_ready:'预检微调已就绪',session_manual_control_ready:'会话微调中，自动跟踪已暂停',automatic_adjustment_active:'自动控制中，可点击接管',realign_available:'云台可重新对齐',manual_lease_unavailable:'当前无手动控制租约'};
+const sessionReasonText={live_mode_required:'请先切换到现场摄像头',ready_to_start:'可从网页启动现场会话',session_active:'会话状态由主机统一管理'};const mmss=ms=>{if(ms==null||ms<0)return'--:--';const s=Math.floor(ms/1000);return String(Math.floor(s/60)).padStart(2,'0')+':'+String(s%60).padStart(2,'0')};
+function renderSession(s){const c=s.controls?.session||{},phase=s.session.active&&s.session.phase==='IDLE'?'PREPARING':s.session.phase;$('session-clock').textContent=`${mmss(s.session.elapsed_ms)} / ${mmss(s.session.target_duration_ms)}`;if(!durationTouched&&!s.session.active&&c.default_duration_minutes)$('session-duration').value=c.default_duration_minutes;$('session-duration').disabled=sessionBusy||s.session.active;document.querySelectorAll('[data-session]').forEach(b=>{const a=b.dataset.session,enabled=a==='start'?c.start_enabled:a==='confirm_precheck'?c.confirm_enabled:a==='pause'?c.pause_enabled:a==='resume'?c.resume_enabled:c.end_enabled;b.disabled=sessionBusy||!enabled});if(!sessionBusy)$('session-detail').textContent=`${phase} · ${sessionReasonText[c.reason]||c.reason||'等待状态'}`}
+function renderGimbal(s){const g=s.gimbal||{},c=s.controls?.gimbal||{},manual=!!c.manual_enabled,phase=s.session.phase;$('gimbal-title').textContent=phase==='FOCUSING'?'SESSION 云台微调':'PRECHECK 云台微调';$('gimbal-takeover').textContent=phase==='FOCUSING'?'接管跟踪':'接管微调';$('gimbal-angle').textContent=`X ${g.angle_x==null?'--':Number(g.angle_x).toFixed(1)}° · Y ${g.angle_y==null?'--':Number(g.angle_y).toFixed(1)}°`;$('gimbal-state').textContent=gimbalStateText[g.state]||'等待预检';if(!gimbalBusy)$('gimbal-detail').textContent=gimbalReasonText[c.reason]||g.detail||c.reason||'等待状态';document.querySelectorAll('[data-gimbal]').forEach(b=>{const a=b.dataset.gimbal,enabled=a==='takeover'?c.takeover_enabled:a==='release'?c.release_enabled:a==='realign'?c.realign_enabled:manual;b.disabled=gimbalBusy||!enabled});$('gimbal-release').classList.toggle('show',!!c.release_enabled);$('gimbal-realign').classList.toggle('show',!!c.realign_enabled)}
+async function runSession(action){if(sessionBusy)return;if(action==='end'&&!confirm('确认结束当前会话？'))return;sessionBusy=true;if(lastState)renderSession(lastState);$('session-detail').textContent='状态切换中，请稍候';const body={action};if(action==='start')body.duration_minutes=Number($('session-duration').value);else body.session_id=lastState?.session?.id||'';try{await post('/api/demo/session',body);await poll()}catch(e){$('session-detail').textContent=e.message||'会话命令失败'}finally{sessionBusy=false;if(lastState)renderSession(lastState)}}
+async function runGimbal(action){if(gimbalBusy)return;gimbalBusy=true;if(lastState)renderGimbal(lastState);$('gimbal-detail').textContent='命令执行中，请稍候';try{const r=await post('/api/demo/gimbal',{action});$('gimbal-detail').textContent=r.accepted?'命令已执行':(r.error||'命令被拒绝');await poll()}catch(e){$('gimbal-detail').textContent=gimbalReasonText[e.message]||e.message||'云台命令失败'}finally{gimbalBusy=false;if(lastState)renderGimbal(lastState)}}
+function render(raw){let s=scriptedState(raw);lastState=s;const replayMode=s.source.mode==='FRONTEND_REPLAY',liveMode=s.source.mode==='LIVE_CAMERA',recordedMode=s.source.mode==='RECORDED_NPU',overlayVisual=visualForOverlay(s,replayMode);$('run-id').textContent=String(s.source.run_id||'--').slice(-12);$('runtime-kind').textContent=s.source.formal?'FORMAL SESSION':liveMode?'FORMAL SESSION WINDOW':replayMode?'FRONTEND REPLAY':'DEMO RUNTIME';$('phase').textContent=s.session.phase;$('source').textContent=s.source.label;$('frame-id').textContent=overlayVisual?.frame_id||'--';$('preview-fps').textContent=replayMode?'VIDEO':`${Number(s.preview?.stream_fps||0).toFixed(1)} FPS`;$('npu-metric').textContent=replayMode?'NPU BYPASSED':`${Number(s.health.inference_fps||0).toFixed(1)} FPS · ${Number(s.health.inference_latency_ms||0).toFixed(0)} ms`;$('health').textContent=s.health.status;$('health').className='badge '+(s.health.status==='RUNNING'?'':replayMode?'replay':'warn');
 const p=s.visual.presence,q=s.visual.prone,l=s.assessment.level;$('presence').textContent=p==null?'证据不足':p>=.5?'人在':'人不在';$('presence-score').textContent=pct(p);$('presence-detail').textContent=s.health.frame_age_ms<0&&!replayMode?'等待视觉证据':s.assessment.applicability==='NOT_PRESENT'?'等级不适用':replayMode?'同步展示轨迹':`证据年龄 ${s.health.frame_age_ms} ms`;$('prone').textContent=q==null?'等待时序窗口':q>=.5?'已确认趴下':'未趴下';$('prone-score').textContent=pct(q);$('phone').textContent=s.phone.active?({LEARNING:'学习类使用',ENTERTAINMENT:'娱乐类使用',GENERAL_OR_UNKNOWN:'其他使用'}[s.phone.category]||'使用中'):'未使用';$('phone-source').textContent=s.source.formal?'来自 App 蓝牙原始事实':liveMode?'现场模式只读，等待 App 会话':replayMode?'由同步回放轨迹驱动':'本地演示输入';$('level').textContent=l==null?'—':l;$('level-title').textContent=l==null?(s.assessment.applicability==='NOT_PRESENT'?'人不在 · 等级不适用':'当前无分神等级'):["未分神","轻度分神","持续分神","严重 / 长时分神"][l];$('reasons').textContent=(s.assessment.reasons||[]).join(' + ')||s.assessment.applicability;
-document.querySelectorAll('[data-phone]').forEach(b=>{b.disabled=!s.controls.phone_controls_enabled||replayMode;b.classList.toggle('selected',(s.phone.active?b.dataset.phone===s.phone.category:b.dataset.phone==='OFF'))});$('mode-live').disabled=!s.controls.can_switch_mode;$('mode-recorded').disabled=!s.controls.can_switch_mode||!s.controls.video_ready;$('mode-replay').disabled=!s.controls.can_switch_mode||!s.controls.replay_ready;$('mode-live').classList.toggle('active',liveMode);$('mode-recorded').classList.toggle('active',recordedMode);$('mode-replay').classList.toggle('active',replayMode);$('mode-note').textContent=s.source.formal?'正式会话运行中，模式已锁定':liveMode?'现场模式只读，正式会话由 App 启动':replayMode?'纯前端 pre-log 回放 · 手机输入已锁定':'预录 NPU 模式不写正式会话或提醒';
-if(replayMode){stopPreview();const clip=s.source.clip||'';if(replayVideoClip!==clip||!replay.getAttribute('src')){replay.pause();if(replay.getAttribute('src')){replay.removeAttribute('src');replay.load()}replayVideoClip=clip;replay.src='/api/demo/recorded.mp4?clip='+encodeURIComponent(clip);replay.play().catch(()=>{})}replay.style.display='block';$('empty').style.display='none'}else{unloadReplay();previewEnabled=!!s.preview.available;if(previewEnabled){$('empty').style.display='none'}else{stopPreview();$('empty').style.display='block'}}$('frame-age').textContent=replayMode?`MEDIA ${Math.round(replay.currentTime||0)} s`:s.health.frame_age_ms>=0?`EVIDENCE ${s.health.frame_age_ms} ms OLD`:'NO EVIDENCE';drawOverlay(s.visual);sample(s)}
-frame.addEventListener('load',function(){frameBusy=false;this.style.display=previewEnabled?'block':'none';if(!previewEnabled)return;previewFrames++;const now=performance.now();if(now-previewAt>1000){$('preview-fps').textContent=(previewFrames*1000/(now-previewAt)).toFixed(1)+' FPS';previewFrames=0;previewAt=now}});frame.addEventListener('error',()=>{frameBusy=false});replay.addEventListener('timeupdate',()=>{if(lastState?.source.mode==='FRONTEND_REPLAY')render(lastState)});replay.addEventListener('ended',()=>{if(lastState?.source.mode!=='FRONTEND_REPLAY'||replayAdvanceBusy)return;replayAdvanceBusy=true;history=[];post('/api/demo/mode',{mode:'replay'}).catch(()=>{}).finally(()=>{replayAdvanceBusy=false})});
-$('mode-live').onclick=()=>post('/api/demo/mode',{mode:'live'});$('mode-recorded').onclick=()=>post('/api/demo/mode',{mode:'recorded'});$('mode-replay').onclick=()=>post('/api/demo/mode',{mode:'replay'});$('show-overlay').onchange=()=>lastState&&drawOverlay(lastState.visual);document.querySelectorAll('[data-phone]').forEach(b=>b.onclick=()=>post('/api/demo/phone',{category:b.dataset.phone}));
-function refreshPreview(){if(!previewEnabled||frameBusy)return;frameBusy=true;frame.src=`/api/demo/frame.jpg?t=${Date.now()}`}
-async function poll(){try{render(await api('/api/demo/state'))}catch(e){$('health').textContent='OFFLINE';$('health').className='badge warn'}}poll();setInterval(poll,180);setInterval(refreshPreview,100);addEventListener('resize',drawTimeline);
+document.querySelectorAll('[data-phone]').forEach(b=>{b.disabled=!s.controls.phone_controls_enabled||replayMode;b.classList.toggle('selected',(s.phone.active?b.dataset.phone===s.phone.category:b.dataset.phone==='OFF'))});$('mode-live').disabled=!s.controls.can_switch_mode;$('mode-recorded').disabled=!s.controls.can_switch_mode||!s.controls.video_ready;$('mode-replay').disabled=!s.controls.can_switch_mode||!s.controls.replay_ready;$('mode-live').classList.toggle('active',liveMode);$('mode-recorded').classList.toggle('active',recordedMode);$('mode-replay').classList.toggle('active',replayMode);$('mode-note').textContent=s.source.formal?'正式会话运行中，模式已锁定':liveMode?'现场模式可由 App 或本页面启动正式会话':replayMode?'纯前端 pre-log 回放 · 手机输入已锁定':'预录 NPU 模式不写正式会话或提醒';
+renderSession(s);renderGimbal(s);
+if(replayMode){stopPreview();const clip=s.source.clip||'';if(replayVideoClip!==clip||!replay.getAttribute('src')){replay.pause();if(replay.getAttribute('src')){replay.removeAttribute('src');replay.load()}replayVideoClip=clip;replay.src='/api/demo/recorded.mp4?clip='+encodeURIComponent(clip);replay.play().catch(()=>{})}replay.style.display='block';if(replay.videoWidth&&replay.videoHeight)syncMediaRect(replay.videoWidth,replay.videoHeight);$('empty').style.display='none'}else{unloadReplay();if(s.preview.available){const streamKey=`${s.source.mode}:${s.source.run_id}`;startPreview(streamKey);syncMediaRect(s.preview.width,s.preview.height);$('empty').style.display='none';const sequence=Number(s.preview.sequence||0);if(sequence!==lastPreviewSequence){lastPreviewSequence=sequence;lastPreviewAdvanceAt=performance.now()}else if(performance.now()-lastPreviewAdvanceAt>2000&&Number(s.preview.stream_fps||0)<=0){schedulePreviewReconnect()}}else{stopPreview();$('empty').style.display='block'}}$('frame-age').textContent=replayMode?`MEDIA ${Math.round(replay.currentTime||0)} s`:s.health.frame_age_ms>=0?`EVIDENCE ${s.health.frame_age_ms} ms OLD`:'NO EVIDENCE';drawOverlay(overlayVisual);sample(s)}
+frame.addEventListener('load',function(){previewRetry=0;clearTimeout(previewReconnectTimer);previewReconnectTimer=0;this.style.display=previewEnabled?'block':'none'});frame.addEventListener('error',()=>{frame.style.display='none';schedulePreviewReconnect()});replay.addEventListener('loadedmetadata',()=>{syncMediaRect(replay.videoWidth,replay.videoHeight);if(lastOverlayVisual)drawOverlay(lastOverlayVisual)});replay.addEventListener('timeupdate',()=>{if(lastState?.source.mode==='FRONTEND_REPLAY')render(lastState)});replay.addEventListener('ended',()=>{if(lastState?.source.mode!=='FRONTEND_REPLAY'||replayAdvanceBusy)return;replayAdvanceBusy=true;history=[];post('/api/demo/mode',{mode:'replay'}).catch(()=>{}).finally(()=>{replayAdvanceBusy=false})});
+$('mode-live').onclick=()=>post('/api/demo/mode',{mode:'live'});$('mode-recorded').onclick=()=>post('/api/demo/mode',{mode:'recorded'});$('mode-replay').onclick=()=>post('/api/demo/mode',{mode:'replay'});$('show-overlay').onchange=()=>lastOverlayVisual&&drawOverlay(lastOverlayVisual);$('session-duration').oninput=()=>durationTouched=true;document.querySelectorAll('[data-phone]').forEach(b=>b.onclick=()=>post('/api/demo/phone',{category:b.dataset.phone}));document.querySelectorAll('[data-session]').forEach(b=>b.onclick=()=>runSession(b.dataset.session));document.querySelectorAll('[data-gimbal]').forEach(b=>b.onclick=()=>runGimbal(b.dataset.gimbal));
+async function poll(){const serial=++pollSerial;try{const state=await api('/api/demo/state');if(serial<appliedPollSerial)return;appliedPollSerial=serial;render(state)}catch(e){$('health').textContent='OFFLINE';$('health').className='badge warn'}}poll();setInterval(poll,180);new ResizeObserver(()=>{syncMediaRect();if(lastOverlayVisual)drawOverlay(lastOverlayVisual);drawTimeline()}).observe(videoStage);addEventListener('resize',()=>{syncMediaRect();if(lastOverlayVisual)drawOverlay(lastOverlayVisual);drawTimeline()});
 </script></body></html>)HTML";
 }
 } // namespace
 
 DemoHttpServer::DemoHttpServer(SystemStateStore& store, SQLiteStore& sqlite_store,
                                DeviceManager& device_mgr, GimbalMonitor* gimbal_monitor,
+                               gimbal::GimbalPrecheckController* gimbal_precheck,
                                session::SessionOrchestrator& sessions,
                                session::SessionSnapshotPublisher& snapshots,
                                PhoneFactBuffer& phone_facts,
@@ -245,6 +300,7 @@ DemoHttpServer::DemoHttpServer(SystemStateStore& store, SQLiteStore& sqlite_stor
     , sqlite_store_(sqlite_store)
     , device_mgr_(device_mgr)
     , gimbal_monitor_(gimbal_monitor)
+    , gimbal_precheck_(gimbal_precheck)
     , sessions_(sessions)
     , snapshots_(snapshots)
     , phone_facts_(phone_facts)
@@ -259,6 +315,7 @@ bool DemoHttpServer::init(AppContext& /*ctx*/) {
     return true;
 #else
     running_ = true;
+    preview_encoder_thread_ = std::thread(&DemoHttpServer::previewEncoderLoop, this);
     server_thread_ = std::thread(&DemoHttpServer::serveLoop, this);
     return true;
 #endif
@@ -270,6 +327,7 @@ void DemoHttpServer::runOnce(AppContext& /*ctx*/) {
 
 void DemoHttpServer::shutdown(AppContext& /*ctx*/) {
     running_ = false;
+    encoded_preview_changed_.notify_all();
     if (server_thread_.joinable()) {
 #ifdef __linux__
         int sock = ::socket(AF_INET, SOCK_STREAM, 0);
@@ -283,6 +341,12 @@ void DemoHttpServer::shutdown(AppContext& /*ctx*/) {
         }
 #endif
         server_thread_.join();
+    }
+    stopStreamClients();
+    if (preview_encoder_thread_.joinable()) preview_encoder_thread_.join();
+    {
+        std::lock_guard<std::mutex> lock(encoded_preview_mutex_);
+        encoded_preview_.reset();
     }
 }
 
@@ -311,6 +375,7 @@ void DemoHttpServer::serveLoop() {
     LOGI("DemoHttpServer", "Demo HTTP listening on 0.0.0.0:%d", port_);
 
     while (running_) {
+        reapFinishedStreamClients();
         int client = ::accept(server_fd, nullptr, nullptr);
         if (client < 0) continue;
         timeval io_timeout{};
@@ -357,26 +422,243 @@ void DemoHttpServer::serveLoop() {
                 break;
             }
 
+            if (request.method == "GET" &&
+                request.path.rfind("/api/demo/stream.mjpg", 0) == 0) {
+                if (startPreviewStreamClient(client)) {
+                    client = -1;
+                } else {
+                    response = httpResponse(
+                        503, json{{"error", "preview stream client limit reached"}}.dump());
+                }
+                have_response = true;
+                break;
+            }
+
             response = handleRequest(request.method, request.path, request.body);
             have_response = true;
         }
 
+        if (client < 0) continue;
         if (have_response) {
-            size_t sent_total = 0;
-            while (sent_total < response.size()) {
-                const ssize_t sent = ::send(client, response.data() + sent_total,
-                                            response.size() - sent_total, 0);
-                if (sent <= 0) {
-                    break;
-                }
-                sent_total += static_cast<size_t>(sent);
-            }
+            (void)sendNoSignal(client, response.data(), response.size());
         }
         ::close(client);
     }
 
     ::close(server_fd);
 #endif
+}
+
+DemoHttpServer::PreviewSourceSelection DemoHttpServer::previewSourceSelection() const {
+    if (sessions_.active()) {
+        const auto snapshot = snapshots_.read(nowMs());
+        return {&preview_frames_, "formal:" + snapshot.context.session_id};
+    }
+    const auto status = demo_runtime_.status();
+    if (status.mode == BoardDemoRuntime::Mode::RecordedNpu) {
+        return {&demo_runtime_.previewFrames(), "recorded:" + std::to_string(status.run_id)};
+    }
+    return {};
+}
+
+void DemoHttpServer::previewEncoderLoop() {
+#ifndef EDGEFOCUS_WITH_OPENCV
+    while (running_) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+#else
+    constexpr std::int64_t kEncodePeriodMs = 67;
+    std::string active_source;
+    std::uint64_t last_sequence = 0;
+    std::int64_t next_encode_ms = 0;
+    std::int64_t last_encoded_ms = 0;
+    double stream_fps = 0.0;
+
+    while (running_) {
+        const auto source = previewSourceSelection();
+        if (!source.store || source.key.empty()) {
+            if (!active_source.empty()) {
+                active_source.clear();
+                last_sequence = 0;
+                next_encode_ms = 0;
+                last_encoded_ms = 0;
+                stream_fps = 0.0;
+                {
+                    std::lock_guard<std::mutex> lock(encoded_preview_mutex_);
+                    encoded_preview_.reset();
+                }
+                encoded_preview_changed_.notify_all();
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            continue;
+        }
+        if (source.key != active_source) {
+            active_source = source.key;
+            last_sequence = 0;
+            next_encode_ms = 0;
+            last_encoded_ms = 0;
+            stream_fps = 0.0;
+            {
+                std::lock_guard<std::mutex> lock(encoded_preview_mutex_);
+                encoded_preview_.reset();
+            }
+            encoded_preview_changed_.notify_all();
+        }
+
+        auto preview = source.store->waitForNewer(
+            last_sequence, std::chrono::milliseconds(50));
+        if (!running_) break;
+        if (!preview || !preview->frame) {
+            last_sequence = source.store->metadata().sequence;
+            continue;
+        }
+        last_sequence = preview->sequence;
+
+        auto encode_at = nowMs();
+        if (next_encode_ms > encode_at) {
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(next_encode_ms - encode_at));
+            if (!running_) break;
+            if (auto newer = source.store->readAfter(last_sequence)) {
+                preview = std::move(newer);
+                last_sequence = preview->sequence;
+            }
+            encode_at = nowMs();
+        }
+
+        const auto current_source = previewSourceSelection();
+        if (current_source.key != active_source || current_source.store != source.store) continue;
+
+        auto encoded = std::make_shared<EncodedPreviewFrame>();
+        encoded->source_key = active_source;
+        encoded->sequence = preview->sequence;
+        encoded->timestamp_ms = preview->frame->timestamp_ms;
+        encoded->media_timestamp_ms = preview->frame->media_timestamp_ms;
+        encoded->width = preview->frame->width;
+        encoded->height = preview->frame->height;
+        if (!encodePreviewJpeg(*preview->frame, 78, encoded->jpeg)) continue;
+
+        const auto finished_at = nowMs();
+        if (last_encoded_ms > 0 && finished_at > last_encoded_ms) {
+            const double instant_fps = 1000.0 /
+                static_cast<double>(finished_at - last_encoded_ms);
+            stream_fps = stream_fps <= 0.0
+                ? instant_fps
+                : stream_fps * 0.8 + instant_fps * 0.2;
+        }
+        last_encoded_ms = finished_at;
+        encoded->stream_fps = stream_fps;
+        next_encode_ms = encode_at + kEncodePeriodMs;
+
+        if (previewSourceSelection().key != active_source) continue;
+        {
+            std::lock_guard<std::mutex> lock(encoded_preview_mutex_);
+            encoded_preview_ = std::move(encoded);
+        }
+        encoded_preview_changed_.notify_all();
+    }
+#endif
+}
+
+bool DemoHttpServer::startPreviewStreamClient(int client_fd) {
+#ifndef __linux__
+    (void)client_fd;
+    return false;
+#else
+    reapFinishedStreamClients();
+    std::lock_guard<std::mutex> lock(stream_clients_mutex_);
+    if (stream_clients_.size() >= 2) return false;
+
+    timeval timeout{};
+    timeout.tv_sec = 1;
+    timeout.tv_usec = 0;
+    ::setsockopt(client_fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
+    auto state = std::make_shared<StreamClientState>();
+    state->fd = client_fd;
+    StreamClient client;
+    client.state = state;
+    client.worker = std::thread(&DemoHttpServer::previewStreamClientLoop, this, state);
+    stream_clients_.push_back(std::move(client));
+    return true;
+#endif
+}
+
+void DemoHttpServer::previewStreamClientLoop(
+    const std::shared_ptr<StreamClientState>& state) {
+#ifdef __linux__
+    const int fd = state->fd.load();
+    const std::string header =
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: multipart/x-mixed-replace; boundary=edgefocusframe\r\n"
+        "Cache-Control: no-store, no-cache, must-revalidate\r\n"
+        "Pragma: no-cache\r\n"
+        "Access-Control-Allow-Origin: *\r\n"
+        "Connection: close\r\n\r\n";
+    bool connected = sendNoSignal(fd, header.data(), header.size());
+    std::string last_source;
+    std::uint64_t last_sequence = 0;
+    while (connected && running_) {
+        std::shared_ptr<const EncodedPreviewFrame> frame;
+        {
+            std::unique_lock<std::mutex> lock(encoded_preview_mutex_);
+            encoded_preview_changed_.wait_for(lock, std::chrono::milliseconds(500), [&] {
+                return !running_ || (encoded_preview_ &&
+                    (encoded_preview_->source_key != last_source ||
+                     encoded_preview_->sequence != last_sequence));
+            });
+            if (!running_) break;
+            frame = encoded_preview_;
+        }
+        if (!frame || frame->jpeg.empty()) continue;
+        last_source = frame->source_key;
+        last_sequence = frame->sequence;
+        std::ostringstream part;
+        part << "--edgefocusframe\r\n"
+             << "Content-Type: image/jpeg\r\n"
+             << "Content-Length: " << frame->jpeg.size() << "\r\n"
+             << "X-EdgeFocus-Source: " << frame->source_key << "\r\n"
+             << "X-EdgeFocus-Sequence: " << frame->sequence << "\r\n"
+             << "X-EdgeFocus-Timestamp: " << frame->timestamp_ms << "\r\n\r\n";
+        const auto part_header = part.str();
+        connected = sendNoSignal(fd, part_header.data(), part_header.size()) &&
+                    sendNoSignal(fd, frame->jpeg.data(), frame->jpeg.size()) &&
+                    sendNoSignal(fd, "\r\n", 2);
+    }
+    const int owned_fd = state->fd.exchange(-1);
+    if (owned_fd >= 0) {
+        ::shutdown(owned_fd, SHUT_RDWR);
+        ::close(owned_fd);
+    }
+#endif
+    state->done = true;
+}
+
+void DemoHttpServer::reapFinishedStreamClients() {
+    std::lock_guard<std::mutex> lock(stream_clients_mutex_);
+    for (auto it = stream_clients_.begin(); it != stream_clients_.end();) {
+        if (!it->state->done.load()) {
+            ++it;
+            continue;
+        }
+        if (it->worker.joinable()) it->worker.join();
+        it = stream_clients_.erase(it);
+    }
+}
+
+void DemoHttpServer::stopStreamClients() {
+    std::vector<StreamClient> clients;
+    {
+        std::lock_guard<std::mutex> lock(stream_clients_mutex_);
+        clients.swap(stream_clients_);
+    }
+#ifdef __linux__
+    for (auto& client : clients) {
+        const int fd = client.state->fd.load();
+        if (fd >= 0) ::shutdown(fd, SHUT_RDWR);
+    }
+#endif
+    encoded_preview_changed_.notify_all();
+    for (auto& client : clients) {
+        if (client.worker.joinable()) client.worker.join();
+    }
 }
 
 std::string DemoHttpServer::handleRequest(const std::string& method, const std::string& path,
@@ -405,12 +687,19 @@ std::string DemoHttpServer::handleRequest(const std::string& method, const std::
         }
         if (method == "POST" && path == "/api/demo/session") {
             const json data = body.empty() ? json::object() : json::parse(body);
-            return httpResponse(200, handleRuntimeSession(data).dump());
+            const auto response = handleRuntimeSession(data);
+            return httpResponse(response.value("success", false) ? 200 : 409,
+                                response.dump());
         }
         if (method == "POST" && path == "/api/demo/phone") {
             const json data = body.empty() ? json::object() : json::parse(body);
             const auto response = handleRuntimePhone(data);
             return httpResponse(response.value("accepted", false) ? 200 : 400, response.dump());
+        }
+        if (method == "POST" && path == "/api/demo/gimbal") {
+            const json data = body.empty() ? json::object() : json::parse(body);
+            const auto response = handleRuntimeGimbal(data);
+            return httpResponse(response.value("accepted", false) ? 200 : 409, response.dump());
         }
         // Legacy mutation endpoints are intentionally no longer routed. Demo
         // state can only come from SessionSnapshotPublisher.
@@ -423,10 +712,54 @@ std::string DemoHttpServer::handleRequest(const std::string& method, const std::
 DemoHttpServer::json DemoHttpServer::runtimeSnapshotJson() const {
     const bool formal_session = sessions_.active();
     const auto demo_status = demo_runtime_.status();
-    const auto runtime = formal_session ? snapshots_.read() : demo_runtime_.snapshot();
+    const auto runtime = formal_session ? snapshots_.read(nowMs()) : demo_runtime_.snapshot();
     const auto legacy = store_.snapshot();
-    const auto preview = formal_session ? preview_frames_.read() : demo_runtime_.previewFrames().read();
+    const auto preview = formal_session ? preview_frames_.metadata()
+                                        : demo_runtime_.previewFrames().metadata();
+    double preview_stream_fps = 0.0;
+    const auto selected_preview_source = previewSourceSelection();
+    {
+        std::lock_guard<std::mutex> lock(encoded_preview_mutex_);
+        if (encoded_preview_ &&
+            encoded_preview_->source_key == selected_preview_source.key) {
+            preview_stream_fps = encoded_preview_->stream_fps;
+        }
+    }
     const auto now_ms = nowMs();
+    const bool gimbal_precheck_phase = formal_session && runtime.phase == session::Phase::Precheck;
+    const bool gimbal_focusing_phase = formal_session && runtime.phase == session::Phase::Focusing;
+    const bool gimbal_control_phase = gimbal_precheck_phase || gimbal_focusing_phase;
+    const auto gimbal_control = gimbal_precheck_
+        ? std::optional<gimbal::PrecheckStatus>(gimbal_precheck_->snapshot())
+        : std::nullopt;
+    const bool gimbal_session_matches = gimbal_control &&
+        gimbal_control->session_id == runtime.context.session_id;
+    const bool gimbal_manual_enabled = gimbal_control_phase && gimbal_session_matches &&
+        gimbal_control->state == gimbal::PrecheckState::Manual &&
+        gimbal_control->manual_lease && !runtime.gimbal.health.degraded;
+    const bool gimbal_takeover_enabled = gimbal_control_phase && gimbal_session_matches &&
+        !runtime.gimbal.health.degraded && !gimbal_manual_enabled &&
+        ((gimbal_precheck_phase &&
+          (gimbal_control->state == gimbal::PrecheckState::Searching ||
+           gimbal_control->state == gimbal::PrecheckState::Centering ||
+           gimbal_control->state == gimbal::PrecheckState::Framing ||
+           gimbal_control->state == gimbal::PrecheckState::Holding)) ||
+         (gimbal_focusing_phase &&
+          gimbal_control->state == gimbal::PrecheckState::Holding));
+    const bool gimbal_release_enabled = gimbal_focusing_phase && gimbal_manual_enabled;
+    const bool gimbal_realign_enabled = gimbal_control_phase && gimbal_session_matches &&
+        runtime.gimbal.recoverable;
+    std::string gimbal_control_reason = "waiting_for_precheck";
+    if (!gimbal_precheck_) gimbal_control_reason = "gimbal_unavailable";
+    else if (!formal_session) gimbal_control_reason = "formal_session_required";
+    else if (!gimbal_control_phase) gimbal_control_reason = "precheck_or_focusing_only";
+    else if (!gimbal_session_matches) gimbal_control_reason = "gimbal_session_starting";
+    else if (runtime.gimbal.health.degraded) gimbal_control_reason = "gimbal_degraded";
+    else if (gimbal_release_enabled) gimbal_control_reason = "session_manual_control_ready";
+    else if (gimbal_manual_enabled) gimbal_control_reason = "manual_control_ready";
+    else if (gimbal_takeover_enabled) gimbal_control_reason = "automatic_adjustment_active";
+    else if (gimbal_realign_enabled) gimbal_control_reason = "realign_available";
+    else gimbal_control_reason = "manual_lease_unavailable";
 
     auto optionalNumber = [](const std::optional<double>& value) -> json {
         return value ? json(*value) : json(nullptr);
@@ -473,11 +806,14 @@ DemoHttpServer::json DemoHttpServer::runtimeSnapshotJson() const {
     for (const auto& point : runtime.visual.keypoints) {
         keypoints.push_back({{"x", point.x}, {"y", point.y}, {"confidence", point.confidence}});
     }
+    const auto current_phase = formal_session ? runtime.phase : session::Phase::Idle;
+    const bool live_window = demo_status.mode == BoardDemoRuntime::Mode::LiveCamera;
     return {
         {"session", {
             {"id", runtime.context.session_id},
             {"phase", formal_session ? session::phase_name(runtime.phase) : "IDLE"},
             {"active", formal_session},
+            {"target_duration_ms", runtime.context.target_duration_ms},
             {"elapsed_ms", runtime.elapsed_ms},
             {"remaining_ms", runtime.remaining_ms}
         }},
@@ -537,22 +873,116 @@ DemoHttpServer::json DemoHttpServer::runtimeSnapshotJson() const {
             {"detail", runtime.gimbal.detail}
         }},
         {"preview", {
-            {"available", preview.has_value()},
-            {"sequence", preview ? preview->sequence : 0}
+            {"available", preview.available},
+            {"sequence", preview.sequence},
+            {"width", preview.width},
+            {"height", preview.height},
+            {"source_fps", preview.publish_fps},
+            {"stream_fps", preview_stream_fps}
         }},
         {"controls", {
             {"can_switch_mode", !formal_session},
             {"phone_controls_enabled", !formal_session && demo_status.phone_controls_enabled},
             {"video_ready", demo_status.video_ready},
-            {"replay_ready", demo_status.replay_ready}
+            {"replay_ready", demo_status.replay_ready},
+            {"session", {
+                {"start_enabled", !formal_session && live_window},
+                {"confirm_enabled", formal_session && current_phase == session::Phase::Precheck},
+                {"pause_enabled", formal_session && current_phase == session::Phase::Focusing},
+                {"resume_enabled", formal_session && current_phase == session::Phase::Paused},
+                {"end_enabled", formal_session},
+                {"default_duration_minutes", clampInt(
+                    legacy.preferences.default_focus_duration_min, 1, 240)},
+                {"reason", !live_window && !formal_session
+                               ? "live_mode_required"
+                               : formal_session ? "session_active" : "ready_to_start"}
+            }},
+            {"gimbal", {
+                {"available", gimbal_precheck_ != nullptr},
+                {"manual_enabled", gimbal_manual_enabled},
+                {"takeover_enabled", gimbal_takeover_enabled},
+                {"release_enabled", gimbal_release_enabled},
+                {"realign_enabled", gimbal_realign_enabled},
+                {"reason", gimbal_control_reason}
+            }}
         }}
     };
 }
 
 DemoHttpServer::json DemoHttpServer::handleRuntimeSession(const json& data) {
-    (void)data;
-    return {{"success", false},
-            {"error", "formal sessions are controlled by the App, not the display page"}};
+    const auto action = lowerCopy(data.value("action", ""));
+    if (action == "start") {
+        if (sessions_.active()) {
+            return {{"success", false}, {"error", "session_already_active"}};
+        }
+        if (demo_runtime_.status().mode != BoardDemoRuntime::Mode::LiveCamera) {
+            return {{"success", false}, {"error", "live_mode_required"}};
+        }
+        if (!data.contains("duration_minutes") ||
+            !data["duration_minutes"].is_number_integer()) {
+            return {{"success", false}, {"error", "duration_minutes_required"}};
+        }
+        const int duration_minutes = data["duration_minutes"].get<int>();
+        if (duration_minutes < 1 || duration_minutes > 240) {
+            return {{"success", false}, {"error", "duration_minutes_out_of_range"}};
+        }
+        const auto result = sessions_.start({
+            static_cast<std::int64_t>(duration_minutes) * 60 * 1000,
+            session::SourceMode::LiveCamera,
+            "web-" + std::to_string(nowMs())});
+        return {{"success", result.success},
+                {"already_active", result.already_active},
+                {"session_id", result.context ? result.context->session_id : ""},
+                {"phase", session::phase_name(sessions_.phase())},
+                {"error", result.error}};
+    }
+
+    if (!sessions_.active()) {
+        return {{"success", false}, {"error", "no_active_session"}};
+    }
+    const auto runtime = snapshots_.read(nowMs());
+    if (!data.contains("session_id") || !data["session_id"].is_string() ||
+        data["session_id"].get<std::string>() != runtime.context.session_id) {
+        return {{"success", false}, {"error", "session_id_mismatch"}};
+    }
+
+    session::SessionOrchestrator::Result result;
+    if (action == "confirm_precheck") {
+        if (runtime.phase != session::Phase::Precheck) {
+            return {{"success", false}, {"error", "confirm_requires_precheck"}};
+        }
+        if (gimbal_precheck_) {
+            const auto gimbal = gimbal_precheck_->snapshot();
+            if (gimbal.session_id == runtime.context.session_id && gimbal.manual_lease) {
+                const auto confirmed = gimbal_precheck_->confirmPosition(
+                    runtime.context.session_id, gimbal.last_command_sequence + 1, nowMs());
+                if (!confirmed.success) {
+                    return {{"success", false},
+                            {"error", confirmed.error.empty()
+                                          ? "gimbal_position_confirm_failed"
+                                          : confirmed.error}};
+                }
+            }
+        }
+        result = sessions_.confirmReady();
+    } else if (action == "pause") {
+        result = sessions_.pause();
+    } else if (action == "resume") {
+        result = sessions_.resume();
+    } else if (action == "end") {
+        const bool formal_started = runtime.formal_active ||
+            runtime.phase == session::Phase::Focusing ||
+            runtime.phase == session::Phase::Paused;
+        result = sessions_.end(formal_started ? session::StopReason::Completed
+                                              : session::StopReason::Cancelled);
+    } else {
+        return {{"success", false}, {"error", "unknown_session_action"}};
+    }
+
+    return {{"success", result.success},
+            {"session_id", result.context ? result.context->session_id : ""},
+            {"phase", session::phase_name(sessions_.phase())},
+            {"error", result.error}};
 }
 
 DemoHttpServer::json DemoHttpServer::handleDemoMode(const json& data) {
@@ -596,6 +1026,74 @@ DemoHttpServer::json DemoHttpServer::handleRuntimePhone(const json& data) {
     return {{"accepted", accepted}, {"error", error}};
 }
 
+DemoHttpServer::json DemoHttpServer::handleRuntimeGimbal(const json& data) {
+    if (!gimbal_precheck_) {
+        return {{"accepted", false}, {"error", "gimbal_precheck_unavailable"}};
+    }
+    const auto phase = sessions_.phase();
+    if (!sessions_.active() ||
+        (phase != session::Phase::Precheck && phase != session::Phase::Focusing)) {
+        return {{"accepted", false},
+                {"error", "gimbal_control_requires_precheck_or_focusing"}};
+    }
+
+    const auto runtime = snapshots_.read(nowMs());
+    const auto session_id = runtime.context.session_id;
+    const auto before = gimbal_precheck_->snapshot();
+    if (session_id.empty() || before.session_id != session_id) {
+        return {{"accepted", false}, {"error", "session_mismatch"}};
+    }
+
+    const auto action = lowerCopy(data.value("action", ""));
+    const auto sequence = before.last_command_sequence + 1;
+    const auto now_ms = nowMs();
+    gimbal::CommandResult result;
+    if (action == "takeover") {
+        result = phase == session::Phase::Precheck
+                     ? gimbal_precheck_->skipAuto(session_id, sequence, now_ms)
+                     : gimbal_precheck_->acquireSessionManualControl(
+                           session_id, sequence, phase, now_ms);
+    } else if (action == "release") {
+        result = gimbal_precheck_->releaseSessionManualControl(
+            session_id, sequence, phase, now_ms);
+    } else if (action == "up") {
+        result = gimbal_precheck_->nudge(
+            session_id, sequence, gimbal::NudgeDirection::Up, now_ms);
+    } else if (action == "down") {
+        result = gimbal_precheck_->nudge(
+            session_id, sequence, gimbal::NudgeDirection::Down, now_ms);
+    } else if (action == "left") {
+        result = gimbal_precheck_->nudge(
+            session_id, sequence, gimbal::NudgeDirection::Left, now_ms);
+    } else if (action == "right") {
+        result = gimbal_precheck_->nudge(
+            session_id, sequence, gimbal::NudgeDirection::Right, now_ms);
+    } else if (action == "center") {
+        result = gimbal_precheck_->center(session_id, sequence, now_ms);
+    } else if (action == "stop") {
+        result = gimbal_precheck_->stopMotion(session_id, sequence, now_ms);
+    } else if (action == "realign") {
+        result = gimbal_precheck_->realign(session_id, sequence, now_ms);
+    } else {
+        return {{"accepted", false}, {"error", "unknown_gimbal_action"}};
+    }
+
+    const auto after = gimbal_precheck_->snapshot();
+    if (!result.success) {
+        return {{"accepted", false},
+                {"error", result.error.empty() ? "gimbal_command_failed" : result.error},
+                {"state", gimbal::precheckStateName(after.state)},
+                {"manual_lease", after.manual_lease},
+                {"sequence", sequence}};
+    }
+    return {{"accepted", true},
+            {"phase", session::phase_name(phase)},
+            {"state", gimbal::precheckStateName(after.state)},
+            {"manual_lease", after.manual_lease},
+            {"detail", after.detail},
+            {"sequence", sequence}};
+}
+
 std::string DemoHttpServer::previewFrameResponse() const {
     const bool formal_session = sessions_.active();
     const auto preview = formal_session ? preview_frames_.read() : demo_runtime_.previewFrames().read();
@@ -603,31 +1101,11 @@ std::string DemoHttpServer::previewFrameResponse() const {
         return httpResponse(503, json{{"error", "preview frame unavailable"}}.dump());
     }
 #ifdef EDGEFOCUS_WITH_OPENCV
-    const auto& frame = preview->frame;
-    cv::Mat image;
-    if (frame.channels == 1 && frame.format == PixelFormat::GRAY8) {
-        cv::Mat gray(frame.height, frame.width, CV_8UC1,
-                     const_cast<std::uint8_t*>(frame.data.data()));
-        cv::cvtColor(gray, image, cv::COLOR_GRAY2BGR);
-    } else if (frame.channels == 3) {
-        cv::Mat packed(frame.height, frame.width, CV_8UC3,
-                       const_cast<std::uint8_t*>(frame.data.data()));
-        if (frame.format == PixelFormat::RGB24) {
-            cv::cvtColor(packed, image, cv::COLOR_RGB2BGR);
-        } else {
-            image = packed.clone();
-        }
-    } else {
-        return httpResponse(503, json{{"error", "unsupported preview format"}}.dump());
+    if (!preview->frame) {
+        return httpResponse(503, json{{"error", "preview frame unavailable"}}.dump());
     }
-    const auto runtime = formal_session ? snapshots_.read() : demo_runtime_.snapshot();
-    const std::string overlay = std::string(formal_session ? "LIVE CAMERA  |  NPU "
-                                                            : "RECORDED INPUT  |  NPU ") +
-                                std::to_string(runtime.visual.inference_fps).substr(0, 3) + " FPS";
-    cv::putText(image, overlay, {18, 30}, cv::FONT_HERSHEY_SIMPLEX, 0.62,
-                cv::Scalar(73, 214, 255), 2, cv::LINE_AA);
     std::vector<std::uint8_t> jpeg;
-    if (!cv::imencode(".jpg", image, jpeg, {cv::IMWRITE_JPEG_QUALITY, 82})) {
+    if (!encodePreviewJpeg(*preview->frame, 82, jpeg)) {
         return httpResponse(503, json{{"error", "jpeg encoding failed"}}.dump());
     }
     return httpResponse(200,

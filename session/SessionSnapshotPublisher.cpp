@@ -14,6 +14,13 @@ SessionSnapshot SessionSnapshotPublisher::read() const {
     return snapshot_;
 }
 
+SessionSnapshot SessionSnapshotPublisher::read(std::int64_t now_ms) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto projected = snapshot_;
+    projectTimingLocked(projected, now_ms);
+    return projected;
+}
+
 void SessionSnapshotPublisher::mutate(
     std::int64_t now_ms,
     const std::function<void(SessionSnapshot&)>& change) {
@@ -25,13 +32,18 @@ void SessionSnapshotPublisher::mutate(
 }
 
 void SessionSnapshotPublisher::updateTimingLocked(std::int64_t now_ms) {
+    projectTimingLocked(snapshot_, now_ms);
+}
+
+void SessionSnapshotPublisher::projectTimingLocked(
+    SessionSnapshot& snapshot, std::int64_t now_ms) const {
     std::int64_t elapsed = accumulated_focus_ms_;
-    if (snapshot_.phase == Phase::Focusing && focusing_started_ms_ > 0) {
+    if (snapshot.phase == Phase::Focusing && focusing_started_ms_ > 0) {
         elapsed += std::max<std::int64_t>(0, now_ms - focusing_started_ms_);
     }
-    snapshot_.elapsed_ms = std::max<std::int64_t>(0, elapsed);
-    snapshot_.remaining_ms = std::max<std::int64_t>(
-        0, snapshot_.context.target_duration_ms - snapshot_.elapsed_ms);
+    snapshot.elapsed_ms = std::max<std::int64_t>(0, elapsed);
+    snapshot.remaining_ms = std::max<std::int64_t>(
+        0, snapshot.context.target_duration_ms - snapshot.elapsed_ms);
 }
 
 void SessionSnapshotPublisher::begin(

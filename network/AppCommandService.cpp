@@ -973,7 +973,8 @@ std::string AppCommandService::handleGetCurrentState(int req_id) {
     data["reminder"] = reminderData(snap);
     data["precheck_guidance"] = precheckGuidanceData(snap);
     if (session_snapshots_) {
-        data["runtime_snapshot"] = stableSessionSnapshotData(session_snapshots_->read());
+        data["runtime_snapshot"] = stableSessionSnapshotData(
+            session_snapshots_->read(monotonicMs()));
     }
     if (event_outbox_) {
         data["event_delivery"] = event_outbox_->snapshot(monotonicMs());
@@ -1123,7 +1124,8 @@ std::string AppCommandService::handleSessionControlV2(const json& data, int req_
         response["success"] = result.success;
         response["already_active"] = result.already_active;
         if (session_snapshots_) {
-            response["runtime_snapshot"] = stableSessionSnapshotData(session_snapshots_->read());
+            response["runtime_snapshot"] = stableSessionSnapshotData(
+                session_snapshots_->read(monotonicMs()));
         }
         if (!result.error.empty()) response["message"] = result.error;
         return makeResponse(req_id, response);
@@ -1135,7 +1137,7 @@ std::string AppCommandService::handleSessionControlV2(const json& data, int req_
         }
         const std::string expected_session_id = data["session_id"].get<std::string>();
         const auto runtime = session_snapshots_
-                                 ? session_snapshots_->read()
+                                 ? session_snapshots_->read(monotonicMs())
                                  : session::SessionSnapshot{};
         const std::string active_session_id = session_snapshots_
                                                   ? runtime.context.session_id
@@ -1160,7 +1162,7 @@ std::string AppCommandService::handleSessionControlV2(const json& data, int req_
         result = session_orchestrator_->resume();
     } else if (action == "end") {
         const auto runtime_before = session_snapshots_
-                                        ? session_snapshots_->read()
+                                        ? session_snapshots_->read(monotonicMs())
                                         : session::SessionSnapshot{};
         const bool was_formal = session_snapshots_ ? runtime_before.formal_active
                                                    : before.session.active;
@@ -1185,7 +1187,8 @@ std::string AppCommandService::handleSessionControlV2(const json& data, int req_
                                    {"report_available", false}};
         response["success"] = result.success;
         if (session_snapshots_) {
-            response["runtime_snapshot"] = stableSessionSnapshotData(session_snapshots_->read());
+            response["runtime_snapshot"] = stableSessionSnapshotData(
+                session_snapshots_->read(monotonicMs()));
         }
         if (!result.error.empty()) response["message"] = result.error;
         return makeResponse(req_id, response);
@@ -1198,7 +1201,8 @@ std::string AppCommandService::handleSessionControlV2(const json& data, int req_
     json response = sessionStateData(after, gimbal_available);
     response["success"] = result.success;
     if (session_snapshots_) {
-        response["runtime_snapshot"] = stableSessionSnapshotData(session_snapshots_->read());
+        response["runtime_snapshot"] = stableSessionSnapshotData(
+            session_snapshots_->read(monotonicMs()));
     }
     if (!result.error.empty()) response["message"] = result.error;
     if (result.success) {
@@ -1365,7 +1369,7 @@ std::string AppCommandService::handlePhoneSync(const json& data, int req_id) {
 
     if (phone_facts_) {
         const auto runtime = session_snapshots_
-                                 ? session_snapshots_->read()
+                                 ? session_snapshots_->read(monotonicMs())
                                  : session::SessionSnapshot{};
         if (session_snapshots_ && runtime.runtime_active && !runtime.formal_active) {
             return makeResponse(req_id, {

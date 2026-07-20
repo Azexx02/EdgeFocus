@@ -71,6 +71,10 @@ public:
     CommandResult moveToVerified(double yaw_deg, double pitch_deg,
                                  int timeout_ms = 8000,
                                  double tolerance_deg = 1.5) override;
+    CommandResult moveToManualVerified(double yaw_deg, double pitch_deg,
+                                       int timeout_ms = 8000,
+                                       double tolerance_deg = 1.5) override;
+    CommandResult rebaseAlignmentAtCurrent(int timeout_ms = 1000) override;
     CommandResult trackTo(double yaw_deg, double pitch_deg, int timeout_ms = 500) override;
     CommandResult hold(int timeout_ms = 1000) override;
     CommandResult refreshAngle(int timeout_ms = 500) override;
@@ -85,6 +89,11 @@ private:
     CommandResult runDiagnosticsLocked(int timeout_ms_per_command,
                                        bool continue_after_failure,
                                        bool enforce_fault_pin);
+    CommandResult moveToInternal(double yaw_deg, double pitch_deg, int timeout_ms,
+                                 bool enforce_limits);
+    CommandResult moveToVerifiedInternal(double yaw_deg, double pitch_deg,
+                                         int timeout_ms, double tolerance_deg,
+                                         bool enforce_limits);
     void dispatchBytes(const std::string& bytes, const Matcher& matcher, Event* matched,
                        bool& matched_result, Event* device_error,
                        std::vector<std::string>* transcript);

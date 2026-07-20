@@ -262,7 +262,8 @@ int main(int argc, char* argv[]) {
     if (demo_http_port > 0) {
         ctx.addModule(std::move(demo_runtime_ptr));
         ctx.addModule(std::make_unique<DemoHttpServer>(store, sqlite_store, device_mgr,
-                                                       nullptr, session_orchestrator,
+                                                       nullptr, gimbal_precheck,
+                                                       session_orchestrator,
                                                        session_snapshots, phone_facts,
                                                        preview_frames, demo_runtime,
                                                        demo_http_port));

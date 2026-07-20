@@ -8,13 +8,17 @@
 
 #include <atomic>
 #include <cctype>
+#include <condition_variable>
 #include <exception>
 #include <limits>
+#include <memory>
+#include <mutex>
 #include <nlohmann/json.hpp>
 #include <sstream>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <vector>
 
 namespace edgefocus {
 
@@ -24,6 +28,9 @@ class BoardDemoRuntime;
 namespace session {
 class SessionOrchestrator;
 class SessionSnapshotPublisher;
+}
+namespace gimbal {
+class GimbalPrecheckController;
 }
 
 namespace demo_http {
@@ -150,6 +157,7 @@ class DemoHttpServer : public Module {
 public:
     DemoHttpServer(SystemStateStore& store, SQLiteStore& sqlite_store,
                    DeviceManager& device_mgr, GimbalMonitor* gimbal_monitor,
+                   gimbal::GimbalPrecheckController* gimbal_precheck,
                    session::SessionOrchestrator& sessions,
                    session::SessionSnapshotPublisher& snapshots,
                    PhoneFactBuffer& phone_facts,
@@ -163,6 +171,32 @@ public:
 
 private:
     using json = nlohmann::json;
+
+    struct PreviewSourceSelection {
+        const PreviewFrameStore* store{};
+        std::string key;
+    };
+
+    struct EncodedPreviewFrame {
+        std::string source_key;
+        std::uint64_t sequence{};
+        std::int64_t timestamp_ms{};
+        std::int64_t media_timestamp_ms{};
+        int width{};
+        int height{};
+        double stream_fps{};
+        std::vector<std::uint8_t> jpeg;
+    };
+
+    struct StreamClientState {
+        std::atomic<int> fd{-1};
+        std::atomic<bool> done{false};
+    };
+
+    struct StreamClient {
+        std::shared_ptr<StreamClientState> state;
+        std::thread worker;
+    };
 
     void serveLoop();
     std::string handleRequest(const std::string& method, const std::string& path,
@@ -179,6 +213,13 @@ private:
     json handleRuntimeSession(const json& data);
     json handleDemoMode(const json& data);
     json handleRuntimePhone(const json& data);
+    json handleRuntimeGimbal(const json& data);
+    PreviewSourceSelection previewSourceSelection() const;
+    void previewEncoderLoop();
+    bool startPreviewStreamClient(int client_fd);
+    void previewStreamClientLoop(const std::shared_ptr<StreamClientState>& state);
+    void reapFinishedStreamClients();
+    void stopStreamClients();
     std::string previewFrameResponse() const;
     std::string recordedVideoResponse() const;
     std::string replayTraceResponse() const;
@@ -187,6 +228,7 @@ private:
     SQLiteStore& sqlite_store_;
     DeviceManager& device_mgr_;
     GimbalMonitor* gimbal_monitor_;
+    gimbal::GimbalPrecheckController* gimbal_precheck_;
     session::SessionOrchestrator& sessions_;
     session::SessionSnapshotPublisher& snapshots_;
     PhoneFactBuffer& phone_facts_;
@@ -196,6 +238,12 @@ private:
     int port_ = 0;
     std::atomic<bool> running_{false};
     std::thread server_thread_;
+    std::thread preview_encoder_thread_;
+    mutable std::mutex encoded_preview_mutex_;
+    std::condition_variable encoded_preview_changed_;
+    std::shared_ptr<const EncodedPreviewFrame> encoded_preview_;
+    std::mutex stream_clients_mutex_;
+    std::vector<StreamClient> stream_clients_;
 };
 
 } // namespace edgefocus

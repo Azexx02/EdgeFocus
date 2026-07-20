@@ -10,9 +10,12 @@ if(MSVC)
 endif()
 
 option(EDGEFOCUS_WITH_OPENCV "Build camera capture and CPU/STAI preprocessing with OpenCV" OFF)
+option(EDGEFOCUS_OPENCV_USE_PKGCONFIG
+    "Resolve OpenCV through pkg-config (workaround for incomplete vendor CMake exports)" OFF)
 option(EDGEFOCUS_WITH_STAI_MPU "Build STAI_MPU pose model adapter" OFF)
 option(EDGEFOCUS_WITH_DEMO_HTTP "Build optional HTTP demo console" OFF)
 option(EDGEFOCUS_WITH_FAN_BRIDGE "Build the standalone A35-to-M33 fan bridge" ON)
+option(EDGEFOCUS_BUILD_TESTS "Build EdgeFocus test executables" ON)
 
 add_library(edgefocus_power_core STATIC
     platform/power/Stusb4500Status.cpp
@@ -213,10 +216,22 @@ if(EDGEFOCUS_WITH_DEMO_HTTP)
 endif()
 
 if(EDGEFOCUS_WITH_OPENCV)
-    find_package(OpenCV REQUIRED COMPONENTS core imgproc videoio imgcodecs)
     target_compile_definitions(focus_app PRIVATE EDGEFOCUS_WITH_OPENCV)
-    target_include_directories(focus_app PRIVATE ${OpenCV_INCLUDE_DIRS})
-    target_link_libraries(focus_app PRIVATE ${OpenCV_LIBS})
+    if(EDGEFOCUS_OPENCV_USE_PKGCONFIG)
+        find_package(PkgConfig REQUIRED)
+        pkg_check_modules(OpenCV REQUIRED opencv4)
+        target_include_directories(focus_app PRIVATE ${OpenCV_INCLUDE_DIRS})
+        target_link_directories(focus_app PRIVATE ${OpenCV_LIBRARY_DIRS})
+        target_link_libraries(focus_app PRIVATE
+            opencv_core
+            opencv_imgproc
+            opencv_videoio
+            opencv_imgcodecs)
+    else()
+        find_package(OpenCV REQUIRED COMPONENTS core imgproc videoio imgcodecs)
+        target_include_directories(focus_app PRIVATE ${OpenCV_INCLUDE_DIRS})
+        target_link_libraries(focus_app PRIVATE ${OpenCV_LIBS})
+    endif()
 endif()
 
 if(EDGEFOCUS_WITH_STAI_MPU)
@@ -280,5 +295,7 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/assets/demo)
 endif()
 
 # --- Tests ---
-enable_testing()
-add_subdirectory(tests)
+if(EDGEFOCUS_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()

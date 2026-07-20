@@ -166,17 +166,41 @@ std::optional<std::pair<double, double>> visualTargetPoint(
     double keypoint_threshold) {
     const auto visible = [&](std::size_t index) {
         return index < visual.keypoints.size() &&
-               visual.keypoints[index].confidence >= keypoint_threshold;
+               visual.keypoints[index].confidence >= keypoint_threshold &&
+               std::isfinite(visual.keypoints[index].x) &&
+               std::isfinite(visual.keypoints[index].y) &&
+               visual.keypoints[index].x >= 0.0 &&
+               visual.keypoints[index].x <= 1.0 &&
+               visual.keypoints[index].y >= 0.0 &&
+               visual.keypoints[index].y <= 1.0;
     };
-    if (visible(5) && visible(6)) {
+
+    const bool nose = visible(0);
+    const bool left_eye = visible(1);
+    const bool right_eye = visible(2);
+    if (nose && left_eye && right_eye) {
         return std::make_pair(
-            (visual.keypoints[5].x + visual.keypoints[6].x) * 0.5,
-            (visual.keypoints[5].y + visual.keypoints[6].y) * 0.5);
+            visual.keypoints[0].x * 0.50 + visual.keypoints[1].x * 0.25 +
+                visual.keypoints[2].x * 0.25,
+            visual.keypoints[0].y * 0.50 + visual.keypoints[1].y * 0.25 +
+                visual.keypoints[2].y * 0.25);
     }
+    if (!nose && left_eye && right_eye) {
+        return std::make_pair(
+            (visual.keypoints[1].x + visual.keypoints[2].x) * 0.5,
+            (visual.keypoints[1].y + visual.keypoints[2].y) * 0.5);
+    }
+    if (nose && (left_eye != right_eye)) {
+        const auto& eye = visual.keypoints[left_eye ? 1 : 2];
+        return std::make_pair(
+            (visual.keypoints[0].x + eye.x) * 0.5,
+            (visual.keypoints[0].y + eye.y) * 0.5);
+    }
+
     double x = 0.0;
     double y = 0.0;
     std::size_t count = 0;
-    for (std::size_t index = 0; index <= 6; ++index) {
+    for (std::size_t index = 0; index <= 4; ++index) {
         if (!visible(index)) continue;
         x += visual.keypoints[index].x;
         y += visual.keypoints[index].y;
@@ -189,9 +213,21 @@ std::optional<std::pair<double, double>> visualTargetPoint(
         return std::nullopt;
     }
     const auto& box = *visual.subject_box;
-    if (box.x2 <= box.x1 || box.y2 <= box.y1) return std::nullopt;
-    return std::make_pair((box.x1 + box.x2) * 0.5,
-                          box.y1 + 0.30 * (box.y2 - box.y1));
+    if (!std::isfinite(box.x1) || !std::isfinite(box.y1) ||
+        !std::isfinite(box.x2) || !std::isfinite(box.y2) ||
+        box.x2 <= box.x1 || box.y2 <= box.y1) {
+        return std::nullopt;
+    }
+    const double x1 = std::clamp(box.x1, 0.0, 1.0);
+    const double y1 = std::clamp(box.y1, 0.0, 1.0);
+    const double x2 = std::clamp(box.x2, 0.0, 1.0);
+    const double y2 = std::clamp(box.y2, 0.0, 1.0);
+    if (x2 <= x1 || y2 <= y1) return std::nullopt;
+    const double target_x = (x1 + x2) * 0.5;
+    const double target_y = y1 + 0.25 * (y2 - y1);
+    if (!std::isfinite(target_x) || !std::isfinite(target_y)) return std::nullopt;
+    return std::make_pair(std::clamp(target_x, 0.0, 1.0),
+                          std::clamp(target_y, 0.0, 1.0));
 }
 
 }  // namespace edgefocus::gimbal

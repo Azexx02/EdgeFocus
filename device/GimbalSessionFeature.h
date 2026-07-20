@@ -45,6 +45,7 @@ private:
     std::thread worker_;
     std::atomic<bool> running_{false};
     std::atomic<session::Phase> phase_{session::Phase::Idle};
+    std::atomic<std::int64_t> tracking_accept_after_ms_{0};
     mutable std::mutex health_mutex_;
     session::FeatureHealth health_;
 };
