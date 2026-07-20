@@ -12,6 +12,7 @@ import hashlib
 import os
 from pathlib import Path
 import shlex
+import shutil
 import subprocess
 import tempfile
 import time
@@ -89,6 +90,10 @@ def main() -> int:
     parser.add_argument("--board", default="root@192.168.10.174")
     parser.add_argument("--demo-port", type=int, default=18080)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--build-only-output",
+        help="cross-build and copy the release bundle here without touching the board",
+    )
     args = parser.parse_args()
 
     release = time.strftime("%Y%m%d-%H%M%S")
@@ -133,6 +138,13 @@ def main() -> int:
             dry_run=args.dry_run)
         if not args.dry_run:
             print("bundle sha256:", sha256(bundle))
+        if args.build_only_output:
+            output = Path(args.build_only_output).expanduser().resolve()
+            if not args.dry_run:
+                output.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(bundle, output)
+                print("build-only bundle:", output)
+            return 0
         run(["scp", str(bundle), f"{args.board}:{board_archive}"], dry_run=args.dry_run)
 
         deploy_command = (
