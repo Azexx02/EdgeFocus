@@ -4,6 +4,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "gimbal_nv.h"
+
 /* 逻辑云台轴。物理接口映射集中在 motor_pwm.c 中维护。 */
 typedef enum {
   GIMBAL_AXIS_P = 0,
@@ -50,6 +52,10 @@ typedef struct {
 
 void motor_pwm_init(void);
 bool motor_pwm_prepare_continuous_axes(void);
+bool motor_pwm_apply_electrical_calibration(
+    gimbal_axis_t axis, const GimbalAxisElectricalCalibration *calibration);
+bool motor_pwm_get_electrical_calibration(
+    gimbal_axis_t axis, GimbalAxisElectricalCalibration *calibration);
 bool motor_pwm_set_enabled(bool enabled);
 bool motor_pwm_is_enabled(void);
 

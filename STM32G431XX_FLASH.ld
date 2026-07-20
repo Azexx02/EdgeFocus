@@ -56,8 +56,8 @@ ENTRY(Reset_Handler)
 MEMORY
 {
 RAM (xrw)      : ORIGIN = 0x20000000, LENGTH = 32K
-/* Reserve the final 2 KB page (0x0801F800) for gimbal calibration. */
-FLASH (rx)      : ORIGIN = 0x8000000, LENGTH = 126K
+/* Reserve 0x0801F000 and 0x0801F800 as independent 2 KB NVM A/B slots. */
+FLASH (rx)      : ORIGIN = 0x8000000, LENGTH = 124K
 }
 
 /* Highest address of the user mode stack */

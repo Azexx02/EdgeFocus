@@ -873,6 +873,46 @@ void motor_pwm_init(void)
   initialize_continuous_axis(GIMBAL_AXIS_Y);
 }
 
+bool motor_pwm_apply_electrical_calibration(
+    gimbal_axis_t axis, const GimbalAxisElectricalCalibration *calibration)
+{
+  if (axis > GIMBAL_AXIS_Y || calibration == NULL ||
+      (calibration->raw_direction != 1 && calibration->raw_direction != -1) ||
+      (calibration->torque_polarity != 1 &&
+       calibration->torque_polarity != -1) ||
+      calibration->pole_pairs == 0U || calibration->pole_pairs > 32U ||
+      calibration->electrical_offset_raw >= 4096U) {
+    return false;
+  }
+  hold_forward_raw_sign[axis] = calibration->raw_direction;
+  hold_torque_polarity[axis] = calibration->torque_polarity;
+  hold_pole_pairs[axis] = calibration->pole_pairs;
+  hold_electric_offset[axis] = foc_wrap_angle(
+      (float)calibration->electrical_offset_raw *
+      (FOC_TWO_PI / 4096.0f));
+  hold_commutation[axis] = (uint8_t)(
+      ((uint32_t)calibration->electrical_offset_raw * SINE_STEPS + 2048U) /
+      4096U) % SINE_STEPS;
+  hold_commutation_ready[axis] = true;
+  return true;
+}
+
+bool motor_pwm_get_electrical_calibration(
+    gimbal_axis_t axis, GimbalAxisElectricalCalibration *calibration)
+{
+  if (axis > GIMBAL_AXIS_Y || calibration == NULL ||
+      !hold_commutation_ready[axis]) {
+    return false;
+  }
+  calibration->raw_direction = hold_forward_raw_sign[axis];
+  calibration->torque_polarity = hold_torque_polarity[axis];
+  calibration->pole_pairs = hold_pole_pairs[axis];
+  calibration->electrical_offset_raw = (uint16_t)(
+      (uint32_t)lroundf(foc_wrap_angle(hold_electric_offset[axis]) *
+                        (4096.0f / FOC_TWO_PI))) & 0x0FFFU;
+  return true;
+}
+
 bool motor_pwm_prepare_continuous_axes(void)
 {
   bool ok = true;

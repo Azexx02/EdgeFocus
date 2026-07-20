@@ -10,6 +10,12 @@
 
 static bool enable_input_was_high;
 static bool uart_armed;
+GimbalNvStorage app_gimbal_nv_storage;
+
+GimbalNvStoreResult app_gimbal_nv_commit(const GimbalNvRecordV3 *record)
+{
+  return gimbal_nv_storage_commit(&app_gimbal_nv_storage, record);
+}
 
 static void send_reset_cause(void)
 {
@@ -72,9 +78,36 @@ void app_gimbal_init(void)
   board_config_init();
   soft_i2c_init();
   motor_pwm_init();
+  gimbal_nv_storage_init(&app_gimbal_nv_storage);
+  if (app_gimbal_nv_storage.has_valid_record) {
+    const GimbalNvRecordV3 *record = &app_gimbal_nv_storage.record;
+    if ((record->valid_flags & GIMBAL_NV_VALID_ELECTRICAL) != 0U) {
+      (void)motor_pwm_apply_electrical_calibration(
+          GIMBAL_AXIS_P, &record->axis[GIMBAL_AXIS_P]);
+      (void)motor_pwm_apply_electrical_calibration(
+          GIMBAL_AXIS_Y, &record->axis[GIMBAL_AXIS_Y]);
+    }
+    if ((record->valid_flags & GIMBAL_NV_VALID_ORIGIN) != 0U) {
+      (void)motor_pwm_set_home(GIMBAL_AXIS_P,
+                              record->origin_raw[GIMBAL_AXIS_P]);
+      (void)motor_pwm_set_home(GIMBAL_AXIS_Y,
+                              record->origin_raw[GIMBAL_AXIS_Y]);
+    }
+  }
   current_sample_init();
   uart_protocol_init();
   send_reset_cause();
+  {
+    char response[120];
+    snprintf(response, sizeof(response),
+             "BOOT,NVM=V3,VALID=%u,SLOT=%d,GEN=%lu,FLAGS=%lu,MAINT=%u\r\n",
+             app_gimbal_nv_storage.has_valid_record ? 1U : 0U,
+             (int)app_gimbal_nv_storage.active_slot,
+             (unsigned long)app_gimbal_nv_storage.record.generation,
+             (unsigned long)app_gimbal_nv_storage.record.valid_flags,
+             app_gimbal_nv_storage.maintenance_required ? 1U : 0U);
+    uart_protocol_send(response);
+  }
   enable_input_was_high = board_get_enable_input();
   uart_armed = false;
 
