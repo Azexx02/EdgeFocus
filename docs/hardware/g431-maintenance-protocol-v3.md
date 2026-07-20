@@ -54,7 +54,7 @@ gimbal_bringup protect-current-set \
 
 ### 3.1 维护 yaw 小角度验证与脱粘诊断
 
-新固件通过 `MAINT_ASSIST_DIAG` 能力声明只读诊断 `MAINTASSIST?`。该辅助仅作用于维护模式 yaw：目标斜坡完成、误差大于 8 raw、速度在 ±1 raw、连续停滞至少 150 ms 时，一次性把既有请求下限每个控制周期提高 2 tick，最高 180，最长 300 ms；生产模式和 pitch 不变。
+新固件通过 `MAINT_ASSIST_DIAG` 能力声明只读诊断 `MAINTASSIST?`。该辅助仅作用于维护模式 yaw：目标斜坡完成、误差大于 8 raw、速度在 ±1 raw、连续停滞至少 150 ms 时，一次性把既有请求下限每个控制周期提高 2 tick，最高 180，最长 300 ms。速度离开停滞带必须连续 50 ms 才确认恢复，单个编码器速度毛刺不会提前撤销；生产模式和 pitch 不变。
 
 上板必须分级执行，每一步都确认 STOP、Fault 未触发和诊断边界后才继续：
 
