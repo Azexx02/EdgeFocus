@@ -50,14 +50,32 @@ typedef struct {
   uint32_t watchdog_trips;
 } gimbal_foc_status_t;
 
+#define MOTOR_PWM_CAL_AXIS_P 0x01U
+#define MOTOR_PWM_CAL_AXIS_Y 0x02U
+#define MOTOR_PWM_CAL_AXIS_ALL (MOTOR_PWM_CAL_AXIS_P | MOTOR_PWM_CAL_AXIS_Y)
+
+typedef enum {
+  MOTOR_PWM_CAL_IDLE = 0,
+  MOTOR_PWM_CAL_RUNNING,
+  MOTOR_PWM_CAL_SUCCEEDED,
+  MOTOR_PWM_CAL_FAILED,
+  MOTOR_PWM_CAL_ABORTED
+} motor_pwm_calibration_status_t;
+
 void motor_pwm_init(void);
 bool motor_pwm_prepare_continuous_axes(void);
 bool motor_pwm_apply_electrical_calibration(
     gimbal_axis_t axis, const GimbalAxisElectricalCalibration *calibration);
 bool motor_pwm_get_electrical_calibration(
     gimbal_axis_t axis, GimbalAxisElectricalCalibration *calibration);
+bool motor_pwm_calibration_begin(uint8_t axis_mask);
+void motor_pwm_calibration_process(void);
+void motor_pwm_calibration_abort(void);
+motor_pwm_calibration_status_t motor_pwm_calibration_status(void);
+uint8_t motor_pwm_calibration_progress(void);
 bool motor_pwm_set_enabled(bool enabled);
 bool motor_pwm_is_enabled(void);
+void motor_pwm_set_maintenance_mode(bool enabled);
 
 /* FOC 小角度往返测试，结束或故障后自动关闭输出。 */
 bool motor_pwm_test(gimbal_axis_t axis);
@@ -98,6 +116,11 @@ bool motor_pwm_hold_set_target(gimbal_axis_t axis, uint16_t target_deg);
 bool motor_pwm_hold_set_target_tenths(gimbal_axis_t axis,
                                       uint16_t target_tenths);
 uint16_t motor_pwm_hold_get_target(gimbal_axis_t axis);
+bool motor_pwm_get_angle_tenths(gimbal_axis_t axis, uint16_t *angle_tenths);
+bool motor_pwm_get_target_tenths(gimbal_axis_t axis,
+                                 uint16_t *target_tenths);
+bool motor_pwm_axis_settled(gimbal_axis_t axis);
+bool motor_pwm_all_settled(void);
 void motor_pwm_hold_process(void);
 void motor_pwm_hold_watchdog(void);
 void motor_pwm_get_foc_status(gimbal_foc_status_t *status);

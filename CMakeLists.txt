@@ -50,10 +50,12 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/soft_i2c.c
     Core/Src/motor_pwm.c
     Core/Src/current_sample.c
-    Core/Src/uart_protocol.c
+    Core/Src/uart_protocol_v3.c
     Core/Src/gimbal_angle.c
     Core/Src/gimbal_nv.c
     Core/Src/gimbal_nv_stm32.c
+    Core/Src/gimbal_protocol.c
+    Core/Src/gimbal_rx.c
 )
 
 # Add include paths

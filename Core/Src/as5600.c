@@ -16,7 +16,7 @@ uint16_t as5600_x_read_raw(void)
   /* 逻辑 X 轴编码器：硬件 I2C1。 */
   uint8_t data[2];
   if (HAL_I2C_Mem_Read(&hi2c1, AS5600_ADDRESS << 1U, AS5600_RAW_ANGLE,
-                       I2C_MEMADD_SIZE_8BIT, data, sizeof(data), 20U) != HAL_OK) {
+                       I2C_MEMADD_SIZE_8BIT, data, sizeof(data), 2U) != HAL_OK) {
     return AS5600_READ_ERROR;
   }
   return decode_angle(data);

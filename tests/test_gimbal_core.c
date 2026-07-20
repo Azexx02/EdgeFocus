@@ -1,5 +1,7 @@
 #include "gimbal_angle.h"
 #include "gimbal_nv.h"
+#include "gimbal_protocol.h"
+#include "gimbal_rx.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -182,10 +184,112 @@ static void test_atomic_store_and_tombstones(void) {
     assert(desired.calibration_epoch == active.calibration_epoch + 1U);
 }
 
+static GimbalProtocolCommand parse_ok(const char *line) {
+    GimbalProtocolCommand command;
+    assert(gimbal_protocol_parse(line, strlen(line), &command) ==
+           GIMBAL_PARSE_OK);
+    return command;
+}
+
+static void test_protocol_parser_and_state_matrix(void) {
+    GimbalProtocolCommand command = parse_ok("HELLO HOST PROTO=3.0");
+    assert(command.type == GIMBAL_CMD_HELLO);
+    command = parse_ok("TRACK YP 3599 0");
+    assert(command.type == GIMBAL_CMD_TRACK_YP);
+    assert(command.argument.track.yaw10 == 3599U);
+    assert(command.argument.track.pitch10 == 0U);
+    command = parse_ok("CAL ELECTRICAL ALL");
+    assert(command.argument.calibration.axis == GIMBAL_PROTOCOL_AXIS_ALL);
+    command = parse_ok("PROTECT CURRENT SET P_PEAK=900 P_AVG=500 Y_PEAK=850 Y_AVG=450 STALL_MS=250");
+    assert(command.argument.protection.p_peak == 900U);
+    assert(command.argument.protection.stall_ms == 250U);
+
+    assert(gimbal_protocol_parse("track YP 0 0", 12U, &command) ==
+           GIMBAL_PARSE_UNKNOWN_COMMAND);
+    assert(gimbal_protocol_parse("TRACK YP 3600 0", 15U, &command) ==
+           GIMBAL_PARSE_BAD_RANGE);
+    assert(gimbal_protocol_parse("TRACK YP 1 2 ", 13U, &command) ==
+           GIMBAL_PARSE_BAD_FORMAT);
+    assert(gimbal_protocol_parse("HELLO HOST PROTO=2.0", 20U, &command) ==
+           GIMBAL_PARSE_UNKNOWN_COMMAND);
+    {
+        const char invalid_protection[] =
+            "PROTECT CURRENT SET P_PEAK=500 P_AVG=500 Y_PEAK=850 Y_AVG=450 STALL_MS=250";
+        assert(gimbal_protocol_parse(invalid_protection,
+                                     strlen(invalid_protection), &command) ==
+               GIMBAL_PARSE_BAD_RANGE);
+    }
+
+    assert(gimbal_protocol_command_allowed(GIMBAL_STATE_DISABLED,
+                                           GIMBAL_CMD_ARM));
+    assert(!gimbal_protocol_command_allowed(GIMBAL_STATE_READY,
+                                            GIMBAL_CMD_ARM));
+    assert(gimbal_protocol_command_allowed(GIMBAL_STATE_READY,
+                                           GIMBAL_CMD_HOLD_NOW));
+    assert(!gimbal_protocol_command_allowed(GIMBAL_STATE_READY,
+                                            GIMBAL_CMD_TRACK_YP));
+    assert(gimbal_protocol_command_allowed(GIMBAL_STATE_MOVING,
+                                           GIMBAL_CMD_TRACK_YP));
+    assert(gimbal_protocol_command_allowed(GIMBAL_STATE_FAULT,
+                                           GIMBAL_CMD_FAULT_CLEAR));
+    assert(!gimbal_protocol_command_allowed(GIMBAL_STATE_FAULT,
+                                            GIMBAL_CMD_ORIGIN_CAPTURE));
+}
+
+static void test_rx_fragmentation_sticky_lines_and_emergency(void) {
+    GimbalRxFramer framer;
+    const char *line = NULL;
+    size_t length = 0U;
+    GimbalRxEvent event = GIMBAL_RX_NONE;
+    const char fragmented[] = "HELLO HOST PROTO=3.0\r";
+    size_t index;
+    gimbal_rx_init(&framer);
+    for (index = 0U; index < sizeof(fragmented) - 1U; ++index) {
+        event = gimbal_rx_feed(&framer, (uint8_t)fragmented[index],
+                               &line, &length);
+    }
+    assert(event == GIMBAL_RX_LINE);
+    assert(length == strlen("HELLO HOST PROTO=3.0"));
+    assert(memcmp(line, "HELLO HOST PROTO=3.0", length) == 0);
+    assert(gimbal_rx_feed(&framer, '\n', &line, &length) == GIMBAL_RX_NONE);
+
+    {
+        const char sticky[] = "PING\r\nVER\n";
+        unsigned line_count = 0U;
+        for (index = 0U; index < sizeof(sticky) - 1U; ++index) {
+            event = gimbal_rx_feed(&framer, (uint8_t)sticky[index],
+                                   &line, &length);
+            if (event == GIMBAL_RX_LINE) ++line_count;
+        }
+        assert(line_count == 2U);
+    }
+
+    {
+        const char partial[] = "TRACK YP 10";
+        for (index = 0U; index < sizeof(partial) - 1U; ++index) {
+            assert(gimbal_rx_feed(&framer, (uint8_t)partial[index],
+                                  &line, &length) == GIMBAL_RX_NONE);
+        }
+        assert(gimbal_rx_feed(&framer, '!', &line, &length) ==
+               GIMBAL_RX_EMERGENCY);
+        assert(gimbal_rx_feed(&framer, '\r', &line, &length) == GIMBAL_RX_NONE);
+    }
+
+    for (index = 0U; index < GIMBAL_PROTOCOL_MAX_LINE; ++index) {
+        assert(gimbal_rx_feed(&framer, 'A', &line, &length) == GIMBAL_RX_NONE);
+    }
+    assert(gimbal_rx_feed(&framer, 'A', &line, &length) ==
+           GIMBAL_RX_BAD_FORMAT);
+    assert(gimbal_rx_feed(&framer, '\r', &line, &length) == GIMBAL_RX_NONE);
+    assert(gimbal_rx_feed(&framer, 'P', &line, &length) == GIMBAL_RX_NONE);
+}
+
 int main(void) {
     test_angles();
     test_encoding_and_selection();
     test_atomic_store_and_tombstones();
+    test_protocol_parser_and_state_matrix();
+    test_rx_fragmentation_sticky_lines_and_emergency();
     puts("gimbal core tests passed");
     return 0;
 }

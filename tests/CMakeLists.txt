@@ -8,7 +8,9 @@ enable_testing()
 
 add_library(gimbal_core STATIC
     ../Core/Src/gimbal_angle.c
-    ../Core/Src/gimbal_nv.c)
+    ../Core/Src/gimbal_nv.c
+    ../Core/Src/gimbal_protocol.c)
+target_sources(gimbal_core PRIVATE ../Core/Src/gimbal_rx.c)
 target_include_directories(gimbal_core PUBLIC ../Core/Inc)
 
 add_executable(test_gimbal_core test_gimbal_core.c)

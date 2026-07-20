@@ -2,12 +2,14 @@
 #include "as5600.h"
 #include "board_config.h"
 #include "current_sample.h"
+#include "gimbal_angle.h"
 #include "gimbal_config.h"
 #include "main.h"
 #include "tim.h"
 #include "uart_protocol.h"
 #include "usart.h"
 #include <math.h>
+#include <string.h>
 
 /* TIM1/TIM8 的自动重装值为 4249，250 对应约 5.9% 占空比。 */
 #define TEST_DUTY_TICKS          250U
@@ -43,6 +45,7 @@ typedef struct {
 } axis_hardware_t;
 
 static bool all_motors_enabled;
+static bool maintenance_mode;
 static uint16_t axis_home_raw[2];
 static bool position_guard_enabled;
 static uint16_t position_guard_min_deg;
@@ -69,9 +72,11 @@ static uint16_t hold_lost_count[2];
 static uint16_t hold_error_raw[2];
 static uint16_t hold_previous_raw[2];
 static uint16_t hold_last_encoder_raw[2];
+static uint32_t hold_last_encoder_tick[2];
 static float hold_control_raw_filtered[2];
 static float hold_speed_filtered[2];
-static float hold_integral_effort[2];
+static float hold_gravity_feedforward[2];
+static float hold_error_integral[2];
 static uint16_t hold_integral_qualify_count[2];
 static uint16_t hold_settle_count[2];
 static bool hold_settled[2];
@@ -84,11 +89,35 @@ static uint16_t hold_startup_cycles;
 static volatile uint32_t hold_cycle_count;
 static volatile uint32_t hold_watchdog_trips;
 static uint32_t next_hold_tick;
+static uint32_t hold_last_process_tick;
 static volatile uint32_t hold_watchdog_deadline;
+
+typedef enum {
+  CAL_STAGE_IDLE = 0,
+  CAL_STAGE_LOCK,
+  CAL_STAGE_SWEEP,
+  CAL_STAGE_SETTLE,
+  CAL_STAGE_PROBE_LOCK,
+  CAL_STAGE_PROBE
+} calibration_stage_t;
+
+static struct {
+  motor_pwm_calibration_status_t status;
+  calibration_stage_t stage;
+  uint8_t axis_mask;
+  gimbal_axis_t axis;
+  uint16_t sweep_step;
+  uint16_t raw_start;
+  uint16_t aligned_raw;
+  uint32_t deadline;
+  GimbalAxisElectricalCalibration backup[2];
+  uint8_t backup_mask;
+} electrical_calibration;
 
 static uint16_t read_encoder_quiet(const axis_hardware_t *hardware);
 static uint16_t read_encoder_live(const axis_hardware_t *hardware);
 static uint16_t axis_current_raw(gimbal_axis_t axis);
+static uint32_t axis_hold_min_duty(gimbal_axis_t axis);
 static bool align_hold_electrical_angle(gimbal_axis_t axis);
 
 static bool emergency_stop_requested(void)
@@ -384,6 +413,7 @@ static uint32_t axis_center_duty(gimbal_axis_t axis, int8_t mechanical_dir)
 
 static uint32_t axis_hold_duty(gimbal_axis_t axis)
 {
+  if (maintenance_mode) return axis_hold_min_duty(axis);
   return axis == GIMBAL_AXIS_X ? GIMBAL_X_HOLD_DUTY_TICKS :
          GIMBAL_Y_HOLD_DUTY_TICKS;
 }
@@ -913,6 +943,249 @@ bool motor_pwm_get_electrical_calibration(
   return true;
 }
 
+static void calibration_restore_backups(void)
+{
+  unsigned axis;
+  for (axis = 0U; axis < 2U; ++axis) {
+    if ((electrical_calibration.backup_mask & (1U << axis)) != 0U) {
+      (void)motor_pwm_apply_electrical_calibration(
+          (gimbal_axis_t)axis, &electrical_calibration.backup[axis]);
+    } else if ((electrical_calibration.axis_mask & (1U << axis)) != 0U) {
+      hold_commutation_ready[axis] = false;
+    }
+  }
+}
+
+static void calibration_outputs_off(void)
+{
+  axis_hardware_t p_hardware = get_axis_hardware(GIMBAL_AXIS_P);
+  axis_hardware_t y_hardware = get_axis_hardware(GIMBAL_AXIS_Y);
+  stop_axis(&p_hardware);
+  stop_axis(&y_hardware);
+  all_motors_enabled = false;
+  board_set_boost(false);
+  restore_idle_dac();
+  active_duty_ticks = TEST_DUTY_TICKS;
+}
+
+static void calibration_finish(motor_pwm_calibration_status_t status)
+{
+  calibration_outputs_off();
+  if (status != MOTOR_PWM_CAL_SUCCEEDED) calibration_restore_backups();
+  electrical_calibration.stage = CAL_STAGE_IDLE;
+  electrical_calibration.status = status;
+}
+
+static bool calibration_start_axis(gimbal_axis_t axis)
+{
+  axis_hardware_t hardware = get_axis_hardware(axis);
+  electrical_calibration.axis = axis;
+  electrical_calibration.sweep_step = 0U;
+  active_duty_ticks = axis_hold_duty(axis);
+  if (axis == GIMBAL_AXIS_P) {
+    board_set_dac_mv(GIMBAL_X_HOLD_DAC_MV, GIMBAL_IDLE_DAC_MV);
+  } else {
+    board_set_dac_mv(GIMBAL_IDLE_DAC_MV, GIMBAL_Y_HOLD_DAC_MV);
+  }
+  board_set_boost(true);
+  if (!start_axis(&hardware)) return false;
+  update_foc_vector(hardware.timer, 0.0f, active_duty_ticks);
+  electrical_calibration.deadline = HAL_GetTick() + 500U;
+  electrical_calibration.stage = CAL_STAGE_LOCK;
+  return true;
+}
+
+bool motor_pwm_calibration_begin(uint8_t axis_mask)
+{
+  unsigned axis;
+  if (electrical_calibration.status == MOTOR_PWM_CAL_RUNNING ||
+      axis_mask == 0U || (axis_mask & ~MOTOR_PWM_CAL_AXIS_ALL) != 0U) {
+    return false;
+  }
+  memset(&electrical_calibration, 0, sizeof(electrical_calibration));
+  electrical_calibration.axis_mask = axis_mask;
+  electrical_calibration.status = MOTOR_PWM_CAL_RUNNING;
+  for (axis = 0U; axis < 2U; ++axis) {
+    if (motor_pwm_get_electrical_calibration(
+            (gimbal_axis_t)axis, &electrical_calibration.backup[axis])) {
+      electrical_calibration.backup_mask |= (uint8_t)(1U << axis);
+    }
+  }
+  motor_pwm_hold_enable(false);
+  (void)motor_pwm_set_enabled(false);
+  if (!calibration_start_axis((axis_mask & MOTOR_PWM_CAL_AXIS_P) != 0U ?
+                              GIMBAL_AXIS_P : GIMBAL_AXIS_Y)) {
+    calibration_finish(MOTOR_PWM_CAL_FAILED);
+    return false;
+  }
+  return true;
+}
+
+void motor_pwm_calibration_abort(void)
+{
+  if (electrical_calibration.status == MOTOR_PWM_CAL_RUNNING) {
+    calibration_finish(MOTOR_PWM_CAL_ABORTED);
+  }
+}
+
+motor_pwm_calibration_status_t motor_pwm_calibration_status(void)
+{
+  return electrical_calibration.status;
+}
+
+uint8_t motor_pwm_calibration_progress(void)
+{
+  uint16_t local = 0U;
+  uint16_t base = 0U;
+  uint16_t span = electrical_calibration.axis_mask == MOTOR_PWM_CAL_AXIS_ALL ?
+                  50U : 100U;
+  if (electrical_calibration.status == MOTOR_PWM_CAL_SUCCEEDED) return 100U;
+  if (electrical_calibration.status != MOTOR_PWM_CAL_RUNNING) return 0U;
+  if (electrical_calibration.axis == GIMBAL_AXIS_Y &&
+      electrical_calibration.axis_mask == MOTOR_PWM_CAL_AXIS_ALL) base = 50U;
+  switch (electrical_calibration.stage) {
+  case CAL_STAGE_LOCK: local = 5U; break;
+  case CAL_STAGE_SWEEP:
+    local = (uint16_t)(5U +
+        ((uint32_t)electrical_calibration.sweep_step * 65U) / 500U);
+    break;
+  case CAL_STAGE_SETTLE: local = 75U; break;
+  case CAL_STAGE_PROBE_LOCK: local = 85U; break;
+  case CAL_STAGE_PROBE: local = 95U; break;
+  default: local = 0U; break;
+  }
+  return (uint8_t)(base + (local * span) / 100U);
+}
+
+void motor_pwm_calibration_process(void)
+{
+  const float final_field = 4.71238898038f;
+  const uint16_t sweep_steps = 500U;
+  axis_hardware_t hardware;
+  uint32_t now;
+  uint16_t raw;
+  int16_t moved;
+  if (electrical_calibration.status != MOTOR_PWM_CAL_RUNNING) return;
+  now = HAL_GetTick();
+  if ((int32_t)(now - electrical_calibration.deadline) < 0) return;
+  hardware = get_axis_hardware(electrical_calibration.axis);
+  switch (electrical_calibration.stage) {
+  case CAL_STAGE_LOCK:
+    raw = read_encoder_live(&hardware);
+    if (raw == AS5600_READ_ERROR) {
+      calibration_finish(MOTOR_PWM_CAL_FAILED);
+      return;
+    }
+    electrical_calibration.raw_start = raw;
+    electrical_calibration.sweep_step = 0U;
+    electrical_calibration.stage = CAL_STAGE_SWEEP;
+    electrical_calibration.deadline = now;
+    break;
+  case CAL_STAGE_SWEEP:
+    ++electrical_calibration.sweep_step;
+    update_foc_vector(
+        hardware.timer,
+        final_field * (float)electrical_calibration.sweep_step /
+            (float)sweep_steps,
+        active_duty_ticks);
+    if (electrical_calibration.sweep_step >= sweep_steps) {
+      electrical_calibration.stage = CAL_STAGE_SETTLE;
+      electrical_calibration.deadline = now + 500U;
+    } else {
+      electrical_calibration.deadline = now + 2U;
+    }
+    break;
+  case CAL_STAGE_SETTLE:
+    raw = read_encoder_live(&hardware);
+    if (raw == AS5600_READ_ERROR) {
+      calibration_finish(MOTOR_PWM_CAL_FAILED);
+      return;
+    }
+    electrical_calibration.aligned_raw = raw;
+    moved = angle_error(raw, electrical_calibration.raw_start);
+    if (moved >= -4 && moved <= 4) {
+      calibration_finish(MOTOR_PWM_CAL_FAILED);
+      return;
+    }
+    hold_forward_raw_sign[electrical_calibration.axis] = moved > 0 ? 1 : -1;
+#if GIMBAL_X_AUTO_DETECT_POLE_PAIRS
+    if (electrical_calibration.axis == GIMBAL_AXIS_P) {
+      uint16_t moved_abs = moved < 0 ? (uint16_t)-moved : (uint16_t)moved;
+      uint16_t detected = (uint16_t)((3072U + moved_abs / 2U) / moved_abs);
+      if (detected >= 2U && detected <= 32U) {
+        hold_pole_pairs[electrical_calibration.axis] = (uint8_t)detected;
+      }
+    }
+#endif
+    {
+      float shaft = (float)raw * (FOC_TWO_PI / 4096.0f);
+      uint32_t electric_step;
+      hold_electric_offset[electrical_calibration.axis] = foc_wrap_angle(
+          final_field -
+          (float)hold_forward_raw_sign[electrical_calibration.axis] *
+          (float)hold_pole_pairs[electrical_calibration.axis] * shaft);
+      electric_step = (uint32_t)(
+          hold_electric_offset[electrical_calibration.axis] *
+          ((float)SINE_STEPS / FOC_TWO_PI) + 0.5f) % SINE_STEPS;
+      hold_commutation[electrical_calibration.axis] = (uint8_t)electric_step;
+    }
+    hold_torque_polarity[electrical_calibration.axis] = 1;
+    update_foc_vector(hardware.timer,
+                      axis_electrical_angle(electrical_calibration.axis, raw),
+                      axis_hold_min_duty(electrical_calibration.axis));
+    electrical_calibration.stage = CAL_STAGE_PROBE_LOCK;
+    electrical_calibration.deadline = now + 300U;
+    break;
+  case CAL_STAGE_PROBE_LOCK:
+    raw = read_encoder_live(&hardware);
+    if (raw == AS5600_READ_ERROR) {
+      calibration_finish(MOTOR_PWM_CAL_FAILED);
+      return;
+    }
+    electrical_calibration.aligned_raw = raw;
+    {
+      uint32_t amplitude = axis_hold_min_duty(electrical_calibration.axis) +
+          (electrical_calibration.axis == GIMBAL_AXIS_P ?
+           GIMBAL_X_POSITION_STATIC_DUTY : GIMBAL_Y_POSITION_STATIC_DUTY);
+      float field = axis_electrical_angle(electrical_calibration.axis, raw);
+      if (amplitude > axis_hold_duty(electrical_calibration.axis)) {
+        amplitude = axis_hold_duty(electrical_calibration.axis);
+      }
+      field += hold_forward_raw_sign[electrical_calibration.axis] > 0 ?
+               FOC_HALF_PI : -FOC_HALF_PI;
+      update_foc_vector(hardware.timer, field, amplitude);
+    }
+    electrical_calibration.stage = CAL_STAGE_PROBE;
+    electrical_calibration.deadline = now + 300U;
+    break;
+  case CAL_STAGE_PROBE:
+    raw = read_encoder_live(&hardware);
+    if (raw == AS5600_READ_ERROR) {
+      calibration_finish(MOTOR_PWM_CAL_FAILED);
+      return;
+    }
+    if (angle_error(raw, electrical_calibration.aligned_raw) < 0) {
+      hold_torque_polarity[electrical_calibration.axis] = -1;
+    }
+    hold_commutation_ready[electrical_calibration.axis] = true;
+    stop_axis(&hardware);
+    board_set_boost(false);
+    restore_idle_dac();
+    if (electrical_calibration.axis == GIMBAL_AXIS_P &&
+        (electrical_calibration.axis_mask & MOTOR_PWM_CAL_AXIS_Y) != 0U) {
+      if (!calibration_start_axis(GIMBAL_AXIS_Y)) {
+        calibration_finish(MOTOR_PWM_CAL_FAILED);
+      }
+    } else {
+      calibration_finish(MOTOR_PWM_CAL_SUCCEEDED);
+    }
+    break;
+  default:
+    calibration_finish(MOTOR_PWM_CAL_FAILED);
+    break;
+  }
+}
+
 bool motor_pwm_prepare_continuous_axes(void)
 {
   bool ok = true;
@@ -963,6 +1236,11 @@ bool motor_pwm_is_enabled(void)
   return all_motors_enabled;
 }
 
+void motor_pwm_set_maintenance_mode(bool enabled)
+{
+  maintenance_mode = enabled;
+}
+
 bool motor_pwm_test(gimbal_axis_t axis)
 {
   uint16_t start_raw = motor_pwm_read_raw(axis);
@@ -991,8 +1269,7 @@ bool motor_pwm_set_position(gimbal_axis_t axis, uint16_t target_raw,
     if (final_raw != NULL) *final_raw = current;
     return true;
   }
-  if (!hold_commutation_ready[axis] &&
-      !align_hold_electrical_angle(axis)) {
+  if (!hold_commutation_ready[axis]) {
     axis_position_error[axis] = 3U;
     return false;
   }
@@ -1533,6 +1810,12 @@ void motor_pwm_clear_calibration(void)
 
 static bool align_hold_electrical_angle(gimbal_axis_t axis)
 {
+  /* Protocol 3 calibration is exclusively driven by the interruptible
+   * motor_pwm_calibration_* state machine.  Keep the legacy entry point as a
+   * fail-closed compatibility stub for old, unreachable service routines. */
+  (void)axis;
+  return false;
+#if 0
   axis_hardware_t hardware = get_axis_hardware(axis);
   active_duty_ticks = axis_hold_duty(axis);
   if (axis == GIMBAL_AXIS_X) {
@@ -1663,6 +1946,7 @@ static bool align_hold_electrical_angle(gimbal_axis_t axis)
   active_duty_ticks = TEST_DUTY_TICKS;
   hold_commutation_ready[axis] = true;
   return true;
+#endif
 }
 
 void motor_pwm_hold_enable(bool enabled)
@@ -1677,8 +1961,10 @@ void motor_pwm_hold_enable(bool enabled)
     hold_watchdog_deadline = 0U;
     hold_duty_ticks[GIMBAL_AXIS_X] = 0U;
     hold_duty_ticks[GIMBAL_AXIS_Y] = 0U;
-    hold_integral_effort[GIMBAL_AXIS_X] = 0.0f;
-    hold_integral_effort[GIMBAL_AXIS_Y] = 0.0f;
+    hold_gravity_feedforward[GIMBAL_AXIS_X] = 0.0f;
+    hold_gravity_feedforward[GIMBAL_AXIS_Y] = 0.0f;
+    hold_error_integral[GIMBAL_AXIS_X] = 0.0f;
+    hold_error_integral[GIMBAL_AXIS_Y] = 0.0f;
     hold_integral_qualify_count[GIMBAL_AXIS_X] = 0U;
     hold_integral_qualify_count[GIMBAL_AXIS_Y] = 0U;
     hold_settle_count[GIMBAL_AXIS_X] = 0U;
@@ -1705,7 +1991,7 @@ void motor_pwm_hold_enable(bool enabled)
                  motor_pwm_calibration_is_valid(GIMBAL_AXIS_Y);
   for (uint8_t i = 0U; hold_enabled && i < 2U; ++i) {
     if (!hold_commutation_ready[i]) {
-      hold_enabled = align_hold_electrical_angle((gimbal_axis_t)i);
+      hold_enabled = false;
     }
     hold_lost_count[i] = 0U;
     hold_torque_sign[i] = 0;
@@ -1722,9 +2008,11 @@ void motor_pwm_hold_enable(bool enabled)
       hold_target_raw_filtered[i] = (float)raw;
       hold_previous_raw[i] = raw;
       hold_last_encoder_raw[i] = raw;
+      hold_last_encoder_tick[i] = HAL_GetTick();
       hold_control_raw_filtered[i] = (float)raw;
       hold_speed_filtered[i] = 0.0f;
-      hold_integral_effort[i] = 0.0f;
+      hold_gravity_feedforward[i] = 0.0f;
+      hold_error_integral[i] = 0.0f;
       hold_integral_qualify_count[i] = 0U;
       hold_settle_count[i] = 0U;
       hold_settled[i] = false;
@@ -1744,6 +2032,7 @@ void motor_pwm_hold_enable(bool enabled)
     return;
   }
   next_hold_tick = HAL_GetTick();
+  hold_last_process_tick = next_hold_tick;
   hold_watchdog_deadline = next_hold_tick + GIMBAL_FOC_WATCHDOG_MS;
   hold_cycle_count = 0U;
   hold_startup_cycles = 0U;
@@ -1775,6 +2064,9 @@ bool motor_pwm_hold_set_target(gimbal_axis_t axis, uint16_t target_deg)
     hold_settle_count[axis] = 0U;
     hold_settled[axis] = false;
   }
+  if ((float)command_delta * hold_error_integral[axis] < 0.0f) {
+    hold_error_integral[axis] = 0.0f;
+  }
   hold_target_raw_command[axis] = target_raw;
   return true;
 }
@@ -1783,29 +2075,28 @@ bool motor_pwm_hold_set_target_tenths(gimbal_axis_t axis,
                                       uint16_t target_tenths)
 {
   if (!motor_pwm_calibration_is_valid(axis) ||
-      target_tenths > (uint16_t)(axis_home_info[axis].travel_deg * 10U)) {
+      target_tenths >= GIMBAL_ANGLE10_FULL_TURN) {
     return false;
   }
-  uint16_t travel_counts = axis_positive_raw_sign(axis) > 0 ?
-      (uint16_t)((axis_home_info[axis].high_raw + 4096U -
-                  axis_home_info[axis].low_raw) & 0x0FFFU) :
-      (uint16_t)((axis_home_info[axis].low_raw + 4096U -
-                  axis_home_info[axis].high_raw) & 0x0FFFU);
-  uint32_t travel_tenths =
-      (uint32_t)axis_home_info[axis].travel_deg * 10U;
-  if (travel_counts == 0U || travel_tenths == 0U) return false;
-  uint16_t offset = (uint16_t)(
-      ((uint32_t)target_tenths * travel_counts + travel_tenths / 2U) /
-      travel_tenths);
-  uint16_t target_raw = axis_positive_raw_sign(axis) > 0 ?
-      (uint16_t)((axis_home_info[axis].low_raw + offset) & 0x0FFFU) :
-      (uint16_t)((axis_home_info[axis].low_raw + 4096U - offset) & 0x0FFFU);
+  int32_t logical_delta = gimbal_angle10_shortest_delta(0U, target_tenths);
+  int32_t scaled = logical_delta * GIMBAL_ENCODER_RAW_FULL_TURN;
+  int32_t raw_delta = scaled >= 0 ?
+      (scaled + GIMBAL_ANGLE10_FULL_TURN / 2) /
+          GIMBAL_ANGLE10_FULL_TURN :
+      (scaled - GIMBAL_ANGLE10_FULL_TURN / 2) /
+          GIMBAL_ANGLE10_FULL_TURN;
+  raw_delta *= axis_positive_raw_sign(axis);
+  uint16_t target_raw = (uint16_t)(
+      ((int32_t)axis_home_raw[axis] + raw_delta) & 0x0FFF);
   int16_t command_delta =
       angle_error(target_raw, hold_target_raw_command[axis]);
   if (axis == GIMBAL_AXIS_X && command_delta != 0) {
     hold_integral_qualify_count[axis] = 0U;
     hold_settle_count[axis] = 0U;
     hold_settled[axis] = false;
+  }
+  if ((float)command_delta * hold_error_integral[axis] < 0.0f) {
+    hold_error_integral[axis] = 0.0f;
   }
   hold_target_raw_command[axis] = target_raw;
   hold_target_deg[axis] = (uint16_t)((target_tenths + 5U) / 10U);
@@ -1815,6 +2106,40 @@ bool motor_pwm_hold_set_target_tenths(gimbal_axis_t axis,
 uint16_t motor_pwm_hold_get_target(gimbal_axis_t axis)
 {
   return hold_target_deg[axis];
+}
+
+bool motor_pwm_get_angle_tenths(gimbal_axis_t axis, uint16_t *angle_tenths)
+{
+  uint16_t raw;
+  if (angle_tenths == NULL || axis > GIMBAL_AXIS_Y ||
+      !motor_pwm_calibration_is_valid(axis)) return false;
+  raw = motor_pwm_read_raw(axis);
+  if (raw == AS5600_READ_ERROR) return false;
+  *angle_tenths = gimbal_raw_to_angle10(raw, axis_home_raw[axis],
+                                        axis_positive_raw_sign(axis));
+  return true;
+}
+
+bool motor_pwm_get_target_tenths(gimbal_axis_t axis,
+                                 uint16_t *target_tenths)
+{
+  if (target_tenths == NULL || axis > GIMBAL_AXIS_Y ||
+      !motor_pwm_calibration_is_valid(axis)) return false;
+  *target_tenths = gimbal_raw_to_angle10(hold_target_raw_command[axis],
+                                         axis_home_raw[axis],
+                                         axis_positive_raw_sign(axis));
+  return true;
+}
+
+bool motor_pwm_axis_settled(gimbal_axis_t axis)
+{
+  return axis <= GIMBAL_AXIS_Y && hold_enabled && hold_settled[axis];
+}
+
+bool motor_pwm_all_settled(void)
+{
+  return motor_pwm_axis_settled(GIMBAL_AXIS_P) &&
+         motor_pwm_axis_settled(GIMBAL_AXIS_Y);
 }
 
 void motor_pwm_hold_process(void)
@@ -1830,8 +2155,16 @@ void motor_pwm_hold_process(void)
 #endif
 
   uint32_t now = HAL_GetTick();
+  uint32_t dt_ms;
+  uint16_t settle_increment;
   if ((int32_t)(now - next_hold_tick) < 0) return;
   next_hold_tick = now + GIMBAL_FOC_PERIOD_MS;
+  dt_ms = now - hold_last_process_tick;
+  hold_last_process_tick = now;
+  if (dt_ms == 0U) dt_ms = 1U;
+  if (dt_ms > 20U) dt_ms = 20U;
+  settle_increment = (uint16_t)((dt_ms + GIMBAL_FOC_PERIOD_MS - 1U) /
+                                GIMBAL_FOC_PERIOD_MS);
   hold_watchdog_deadline = now + GIMBAL_FOC_WATCHDOG_MS;
   ++hold_cycle_count;
 
@@ -1842,7 +2175,9 @@ void motor_pwm_hold_process(void)
     uint16_t deg;
     if (raw == AS5600_READ_ERROR) {
       if (++hold_encoder_error_count[axis] >=
-          GIMBAL_FOC_ENCODER_ERROR_COUNT) {
+              GIMBAL_FOC_ENCODER_ERROR_COUNT ||
+          (uint32_t)(now - hold_last_encoder_tick[axis]) >
+              GIMBAL_FOC_ENCODER_MAX_AGE_MS) {
         axis_position_error[axis] = 15U;
         motor_pwm_hold_enable(false);
         board_set_fault(true);
@@ -1853,6 +2188,7 @@ void motor_pwm_hold_process(void)
     } else {
       hold_encoder_error_count[axis] = 0U;
       hold_last_encoder_raw[axis] = raw;
+      hold_last_encoder_tick[axis] = now;
     }
     if (!motor_pwm_raw_to_deg(axis, raw, &deg)) {
       continue;
@@ -1871,6 +2207,8 @@ void motor_pwm_hold_process(void)
           GIMBAL_X_TRACK_TARGET_SLEW_RAW :
           GIMBAL_Y_TRACK_TARGET_SLEW_RAW;
     }
+    if (maintenance_mode && step > 0.25f) step = 0.25f;
+    step *= (float)dt_ms / (float)GIMBAL_FOC_PERIOD_MS;
     if ((float)target_delta > step) {
       hold_target_raw_filtered[axis] += step;
     } else if ((float)target_delta < -step) {
@@ -1922,9 +2260,31 @@ void motor_pwm_hold_process(void)
       kd = GIMBAL_X_TRACK_DOWN_KD;
     }
     int32_t control_error = (int32_t)raw_error * kp - speed * kd;
+    int16_t target_delta_abs =
+        target_delta < 0 ? (int16_t)-target_delta : target_delta;
+
+    if (target_delta_abs > 2 ||
+        error_abs > GIMBAL_X_SETTLE_EXIT_ERROR_RAW) {
+      hold_settled[axis] = false;
+      hold_settle_count[axis] = 0U;
+    } else if (!hold_settled[axis] &&
+               error_abs <= GIMBAL_X_SETTLE_ERROR_RAW &&
+               speed <= GIMBAL_X_SETTLE_SPEED_RAW &&
+               speed >= -GIMBAL_X_SETTLE_SPEED_RAW) {
+      uint32_t next_count = (uint32_t)hold_settle_count[axis] +
+                            settle_increment;
+      hold_settle_count[axis] = next_count > GIMBAL_X_SETTLE_CYCLES ?
+                                GIMBAL_X_SETTLE_CYCLES :
+                                (uint16_t)next_count;
+      if (hold_settle_count[axis] >= GIMBAL_X_SETTLE_CYCLES) {
+        hold_settled[axis] = true;
+        hold_settle_count[axis] = GIMBAL_X_SETTLE_CYCLES;
+      }
+    } else if (!hold_settled[axis]) {
+      hold_settle_count[axis] = 0U;
+    }
+
     if (axis == GIMBAL_AXIS_X) {
-      int16_t target_delta_abs =
-          target_delta < 0 ? (int16_t)-target_delta : target_delta;
 
       /*
        * While pitch is following an active ramp, a short gravity-assisted
@@ -1936,22 +2296,6 @@ void motor_pwm_hold_process(void)
       } else if (target_delta < -2 && raw_error < 0 &&
                  control_error > -1) {
         control_error = -1;
-      }
-
-      if (target_delta_abs > 2 ||
-          error_abs > GIMBAL_X_SETTLE_EXIT_ERROR_RAW) {
-        hold_settled[axis] = false;
-        hold_settle_count[axis] = 0U;
-      } else if (!hold_settled[axis] &&
-                 error_abs <= GIMBAL_X_SETTLE_ERROR_RAW &&
-                 speed <= GIMBAL_X_SETTLE_SPEED_RAW &&
-                 speed >= -GIMBAL_X_SETTLE_SPEED_RAW) {
-        if (++hold_settle_count[axis] >= GIMBAL_X_SETTLE_CYCLES) {
-          hold_settled[axis] = true;
-          hold_settle_count[axis] = GIMBAL_X_SETTLE_CYCLES;
-        }
-      } else if (!hold_settled[axis]) {
-        hold_settle_count[axis] = 0U;
       }
 
       /*
@@ -1971,7 +2315,7 @@ void motor_pwm_hold_process(void)
             (target_delta < 0 && speed >= 0);
         if (motion_stalled &&
             error_abs >= GIMBAL_X_TRACK_INTEGRAL_MIN_ERROR_RAW) {
-          hold_integral_effort[axis] +=
+          hold_error_integral[axis] +=
               (float)raw_error * GIMBAL_X_TRACK_MOTION_INTEGRAL_GAIN;
         }
         hold_integral_qualify_count[axis] = 0U;
@@ -1984,7 +2328,7 @@ void motor_pwm_hold_process(void)
             GIMBAL_X_TRACK_INTEGRAL_QUALIFY_CYCLES) {
           ++hold_integral_qualify_count[axis];
         } else {
-          hold_integral_effort[axis] +=
+          hold_gravity_feedforward[axis] +=
               (float)raw_error * GIMBAL_X_TRACK_INTEGRAL_GAIN;
         }
       } else if (target_delta_abs > 2 ||
@@ -1999,26 +2343,34 @@ void motor_pwm_hold_process(void)
          * the commanded ramp has reached its endpoint.
          */
         if (target_delta_abs <= 2 &&
-            (float)speed * hold_integral_effort[axis] > 0.0f) {
-          hold_integral_effort[axis] *= GIMBAL_X_TRACK_INTEGRAL_LEAK;
+            (float)speed * hold_error_integral[axis] > 0.0f) {
+          hold_error_integral[axis] *= GIMBAL_X_TRACK_INTEGRAL_LEAK;
         }
       } else {
         hold_integral_qualify_count[axis] = 0U;
       }
-      if (hold_integral_effort[axis] >
+      if (hold_error_integral[axis] >
           GIMBAL_X_TRACK_INTEGRAL_LIMIT) {
-        hold_integral_effort[axis] = GIMBAL_X_TRACK_INTEGRAL_LIMIT;
-      } else if (hold_integral_effort[axis] <
+        hold_error_integral[axis] = GIMBAL_X_TRACK_INTEGRAL_LIMIT;
+      } else if (hold_error_integral[axis] <
                  -GIMBAL_X_TRACK_INTEGRAL_LIMIT) {
-        hold_integral_effort[axis] = -GIMBAL_X_TRACK_INTEGRAL_LIMIT;
+        hold_error_integral[axis] = -GIMBAL_X_TRACK_INTEGRAL_LIMIT;
+      }
+      if (hold_gravity_feedforward[axis] >
+          GIMBAL_X_TRACK_INTEGRAL_LIMIT) {
+        hold_gravity_feedforward[axis] = GIMBAL_X_TRACK_INTEGRAL_LIMIT;
+      } else if (hold_gravity_feedforward[axis] <
+                 -GIMBAL_X_TRACK_INTEGRAL_LIMIT) {
+        hold_gravity_feedforward[axis] = -GIMBAL_X_TRACK_INTEGRAL_LIMIT;
       }
       if (hold_settled[axis]) {
         /* Quiet endpoint hold: fixed learned gravity torque, no PD chatter. */
         control_error =
-            (int32_t)lroundf(hold_integral_effort[axis]);
+            (int32_t)lroundf(hold_gravity_feedforward[axis]);
       } else {
         control_error +=
-            (int32_t)lroundf(hold_integral_effort[axis]);
+            (int32_t)lroundf(hold_gravity_feedforward[axis] +
+                             hold_error_integral[axis]);
       }
 
     }
@@ -2160,13 +2512,14 @@ void motor_pwm_get_foc_status(gimbal_foc_status_t *status)
   status->x_pole_pairs = hold_pole_pairs[GIMBAL_AXIS_X];
   status->y_pole_pairs = hold_pole_pairs[GIMBAL_AXIS_Y];
   status->x_gravity_comp =
-      (int16_t)lroundf(hold_integral_effort[GIMBAL_AXIS_X]);
+      (int16_t)lroundf(hold_gravity_feedforward[GIMBAL_AXIS_X]);
   status->cycles = hold_cycle_count;
   status->watchdog_trips = hold_watchdog_trips;
 }
 
 void motor_pwm_gravity_clear(void)
 {
-  hold_integral_effort[GIMBAL_AXIS_X] = 0.0f;
+  hold_gravity_feedforward[GIMBAL_AXIS_X] = 0.0f;
+  hold_error_integral[GIMBAL_AXIS_X] = 0.0f;
   hold_integral_qualify_count[GIMBAL_AXIS_X] = 0U;
 }
