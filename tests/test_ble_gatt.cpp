@@ -48,6 +48,11 @@ public:
                                          int timeout_ms, double) override {
         return moveTo(yaw, pitch, timeout_ms);
     }
+    gimbal::CommandResult moveToManualVerified(double yaw, double pitch,
+                                               int timeout_ms, double) override {
+        return moveTo(yaw, pitch, timeout_ms);
+    }
+    gimbal::CommandResult rebaseAlignmentAtCurrent(int) override { return {true}; }
     gimbal::CommandResult trackTo(double yaw, double pitch,
                                   int timeout_ms) override {
         return moveTo(yaw, pitch, timeout_ms);
@@ -469,7 +474,7 @@ int main() {
             "\",\"sequence\":2,\"direction\":\"RIGHT\"}}";
         json nudged = parseResponse(typed_server.handleCommand(nudge_payload));
         assertSuccess(nudged, 49);
-        assert(hardware.state.yaw_deg == 2.0);
+        assert(hardware.state.yaw_deg == 30.0);
 
         assert(typed_orchestrator.confirmReady().success);
         json wrong_phase = parseResponse(typed_server.handleCommand(nudge_payload));

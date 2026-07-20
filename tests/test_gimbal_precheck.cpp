@@ -43,6 +43,16 @@ public:
         return moveTo(yaw, pitch, timeout_ms);
     }
 
+    CommandResult moveToManualVerified(double yaw, double pitch, int timeout_ms,
+                                       double) override {
+        return moveTo(yaw, pitch, timeout_ms);
+    }
+
+    CommandResult rebaseAlignmentAtCurrent(int) override {
+        calls.push_back("rebase");
+        return {true};
+    }
+
     CommandResult trackTo(double yaw, double pitch, int timeout_ms) override {
         return moveTo(yaw, pitch, timeout_ms);
     }
@@ -236,7 +246,7 @@ void test_manual_lease_session_and_sequence_guards() {
     assert(!wrong.success && wrong.error == "session_mismatch");
     auto moved = controller.nudge("s3", 2, NudgeDirection::Right, 70);
     assert(moved.success);
-    assert(hardware.current.yaw_deg == 2.0);
+    assert(hardware.current.yaw_deg == 30.0);
     auto stale = controller.nudge("s3", 2, NudgeDirection::Right, 80);
     assert(!stale.success && stale.error == "stale_command_sequence");
     auto confirmed = controller.confirmPosition("s3", 3, 90);
@@ -270,9 +280,9 @@ void test_nudge_wraps_protocol_angles_at_zero() {
     hardware.current.yaw_deg = 0.0;
     hardware.current.pitch_deg = 0.0;
     assert(controller.nudge("angle-wrap", 2, NudgeDirection::Left, 60).success);
-    assert(hardware.current.yaw_deg == 358.0);
+    assert(hardware.current.yaw_deg == 330.0);
     assert(controller.nudge("angle-wrap", 3, NudgeDirection::Down, 70).success);
-    assert(hardware.current.pitch_deg == 358.0);
+    assert(hardware.current.pitch_deg == 330.0);
 }
 
 void test_safe_window_rejection_keeps_manual_lease() {
@@ -363,7 +373,7 @@ int main() {
         std::string(EDGEFOCUS_SOURCE_DIR) + "/config/gimbal-board.json");
     assert(board.readyForSession());
     assert(board.error.empty());
-    assert(board.precheck.hard_deadline_ms == 75000);
+    assert(board.precheck.hard_deadline_ms == 9000);
     assert(!board.precheck.recovery_waypoints.empty());
     test_current_position_subject_causes_zero_motion();
     test_waypoints_finish_at_center();

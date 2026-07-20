@@ -572,7 +572,7 @@ CommandResult GimbalPrecheckController::nudge(
         pitch = offsetAngle(pitch, -kManualNudgeStepDeg);
     }
     result = hardware_.moveToManualVerified(yaw, pitch, 5000, 1.5);
-    if (!result.success) {
+    if (!result.success && result.error != "target_out_of_bounds") {
         degradeLocked(result.error.empty() ? "gimbal_nudge_failed" : result.error);
     }
     return result;

@@ -19,6 +19,11 @@ public:
                                  double) override {
         return trackTo(yaw, pitch, timeout_ms);
     }
+    CommandResult moveToManualVerified(double yaw, double pitch, int timeout_ms,
+                                       double) override {
+        return trackTo(yaw, pitch, timeout_ms);
+    }
+    CommandResult rebaseAlignmentAtCurrent(int) override { return {true}; }
     CommandResult trackTo(double yaw, double pitch, int) override {
         targets.push_back({yaw, pitch});
         current.yaw_deg = yaw;
