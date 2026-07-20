@@ -96,6 +96,7 @@ public:
             reads_.push_back("OK,HELLO,PROTO=3.0\n");
         } else if (line == "ARM" || line == "ARM MAINTENANCE") {
             state_ = "READY";
+            arm_profile_ = line == "ARM" ? "PRODUCTION" : "MAINTENANCE";
             reads_.push_back("OK,ARM,STATE=READY,CAL_EPOCH=7,ORIGIN_EPOCH=9\n");
         } else if (line == "HOLD NOW") {
             state_ = "HOLDING";
@@ -135,6 +136,7 @@ public:
             reads_.push_back("ANGLE,Y_DEG=0,P_DEG=0\n");
         } else if (line == "STOP") {
             state_ = "DISABLED";
+            arm_profile_ = "NONE";
             reads_.push_back("OK,STOP,STATE=DISABLED,BOOST=0,MOTOR=0,HOLD=0\n");
         } else if (line == "FAULT CLEAR") {
             state_ = "DISABLED";
@@ -181,7 +183,8 @@ public:
 
     std::string poseLine(bool settled) const {
         return "POSE,STATE=" + state_ +
-               ",ARM_PROFILE=PRODUCTION,P_RAW=1,Y_RAW=2,P_RAW_VALID=1,Y_RAW_VALID=1,"
+               ",ARM_PROFILE=" + arm_profile_ +
+               ",P_RAW=1,Y_RAW=2,P_RAW_VALID=1,Y_RAW_VALID=1,"
                "YAW10=" + std::to_string(yaw10_) +
                ",PITCH10=" + std::to_string(pitch10_) +
                ",TYAW10=" + std::to_string(yaw10_) +
@@ -231,6 +234,7 @@ private:
     mutable std::set<std::thread::id> io_threads_;
     bool opened_{};
     bool enable_{};
+    std::string arm_profile_{"NONE"};
     std::string state_{"DISABLED"};
     unsigned generation_{};
     unsigned yaw10_{};
@@ -399,6 +403,11 @@ void testTypedMaintenanceCommandsAndTelemetry() {
 
     result = service.executeMaintenance({MaintenanceOperation::CurrentReset});
     assert(result.success);
+    result = service.executeMaintenance({MaintenanceOperation::Hold});
+    assert(result.success && result.settled);
+    result = service.moveToVerified(3.0, 0.0, 2000, 1.0);
+    assert(result.success && result.settled && result.firmware_accepted);
+    assert(service.snapshot().arm_profile == ArmProfile::Maintenance);
     result = service.executeMaintenance({MaintenanceOperation::VerifyMotionPattern});
     assert(result.success && result.settled);
     result = service.executeMaintenance({MaintenanceOperation::CurrentRead});
@@ -417,6 +426,13 @@ void testTypedMaintenanceCommandsAndTelemetry() {
     assert(std::find(writes.begin(), writes.end(), "CAL ELECTRICAL ALL") != writes.end());
     assert(std::find(writes.begin(), writes.end(), "CURRENT") != writes.end());
     assert(service.stopAndDisable().success);
+    assert(service.snapshot().arm_profile == ArmProfile::None);
+    assert(service.executeMaintenance({MaintenanceOperation::ArmProduction}).success);
+    assert(service.snapshot().arm_profile == ArmProfile::Production);
+    assert(service.stopAndDisable().success);
+    const auto final_writes = io->writesCopy();
+    assert(std::find(final_writes.begin(), final_writes.end(), "ARM") !=
+           final_writes.end());
     service.stop();
 }
 

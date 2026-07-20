@@ -1,4 +1,5 @@
 #include "platform/gimbal/GimbalHardwareService.h"
+#include "platform/gimbal/GimbalProtocol.h"
 #include "platform/gimbal/LinuxGimbalIo.h"
 #include "tools/GimbalOnewayStopDiagnostic.h"
 
@@ -6,12 +7,15 @@
 
 #include <fstream>
 #include <chrono>
+#include <cmath>
+#include <cstdint>
 #include <iostream>
 #include <memory>
 #include <optional>
 #include <string>
 #include <thread>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -37,6 +41,8 @@ void printUsage() {
         << "  gimbal_bringup calibrate-electrical --allow-motion --confirm-board [--config PATH]\n"
         << "  gimbal_bringup capture-origin --confirm-origin-capture [--config PATH]\n"
         << "  gimbal_bringup current-sample --allow-motion --confirm-board [--config PATH]\n"
+        << "  gimbal_bringup maintenance-move --axis yaw|pitch --delta-deg N "
+           "--allow-motion --confirm-board [--config PATH]\n"
         << "  gimbal_bringup protect-current-set --p-peak N --p-avg N --y-peak N --y-avg N "
            "--stall-ms N --confirm-current-protection [--config PATH]\n"
         << "  gimbal_bringup nvm-clear-origin|nvm-clear-all --confirm-nvm-clear "
@@ -120,7 +126,8 @@ std::optional<std::uint16_t> uint16After(int argc, char** argv,
 }
 
 int report(const char* operation, const CommandResult& result,
-           const GimbalHardwareService& service) {
+           const GimbalHardwareService& service,
+           const nlohmann::json& details = nlohmann::json::object()) {
     const auto status = service.status();
     const auto snapshot = service.snapshot();
     nlohmann::json output = {
@@ -170,6 +177,7 @@ int report(const char* operation, const CommandResult& result,
             {"sample_age_ms", result.current->sample_age_ms},
         };
     }
+    if (!details.empty()) output["details"] = details;
     std::cout << output.dump(2) << '\n';
     return result.success ? 0 : 2;
 }
@@ -314,6 +322,124 @@ int main(int argc, char** argv) {
         }
         result = finishMotion(std::move(result), service);
         const int exit_code = report(command.c_str(), result, service);
+        service.stop();
+        return exit_code;
+    }
+    if (command == "maintenance-move") {
+        if (!motionConfirmed(argc, argv)) {
+            std::cerr << "Maintenance move refused: --allow-motion and "
+                         "--confirm-board are required\n";
+            service.stop();
+            return 65;
+        }
+        const std::string axis = valueAfter(argc, argv, "--axis");
+        const std::string delta_text = valueAfter(argc, argv, "--delta-deg");
+        double delta = 0.0;
+        try {
+            delta = std::stod(delta_text);
+        } catch (...) {
+            std::cerr << "Maintenance move requires a numeric --delta-deg\n";
+            service.stop();
+            return 64;
+        }
+        if ((axis != "yaw" && axis != "pitch") || delta == 0.0 ||
+            std::abs(delta) > 3.0) {
+            std::cerr << "Maintenance move requires yaw|pitch and a non-zero "
+                         "delta no larger than 3 degrees\n";
+            service.stop();
+            return 64;
+        }
+
+        CommandResult result;
+        std::vector<std::string> transcript;
+        auto adopt = [&](CommandResult next) {
+            transcript.insert(transcript.end(), next.transcript.begin(),
+                              next.transcript.end());
+            next.transcript = transcript;
+            result = std::move(next);
+            return result.success;
+        };
+
+        bool ok = adopt(service.executeMaintenance({MaintenanceOperation::Probe}));
+        if (ok) ok = adopt(service.executeMaintenance(
+            {MaintenanceOperation::ArmMaintenance}));
+        if (ok) ok = adopt(service.executeMaintenance({MaintenanceOperation::Hold}));
+        auto sample_started = std::chrono::steady_clock::now();
+        if (ok) {
+            sample_started = std::chrono::steady_clock::now();
+            ok = adopt(service.executeMaintenance({MaintenanceOperation::CurrentReset}));
+        }
+        if (ok) ok = adopt(service.refreshAngle(1000));
+
+        std::optional<double> start_yaw;
+        std::optional<double> start_pitch;
+        std::optional<double> target_yaw;
+        std::optional<double> target_pitch;
+        std::optional<double> final_yaw;
+        std::optional<double> final_pitch;
+        std::optional<std::uint32_t> motion_generation;
+        bool motion_settled = false;
+        if (ok) {
+            const auto status = service.status();
+            start_yaw = status.yaw_deg;
+            start_pitch = status.pitch_deg;
+            if (!start_yaw || !start_pitch) {
+                result.success = false;
+                result.error = "maintenance_angle_unknown";
+                result.error_code = "SAMPLE_STALE";
+                ok = false;
+            }
+        }
+        if (ok) {
+            target_yaw = axis == "yaw"
+                ? edgefocus::gimbal::offsetAngle(*start_yaw, delta) : *start_yaw;
+            target_pitch = axis == "pitch"
+                ? edgefocus::gimbal::offsetAngle(*start_pitch, delta) : *start_pitch;
+            const bool inside_maintenance_window =
+                std::abs(edgefocus::gimbal::shortestAngleDelta(0.0, *target_yaw)) <= 10.0 &&
+                std::abs(edgefocus::gimbal::shortestAngleDelta(0.0, *target_pitch)) <= 10.0;
+            if (!inside_maintenance_window) {
+                result.success = false;
+                result.error = "maintenance_target_out_of_bounds";
+                result.error_code = "TARGET_OUT_OF_BOUNDS";
+                ok = false;
+            }
+        }
+        if (ok) {
+            ok = adopt(service.moveToVerified(*target_yaw, *target_pitch, 5000, 1.0));
+            motion_generation = result.motion_generation;
+            motion_settled = result.settled;
+            const auto status = service.status();
+            final_yaw = status.yaw_deg;
+            final_pitch = status.pitch_deg;
+        }
+        if (ok) {
+            const auto elapsed = std::chrono::steady_clock::now() - sample_started;
+            if (elapsed < std::chrono::milliseconds(1100)) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1100) - elapsed);
+            }
+            ok = adopt(service.executeMaintenance({MaintenanceOperation::CurrentRead}));
+            result.motion_generation = motion_generation;
+            result.settled = motion_settled;
+        }
+        if (ok && (!result.current || !result.current->valid ||
+                   result.current->saturated || result.current->window_ms < 1000)) {
+            result.success = false;
+            result.error = "current_sample_not_usable";
+            result.error_code = "CURRENT_SAMPLE_INVALID";
+        }
+
+        const nlohmann::json details = {
+            {"axis", axis}, {"delta_deg", delta},
+            {"start_yaw_deg", start_yaw ? nlohmann::json(*start_yaw) : nlohmann::json(nullptr)},
+            {"start_pitch_deg", start_pitch ? nlohmann::json(*start_pitch) : nlohmann::json(nullptr)},
+            {"target_yaw_deg", target_yaw ? nlohmann::json(*target_yaw) : nlohmann::json(nullptr)},
+            {"target_pitch_deg", target_pitch ? nlohmann::json(*target_pitch) : nlohmann::json(nullptr)},
+            {"final_yaw_deg", final_yaw ? nlohmann::json(*final_yaw) : nlohmann::json(nullptr)},
+            {"final_pitch_deg", final_pitch ? nlohmann::json(*final_pitch) : nlohmann::json(nullptr)},
+        };
+        result = finishMotion(std::move(result), service);
+        const int exit_code = report(command.c_str(), result, service, details);
         service.stop();
         return exit_code;
     }
