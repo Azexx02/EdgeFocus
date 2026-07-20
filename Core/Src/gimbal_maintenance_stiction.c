@@ -9,6 +9,9 @@ static void clear_live_state(GimbalMaintenanceStictionState *state)
   state->qualify_started_ms = 0U;
   state->active = false;
   state->assist_started_ms = 0U;
+  state->recovering = false;
+  state->recovery_started_ms = 0U;
+  state->assist_direction = 0;
   state->assist_attempted = false;
   state->assist_exhausted = false;
   state->assist_floor = 0U;
@@ -21,17 +24,22 @@ static uint16_t elapsed_u16(uint32_t now, uint32_t then, uint32_t limit)
   return (uint16_t)elapsed;
 }
 
-static bool eligible(const GimbalMaintenanceStictionInput *input)
+static bool control_eligible(const GimbalMaintenanceStictionInput *input)
 {
   return input->maintenance_yaw && input->target_ramp_complete &&
          !input->settled &&
          input->error_abs > GIMBAL_MAINT_STICTION_MIN_ERROR_RAW &&
-         input->speed_raw >= -GIMBAL_MAINT_STICTION_MAX_SPEED_RAW &&
-         input->speed_raw <= GIMBAL_MAINT_STICTION_MAX_SPEED_RAW &&
          (input->requested_direction == -1 ||
           input->requested_direction == 1) &&
          input->requested_magnitude != 0U &&
          input->maximum_magnitude != 0U;
+}
+
+static bool stalled(const GimbalMaintenanceStictionInput *input)
+{
+  return control_eligible(input) &&
+         input->speed_raw >= -GIMBAL_MAINT_STICTION_MAX_SPEED_RAW &&
+         input->speed_raw <= GIMBAL_MAINT_STICTION_MAX_SPEED_RAW;
 }
 
 void gimbal_maintenance_stiction_init(GimbalMaintenanceStictionState *state)
@@ -69,16 +77,18 @@ GimbalMaintenanceStictionOutput gimbal_maintenance_stiction_update(
   output.direction = input->requested_direction;
   if (state == NULL) return output;
 
-  input_eligible = eligible(input);
+  input_eligible = stalled(input);
   if (state->active) {
     elapsed = input->now_ms - state->assist_started_ms;
     state->diagnostics.active_ms = elapsed_u16(
         input->now_ms, state->assist_started_ms,
         GIMBAL_MAINT_STICTION_MAX_ACTIVE_MS);
-    if (!input_eligible) {
+    if (!control_eligible(input) ||
+        input->requested_direction != state->assist_direction) {
       state->active = false;
       state->assist_floor = 0U;
       state->qualifying = false;
+      state->recovering = false;
       output.release_immediately = true;
       return output;
     }
@@ -87,8 +97,24 @@ GimbalMaintenanceStictionOutput gimbal_maintenance_stiction_update(
       state->assist_floor = 0U;
       state->assist_exhausted = true;
       state->diagnostics.exhausted = true;
+      state->recovering = false;
       output.release_immediately = true;
       return output;
+    }
+    if (!input_eligible) {
+      if (!state->recovering) {
+        state->recovering = true;
+        state->recovery_started_ms = input->now_ms;
+      } else if ((uint32_t)(input->now_ms - state->recovery_started_ms) >=
+                 GIMBAL_MAINT_STICTION_RECOVERY_MS) {
+        state->active = false;
+        state->assist_floor = 0U;
+        state->recovering = false;
+        output.release_immediately = true;
+        return output;
+      }
+    } else {
+      state->recovering = false;
     }
     next_floor = state->assist_floor;
     if (next_floor < input->requested_magnitude) {
@@ -127,6 +153,7 @@ GimbalMaintenanceStictionOutput gimbal_maintenance_stiction_update(
   state->active = true;
   state->assist_started_ms = input->now_ms;
   state->assist_attempted = true;
+  state->assist_direction = input->requested_direction;
   state->diagnostics.attempted = true;
   next_floor = (uint32_t)input->requested_magnitude +
                GIMBAL_MAINT_STICTION_FLOOR_STEP;

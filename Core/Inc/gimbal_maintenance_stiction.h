@@ -10,6 +10,7 @@ extern "C" {
 
 #define GIMBAL_MAINT_STICTION_QUALIFY_MS 150U
 #define GIMBAL_MAINT_STICTION_MAX_ACTIVE_MS 300U
+#define GIMBAL_MAINT_STICTION_RECOVERY_MS 50U
 #define GIMBAL_MAINT_STICTION_FLOOR_STEP 2U
 #define GIMBAL_MAINT_STICTION_MIN_ERROR_RAW 8U
 #define GIMBAL_MAINT_STICTION_MAX_SPEED_RAW 1
@@ -45,6 +46,9 @@ typedef struct {
   uint32_t qualify_started_ms;
   bool active;
   uint32_t assist_started_ms;
+  bool recovering;
+  uint32_t recovery_started_ms;
+  int8_t assist_direction;
   bool assist_attempted;
   bool assist_exhausted;
   uint16_t assist_floor;
