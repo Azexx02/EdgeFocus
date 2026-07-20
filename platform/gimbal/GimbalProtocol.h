@@ -40,6 +40,7 @@ std::string holdCommand();
 std::string moveCommand(double yaw_deg, double pitch_deg);
 std::string trackCommand(double yaw_deg, double pitch_deg);
 std::string poseCommand();
+std::string maintenanceAssistCommand();
 double normalizeAngle(double angle_deg) noexcept;
 double shortestAngleDelta(double from_deg, double to_deg) noexcept;
 double offsetAngle(double reference_deg, double offset_deg) noexcept;

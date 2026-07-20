@@ -88,7 +88,7 @@ public:
             if (protocol_version == "3.0") {
                 reads_.push_back(
                     "VER,PROTO=3.0,FW=G431-GIMBAL,"
-                    "CAPS=ASYNC_MOTION|POSE|ORIGIN|FAULT_CLASS|HOLD_NOW|NVM_V3|NEGOTIATION_REQUIRED\n");
+                    "CAPS=ASYNC_MOTION|POSE|ORIGIN|FAULT_CLASS|HOLD_NOW|NVM_V3|MAINT_ASSIST_DIAG|NEGOTIATION_REQUIRED\n");
             } else {
                 reads_.push_back("VER,PROTO=2.0,CAPS=UART_ONLY|ARM|TRACK\n");
             }
@@ -152,6 +152,10 @@ public:
                 "CURRENT,P_RAW=101,P_AVG=82,P_PEAK=130,Y_RAW=99,Y_AVG=77,"
                 "Y_PEAK=125,WINDOW_MS=1200,SAMPLES=120,VALID=1,SATURATED=0,"
                 "SAMPLE_AGE_MS=3\n");
+        } else if (line == "MAINTASSIST?") {
+            reads_.push_back(
+                "MAINTASSIST,GEN=" + std::to_string(generation_) +
+                ",ATTEMPTED=1,EXHAUSTED=0,ACTIVE_MS=85,PEAK_FLOOR=137\n");
         } else if (line.rfind("PROTECT CURRENT SET ", 0) == 0) {
             reads_.push_back("OK,PROTECT_CURRENT_SET\n");
         }
@@ -414,6 +418,13 @@ void testTypedMaintenanceCommandsAndTelemetry() {
     assert(result.success && result.current);
     assert(result.current->valid && !result.current->saturated);
     assert(result.current->window_ms == 1200 && result.current->samples == 120);
+    result = service.executeMaintenance({MaintenanceOperation::AssistRead});
+    assert(result.success && result.maintenance_assist);
+    assert(result.maintenance_assist->target_generation == 8);
+    assert(result.maintenance_assist->attempted);
+    assert(!result.maintenance_assist->exhausted);
+    assert(result.maintenance_assist->active_ms == 85);
+    assert(result.maintenance_assist->peak_floor == 137);
 
     MaintenanceRequest protection{MaintenanceOperation::ProtectCurrentSet};
     protection.protection = CurrentProtectionConfig{130, 82, 125, 77, 250};
@@ -425,6 +436,7 @@ void testTypedMaintenanceCommandsAndTelemetry() {
     assert(std::find(writes.begin(), writes.end(), "ARM MAINTENANCE") != writes.end());
     assert(std::find(writes.begin(), writes.end(), "CAL ELECTRICAL ALL") != writes.end());
     assert(std::find(writes.begin(), writes.end(), "CURRENT") != writes.end());
+    assert(std::find(writes.begin(), writes.end(), "MAINTASSIST?") != writes.end());
     assert(service.stopAndDisable().success);
     assert(service.snapshot().arm_profile == ArmProfile::None);
     assert(service.executeMaintenance({MaintenanceOperation::ArmProduction}).success);

@@ -74,6 +74,7 @@ enum class EventKind : std::uint8_t {
     Angle,
     Pose,
     Current,
+    MaintenanceAssist,
     Nvm,
     MotionAccepted,
     CalibrationAccepted,
@@ -125,6 +126,10 @@ struct Event {
     std::optional<std::uint32_t> current_samples;
     std::optional<bool> current_valid;
     std::optional<bool> current_saturated;
+    std::optional<bool> maintenance_assist_attempted;
+    std::optional<bool> maintenance_assist_exhausted;
+    std::optional<std::uint32_t> maintenance_assist_active_ms;
+    std::optional<std::uint32_t> maintenance_assist_peak_floor;
 };
 
 struct GimbalSnapshot {
@@ -186,6 +191,7 @@ enum class MaintenanceOperation : std::uint8_t {
     Hold,
     CurrentReset,
     CurrentRead,
+    AssistRead,
     VerifyMotionPattern,
     ProtectCurrentSet,
     ClearOrigin,
@@ -219,6 +225,14 @@ struct CurrentTelemetry {
     std::uint32_t sample_age_ms{};
 };
 
+struct MaintenanceAssistDiagnostics {
+    std::uint32_t target_generation{};
+    bool attempted{};
+    bool exhausted{};
+    std::uint32_t active_ms{};
+    std::uint32_t peak_floor{};
+};
+
 struct MaintenanceRequest {
     MaintenanceOperation operation{MaintenanceOperation::Probe};
     std::optional<CurrentProtectionConfig> protection;
@@ -236,6 +250,7 @@ struct CommandResult {
     std::uint64_t request_sequence{};
     std::optional<std::uint32_t> motion_generation;
     std::optional<CurrentTelemetry> current;
+    std::optional<MaintenanceAssistDiagnostics> maintenance_assist;
     ErrorClass error_class{ErrorClass::None};
     std::string error_code;
 };

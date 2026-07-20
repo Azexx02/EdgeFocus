@@ -177,6 +177,15 @@ int report(const char* operation, const CommandResult& result,
             {"sample_age_ms", result.current->sample_age_ms},
         };
     }
+    if (result.maintenance_assist) {
+        output["maintenance_assist"] = {
+            {"target_generation", result.maintenance_assist->target_generation},
+            {"attempted", result.maintenance_assist->attempted},
+            {"exhausted", result.maintenance_assist->exhausted},
+            {"active_ms", result.maintenance_assist->active_ms},
+            {"peak_floor", result.maintenance_assist->peak_floor},
+        };
+    }
     if (!details.empty()) output["details"] = details;
     std::cout << output.dump(2) << '\n';
     return result.success ? 0 : 2;
@@ -364,11 +373,6 @@ int main(int argc, char** argv) {
         if (ok) ok = adopt(service.executeMaintenance(
             {MaintenanceOperation::ArmMaintenance}));
         if (ok) ok = adopt(service.executeMaintenance({MaintenanceOperation::Hold}));
-        auto sample_started = std::chrono::steady_clock::now();
-        if (ok) {
-            sample_started = std::chrono::steady_clock::now();
-            ok = adopt(service.executeMaintenance({MaintenanceOperation::CurrentReset}));
-        }
         if (ok) ok = adopt(service.refreshAngle(1000));
 
         std::optional<double> start_yaw;
@@ -379,6 +383,7 @@ int main(int argc, char** argv) {
         std::optional<double> final_pitch;
         std::optional<std::uint32_t> motion_generation;
         bool motion_settled = false;
+        bool motion_attempted = false;
         if (ok) {
             const auto status = service.status();
             start_yaw = status.yaw_deg;
@@ -406,6 +411,7 @@ int main(int argc, char** argv) {
             }
         }
         if (ok) {
+            motion_attempted = true;
             ok = adopt(service.moveToVerified(*target_yaw, *target_pitch, 5000, 1.0));
             motion_generation = result.motion_generation;
             motion_settled = result.settled;
@@ -414,19 +420,76 @@ int main(int argc, char** argv) {
             final_pitch = status.pitch_deg;
         }
         if (ok) {
-            const auto elapsed = std::chrono::steady_clock::now() - sample_started;
-            if (elapsed < std::chrono::milliseconds(1100)) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(1100) - elapsed);
-            }
-            ok = adopt(service.executeMaintenance({MaintenanceOperation::CurrentRead}));
+            ok = adopt(service.executeMaintenance(
+                {MaintenanceOperation::CurrentReset}));
             result.motion_generation = motion_generation;
             result.settled = motion_settled;
         }
-        if (ok && (!result.current || !result.current->valid ||
-                   result.current->saturated || result.current->window_ms < 1000)) {
-            result.success = false;
-            result.error = "current_sample_not_usable";
-            result.error_code = "CURRENT_SAMPLE_INVALID";
+        if (ok) {
+            const auto current_deadline = std::chrono::steady_clock::now() +
+                                          std::chrono::milliseconds(2000);
+            bool current_usable = false;
+            while (std::chrono::steady_clock::now() < current_deadline) {
+                ok = adopt(service.executeMaintenance(
+                    {MaintenanceOperation::CurrentRead}, 1000));
+                result.motion_generation = motion_generation;
+                result.settled = motion_settled;
+                if (!ok) break;
+                if (result.current && result.current->saturated) {
+                    result.success = false;
+                    result.error = "current_sample_saturated";
+                    result.error_code = "CURRENT_SAMPLE_SATURATED";
+                    ok = false;
+                    break;
+                }
+                if (result.current && result.current->valid &&
+                    result.current->window_ms >= 1000) {
+                    current_usable = true;
+                    break;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+            if (ok && !current_usable) {
+                result.success = false;
+                result.timeout = true;
+                result.error = "current_sample_deadline";
+                result.error_code = "CURRENT_SAMPLE_INVALID";
+                ok = false;
+            }
+        }
+        if (motion_attempted) {
+            auto assist = service.executeMaintenance(
+                {MaintenanceOperation::AssistRead}, 1000);
+            transcript.insert(transcript.end(), assist.transcript.begin(),
+                              assist.transcript.end());
+            if (assist.success && assist.maintenance_assist) {
+                result.maintenance_assist = assist.maintenance_assist;
+                const bool generation_matches = !motion_generation ||
+                    assist.maintenance_assist->target_generation ==
+                        *motion_generation;
+                const bool bounded = assist.maintenance_assist->active_ms <= 300 &&
+                    assist.maintenance_assist->peak_floor <= 180;
+                if (ok && (!generation_matches || !bounded)) {
+                    result.success = false;
+                    result.error = generation_matches
+                        ? "maintenance_assist_bounds_invalid"
+                        : "maintenance_assist_generation_mismatch";
+                    result.error_code = "MAINT_ASSIST_INVALID";
+                    ok = false;
+                }
+            } else {
+                result.failed_steps.push_back("maintenance_assist_read");
+                if (ok) {
+                    result.success = false;
+                    result.timeout = assist.timeout;
+                    result.error = assist.error.empty()
+                        ? "maintenance_assist_read_failed" : assist.error;
+                    result.error_class = assist.error_class;
+                    result.error_code = assist.error_code;
+                    ok = false;
+                }
+            }
+            result.transcript = transcript;
         }
 
         const nlohmann::json details = {

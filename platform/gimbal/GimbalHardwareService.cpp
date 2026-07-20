@@ -699,6 +699,37 @@ CommandResult GimbalHardwareService::executeMaintenanceLocked(
                                  "CURRENT_TELEMETRY_INCOMPLETE");
             }
             break;
+        case MaintenanceOperation::AssistRead:
+            if (std::find(snapshot_.capabilities.begin(),
+                          snapshot_.capabilities.end(),
+                          "MAINT_ASSIST_DIAG") == snapshot_.capabilities.end()) {
+                return failure("maintenance_assist_diagnostic_unavailable",
+                               ErrorClass::Link,
+                               "CAPABILITY_UNAVAILABLE");
+            }
+            result = sendAndWaitLocked(
+                maintenanceAssistCommand(),
+                [](const Event& value) {
+                    return value.kind == EventKind::MaintenanceAssist;
+                }, std::min(timeout_ms, 1000), &event);
+            if (result.success && event.motion_generation &&
+                event.maintenance_assist_attempted &&
+                event.maintenance_assist_exhausted &&
+                event.maintenance_assist_active_ms &&
+                event.maintenance_assist_peak_floor) {
+                result.maintenance_assist = MaintenanceAssistDiagnostics{
+                    *event.motion_generation,
+                    *event.maintenance_assist_attempted,
+                    *event.maintenance_assist_exhausted,
+                    *event.maintenance_assist_active_ms,
+                    *event.maintenance_assist_peak_floor};
+                result.firmware_accepted = true;
+            } else if (result.success) {
+                result = failure("incomplete_maintenance_assist_telemetry",
+                                 ErrorClass::Transient,
+                                 "MAINT_ASSIST_TELEMETRY_INCOMPLETE");
+            }
+            break;
         case MaintenanceOperation::VerifyMotionPattern: {
             if (snapshot_.arm_profile != ArmProfile::Maintenance ||
                 (machine_.status().state != State::Holding &&

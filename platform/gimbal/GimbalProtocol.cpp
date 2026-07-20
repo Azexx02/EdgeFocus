@@ -194,6 +194,10 @@ void parseFields(const std::vector<std::string>& parts, std::size_t begin, Event
     event.current_samples = read_u32("SAMPLES");
     event.current_valid = read_bool("VALID");
     event.current_saturated = read_bool("SATURATED");
+    event.maintenance_assist_attempted = read_bool("ATTEMPTED");
+    event.maintenance_assist_exhausted = read_bool("EXHAUSTED");
+    event.maintenance_assist_active_ms = read_u32("ACTIVE_MS");
+    event.maintenance_assist_peak_floor = read_u32("PEAK_FLOOR");
 }
 
 long ringTenths(double value) {
@@ -255,6 +259,7 @@ Event parseEvent(std::string_view line) {
     else if (head == "VER" || head == "VERSION") event.kind = EventKind::Version;
     else if (head == "POSE") event.kind = EventKind::Pose;
     else if (head == "CURRENT") event.kind = EventKind::Current;
+    else if (head == "MAINTASSIST") event.kind = EventKind::MaintenanceAssist;
     else if (head == "NVM") event.kind = EventKind::Nvm;
     else if (head == "FAULT") event.kind = EventKind::FaultStatus;
     else if (head == "STAT" || head == "STATUS") event.kind = EventKind::Status;
@@ -334,6 +339,7 @@ std::string trackCommand(double yaw_deg, double pitch_deg) {
            std::to_string(ringTenths(pitch_deg));
 }
 std::string poseCommand() { return "POSE"; }
+std::string maintenanceAssistCommand() { return "MAINTASSIST?"; }
 
 double normalizeAngle(double angle_deg) noexcept {
     double normalized = std::fmod(angle_deg, 360.0);

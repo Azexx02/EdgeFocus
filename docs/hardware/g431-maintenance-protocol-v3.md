@@ -52,6 +52,22 @@ gimbal_bringup protect-current-set \
 
 上例的 `0` 只是参数位置示意，工具会拒绝无效组合；必须替换为实测值，且 peak 大于对应 average。
 
+### 3.1 维护 yaw 小角度验证与脱粘诊断
+
+新固件通过 `MAINT_ASSIST_DIAG` 能力声明只读诊断 `MAINTASSIST?`。该辅助仅作用于维护模式 yaw：目标斜坡完成、误差大于 8 raw、速度在 ±1 raw、连续停滞至少 150 ms 时，一次性把既有请求下限每个控制周期提高 2 tick，最高 180，最长 300 ms；生产模式和 pitch 不变。
+
+上板必须分级执行，每一步都确认 STOP、Fault 未触发和诊断边界后才继续：
+
+```sh
+gimbal_bringup maintenance-move --axis yaw --delta-deg 1 --allow-motion --confirm-board
+gimbal_bringup maintenance-move --axis yaw --delta-deg 3 --allow-motion --confirm-board
+gimbal_bringup maintenance-move --axis yaw --delta-deg -3 --allow-motion --confirm-board
+```
+
+每次输出应包含 `maintenance_assist`：其 `target_generation` 与运动 generation 一致，`active_ms <= 300`，`peak_floor <= 180`。到位后工具先执行 `CURRENT RESET`，保持固定目标并每 100 ms 读取一次电流，最多等待 2 秒取得完整、未饱和的 1000 ms 窗口；Fault、饱和或超时均失败。无论成功与否，工具退出前都执行 STOP。
+
+只有三段小角度验证全部通过，才允许继续完整 `current-sample`；本步骤不写入任何电流保护阈值。
+
 ## 4. 生产前验证
 
 ```sh

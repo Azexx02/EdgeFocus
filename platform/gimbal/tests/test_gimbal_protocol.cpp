@@ -74,6 +74,15 @@ int main() {
     assert(event.current_window_ms == 1200 && event.current_samples == 120);
     assert(event.current_valid == true && event.current_saturated == false);
 
+    event = parseEvent(
+        "MAINTASSIST,GEN=42,ATTEMPTED=1,EXHAUSTED=0,ACTIVE_MS=85,PEAK_FLOOR=137");
+    assert(event.kind == EventKind::MaintenanceAssist);
+    assert(event.motion_generation == 42);
+    assert(event.maintenance_assist_attempted == true);
+    assert(event.maintenance_assist_exhausted == false);
+    assert(event.maintenance_assist_active_ms == 85);
+    assert(event.maintenance_assist_peak_floor == 137);
+
     event = parseEvent("ERR,CLASS=COMMAND,CODE=INVALID_STATE");
     assert(event.kind == EventKind::Error);
     assert(event.error_class == ErrorClass::Command);
@@ -101,6 +110,7 @@ int main() {
     assert(armCommand(true) == "ARM MAINTENANCE");
     assert(moveCommand(12.0, -4.5) == "TRACK YP 120 3555");
     assert(trackCommand(-1.0, 4.5) == "TRACK YP 3590 45");
+    assert(maintenanceAssistCommand() == "MAINTASSIST?");
     assert(normalizeAngle(-1.0) == 359.0);
     assert(shortestAngleDelta(359.0, 2.0) == 3.0);
     assert(shortestAngleDelta(2.0, 359.0) == -3.0);
