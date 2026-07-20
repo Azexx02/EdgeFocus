@@ -182,6 +182,20 @@ static void send_current(void)
   uart_protocol_send(response);
 }
 
+static void send_maintenance_assist(void)
+{
+  GimbalMaintenanceStictionDiagnostics diagnostics;
+  char response[160];
+  motor_pwm_get_maintenance_stiction_diagnostics(&diagnostics);
+  snprintf(response, sizeof(response),
+           "MAINTASSIST,GEN=%lu,ATTEMPTED=%u,EXHAUSTED=%u,ACTIVE_MS=%u,PEAK_FLOOR=%u\r\n",
+           (unsigned long)diagnostics.target_generation,
+           diagnostics.attempted ? 1U : 0U,
+           diagnostics.exhausted ? 1U : 0U,
+           diagnostics.active_ms, diagnostics.peak_floor);
+  uart_protocol_send(response);
+}
+
 static void send_stop_response(void)
 {
   char response[96];
@@ -208,12 +222,14 @@ static void execute(const char *line, size_t length)
   }
   if (protocol_busy && command.type != GIMBAL_CMD_STOP &&
       command.type != GIMBAL_CMD_PING && command.type != GIMBAL_CMD_VER &&
-      command.type != GIMBAL_CMD_POSE && command.type != GIMBAL_CMD_FAULT) {
+      command.type != GIMBAL_CMD_POSE && command.type != GIMBAL_CMD_FAULT &&
+      command.type != GIMBAL_CMD_MAINTASSIST) {
     send_error("TRANSIENT", "BUSY");
     return;
   }
   if (command.type != GIMBAL_CMD_HELLO && command.type != GIMBAL_CMD_STOP &&
-      gimbal_protocol_changes_state(command.type) && !hello_complete) {
+      (gimbal_protocol_changes_state(command.type) ||
+       command.type == GIMBAL_CMD_MAINTASSIST) && !hello_complete) {
     send_error("COMMAND", "NEGOTIATION_REQUIRED");
     return;
   }
@@ -227,7 +243,7 @@ static void execute(const char *line, size_t length)
     uart_protocol_send("OK,G431\r\n");
     break;
   case GIMBAL_CMD_VER:
-    uart_protocol_send("VER,PROTO=3.0,FW=G431-GIMBAL,CAPS=ASYNC_MOTION|POSE|ORIGIN|FAULT_CLASS|HOLD_NOW|NVM_V3|NEGOTIATION_REQUIRED,MAX_SPEED10=NA,MAX_ACCEL10=NA,SETTLE_MS=250\r\n");
+    uart_protocol_send("VER,PROTO=3.0,FW=G431-GIMBAL,CAPS=ASYNC_MOTION|POSE|ORIGIN|FAULT_CLASS|HOLD_NOW|NVM_V3|MAINT_ASSIST_DIAG|NEGOTIATION_REQUIRED,MAX_SPEED10=NA,MAX_ACCEL10=NA,SETTLE_MS=250\r\n");
     break;
   case GIMBAL_CMD_HELLO:
     hello_complete = true;
@@ -323,6 +339,9 @@ static void execute(const char *line, size_t length)
     break;
   case GIMBAL_CMD_CURRENT:
     send_current();
+    break;
+  case GIMBAL_CMD_MAINTASSIST:
+    send_maintenance_assist();
     break;
   case GIMBAL_CMD_CURRENT_RESET:
     current_sample_reset_statistics();

@@ -51,6 +51,7 @@ target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     Core/Src/motor_pwm.c
     Core/Src/current_sample.c
     Core/Src/gimbal_power_profile.c
+    Core/Src/gimbal_maintenance_stiction.c
     Core/Src/uart_protocol_v3.c
     Core/Src/gimbal_angle.c
     Core/Src/gimbal_nv.c

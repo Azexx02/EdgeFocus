@@ -8,6 +8,7 @@ enable_testing()
 
 add_library(gimbal_core STATIC
     ../Core/Src/gimbal_angle.c
+    ../Core/Src/gimbal_maintenance_stiction.c
     ../Core/Src/gimbal_power_profile.c
     ../Core/Src/gimbal_nv.c
     ../Core/Src/gimbal_protocol.c)

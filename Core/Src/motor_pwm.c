@@ -4,6 +4,7 @@
 #include "current_sample.h"
 #include "gimbal_angle.h"
 #include "gimbal_config.h"
+#include "gimbal_maintenance_stiction.h"
 #include "gimbal_power_profile.h"
 #include "main.h"
 #include "tim.h"
@@ -91,6 +92,7 @@ static volatile uint32_t hold_watchdog_trips;
 static uint32_t next_hold_tick;
 static uint32_t hold_last_process_tick;
 static volatile uint32_t hold_watchdog_deadline;
+static GimbalMaintenanceStictionState maintenance_stiction;
 
 typedef enum {
   CAL_STAGE_IDLE = 0,
@@ -850,6 +852,7 @@ static uint16_t read_encoder_live(const axis_hardware_t *hardware)
 void motor_pwm_init(void)
 {
   gimbal_power_profile_reset();
+  gimbal_maintenance_stiction_init(&maintenance_stiction);
   set_all_compare(&htim1, 0U);
   set_all_compare(&htim8, 0U);
   axis_home_raw[GIMBAL_AXIS_X] = axis_current_raw(GIMBAL_AXIS_X);
@@ -1238,7 +1241,23 @@ bool motor_pwm_is_enabled(void)
 
 void motor_pwm_set_maintenance_mode(bool enabled)
 {
+  if (gimbal_power_profile_is_maintenance() != enabled) {
+    gimbal_maintenance_stiction_reset_control(&maintenance_stiction);
+  }
   gimbal_power_profile_set_maintenance(enabled);
+}
+
+void motor_pwm_maintenance_stiction_new_target(uint32_t target_generation)
+{
+  gimbal_maintenance_stiction_new_target(&maintenance_stiction,
+                                         target_generation);
+}
+
+void motor_pwm_get_maintenance_stiction_diagnostics(
+    GimbalMaintenanceStictionDiagnostics *diagnostics)
+{
+  gimbal_maintenance_stiction_get_diagnostics(&maintenance_stiction,
+                                              diagnostics);
 }
 
 bool motor_pwm_test(gimbal_axis_t axis)
@@ -1953,6 +1972,7 @@ void motor_pwm_hold_enable(bool enabled)
 {
   if (!enabled) {
     hold_enabled = false;
+    gimbal_maintenance_stiction_reset_control(&maintenance_stiction);
     axis_hardware_t x_hardware = get_axis_hardware(GIMBAL_AXIS_X);
     axis_hardware_t y_hardware = get_axis_hardware(GIMBAL_AXIS_Y);
     stop_axis(&x_hardware);
@@ -2389,6 +2409,7 @@ void motor_pwm_hold_process(void)
 
     int8_t requested_torque_sign = control_error >= 0 ? 1 : -1;
     uint32_t duty_target;
+    bool stiction_release_immediately = false;
     uint32_t effort_abs = control_error < 0 ?
                           (uint32_t)-control_error :
                           (uint32_t)control_error;
@@ -2440,6 +2461,25 @@ void motor_pwm_hold_process(void)
         duty_target = axis_hold_duty(axis);
       }
     }
+    if (axis == GIMBAL_AXIS_Y) {
+      GimbalMaintenanceStictionInput stiction_input;
+      GimbalMaintenanceStictionOutput stiction_output;
+      stiction_input.maintenance_yaw =
+          gimbal_power_profile_is_maintenance();
+      stiction_input.target_ramp_complete = target_delta_abs <= 2;
+      stiction_input.settled = hold_settled[axis];
+      stiction_input.error_abs = error_abs;
+      stiction_input.speed_raw = speed;
+      stiction_input.requested_magnitude = (uint16_t)duty_target;
+      stiction_input.requested_direction = torque_sign;
+      stiction_input.maximum_magnitude = (uint16_t)axis_hold_duty(axis);
+      stiction_input.now_ms = now;
+      stiction_output = gimbal_maintenance_stiction_update(
+          &maintenance_stiction, &stiction_input);
+      duty_target = stiction_output.magnitude;
+      torque_sign = stiction_output.direction;
+      stiction_release_immediately = stiction_output.release_immediately;
+    }
     if (torque_sign != 0) {
       hold_torque_sign[axis] = torque_sign;
     }
@@ -2449,8 +2489,9 @@ void motor_pwm_hold_process(void)
            hold_startup_cycles) / GIMBAL_FOC_STARTUP_CYCLES;
       if (duty_target > startup_limit) duty_target = startup_limit;
     }
-    uint32_t duty = slew_u32(hold_duty_ticks[axis], duty_target,
-                             GIMBAL_FOC_DUTY_SLEW_TICKS);
+    uint32_t duty = stiction_release_immediately ? duty_target :
+        slew_u32(hold_duty_ticks[axis], duty_target,
+                 GIMBAL_FOC_DUTY_SLEW_TICKS);
     active_duty_ticks = duty;
     hold_duty_ticks[axis] = (uint16_t)duty;
 
@@ -2478,6 +2519,7 @@ void motor_pwm_hold_watchdog(void)
   if ((int32_t)(now - hold_watchdog_deadline) < 0) return;
 
   hold_enabled = false;
+  gimbal_maintenance_stiction_reset_control(&maintenance_stiction);
   all_motors_enabled = false;
   htim1.Instance->CCER &= ~ALL_PHASE_OUTPUTS;
   htim8.Instance->CCER &= ~ALL_PHASE_OUTPUTS;

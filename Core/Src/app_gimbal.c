@@ -293,6 +293,7 @@ AppGimbalResult app_gimbal_hold_now(uint32_t *generation)
     return APP_GIMBAL_DRIVER_FAULT;
   }
   ++motion_generation;
+  motor_pwm_maintenance_stiction_new_target(motion_generation);
   runtime_state = GIMBAL_STATE_HOLDING;
   if (generation != NULL) *generation = motion_generation;
   return APP_GIMBAL_OK;
@@ -312,6 +313,7 @@ AppGimbalResult app_gimbal_track(uint16_t yaw10, uint16_t pitch10,
     return APP_GIMBAL_DRIVER_FAULT;
   }
   ++motion_generation;
+  motor_pwm_maintenance_stiction_new_target(motion_generation);
   runtime_state = GIMBAL_STATE_MOVING;
   if (generation != NULL) *generation = motion_generation;
   return APP_GIMBAL_OK;

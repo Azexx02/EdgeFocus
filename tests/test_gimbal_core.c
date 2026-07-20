@@ -1,4 +1,5 @@
 #include "gimbal_angle.h"
+#include "gimbal_maintenance_stiction.h"
 #include "gimbal_nv.h"
 #include "gimbal_power_profile.h"
 #include "gimbal_protocol.h"
@@ -107,6 +108,124 @@ static void test_power_profile_isolation_and_reset(void) {
     assert(!gimbal_power_profile_is_maintenance());
     assert(gimbal_power_profile_hold_max(GIMBAL_POWER_AXIS_P) == 360U);
     assert(gimbal_power_profile_hold_max(GIMBAL_POWER_AXIS_Y) == 520U);
+}
+
+static GimbalMaintenanceStictionInput stalled_input(uint32_t now_ms,
+                                                     int8_t direction) {
+    GimbalMaintenanceStictionInput input;
+    memset(&input, 0, sizeof(input));
+    input.maintenance_yaw = true;
+    input.target_ramp_complete = true;
+    input.error_abs = 16U;
+    input.speed_raw = 0;
+    input.requested_magnitude = 101U;
+    input.requested_direction = direction;
+    input.maximum_magnitude = 180U;
+    input.now_ms = now_ms;
+    return input;
+}
+
+static void test_maintenance_stiction_isolation_and_direction(void) {
+    GimbalMaintenanceStictionState state;
+    GimbalMaintenanceStictionInput input = stalled_input(0U, 1);
+    GimbalMaintenanceStictionOutput output;
+    gimbal_maintenance_stiction_init(&state);
+    gimbal_maintenance_stiction_new_target(&state, 7U);
+
+    input.maintenance_yaw = false;
+    output = gimbal_maintenance_stiction_update(&state, &input);
+    assert(output.magnitude == 101U && output.direction == 1);
+    input.maintenance_yaw = true;
+    input.target_ramp_complete = false;
+    output = gimbal_maintenance_stiction_update(&state, &input);
+    assert(output.magnitude == 101U && output.direction == 1);
+    input.target_ramp_complete = true;
+    input.settled = true;
+    output = gimbal_maintenance_stiction_update(&state, &input);
+    assert(output.magnitude == 101U && output.direction == 1);
+
+    gimbal_maintenance_stiction_new_target(&state, 8U);
+    input = stalled_input(1000U, -1);
+    output = gimbal_maintenance_stiction_update(&state, &input);
+    assert(output.magnitude == 101U && output.direction == -1);
+    input.now_ms = 1149U;
+    output = gimbal_maintenance_stiction_update(&state, &input);
+    assert(output.magnitude == 101U && output.direction == -1);
+    input.now_ms = 1150U;
+    output = gimbal_maintenance_stiction_update(&state, &input);
+    assert(output.magnitude == 103U && output.direction == -1);
+}
+
+static void test_maintenance_stiction_time_bounds_and_wrap(void) {
+    GimbalMaintenanceStictionState state;
+    GimbalMaintenanceStictionInput input;
+    GimbalMaintenanceStictionOutput output;
+    GimbalMaintenanceStictionDiagnostics diagnostics;
+    gimbal_maintenance_stiction_init(&state);
+    gimbal_maintenance_stiction_new_target(&state, 9U);
+    input = stalled_input(UINT32_MAX - 99U, 1);
+    output = gimbal_maintenance_stiction_update(&state, &input);
+    assert(output.magnitude == 101U);
+    input.now_ms = 0U;
+    output = gimbal_maintenance_stiction_update(&state, &input);
+    assert(output.magnitude == 101U);
+    input.now_ms = 50U;
+    output = gimbal_maintenance_stiction_update(&state, &input);
+    assert(output.magnitude == 103U);
+    input.now_ms = 70U;
+    output = gimbal_maintenance_stiction_update(&state, &input);
+    assert(output.magnitude == 105U);
+    input.now_ms = 349U;
+    output = gimbal_maintenance_stiction_update(&state, &input);
+    assert(output.magnitude == 107U);
+    input.now_ms = 350U;
+    output = gimbal_maintenance_stiction_update(&state, &input);
+    assert(output.magnitude == 101U && output.release_immediately);
+    gimbal_maintenance_stiction_get_diagnostics(&state, &diagnostics);
+    assert(diagnostics.target_generation == 9U);
+    assert(diagnostics.attempted && diagnostics.exhausted);
+    assert(diagnostics.active_ms == 300U);
+    assert(diagnostics.peak_floor == 107U);
+
+    input.now_ms = 1000U;
+    output = gimbal_maintenance_stiction_update(&state, &input);
+    assert(output.magnitude == 101U && !state.active);
+}
+
+static void test_maintenance_stiction_reset_and_snapshot(void) {
+    GimbalMaintenanceStictionState state;
+    GimbalMaintenanceStictionInput input = stalled_input(100U, 1);
+    GimbalMaintenanceStictionOutput output;
+    GimbalMaintenanceStictionDiagnostics diagnostics;
+    gimbal_maintenance_stiction_init(&state);
+    gimbal_maintenance_stiction_new_target(&state, 10U);
+    (void)gimbal_maintenance_stiction_update(&state, &input);
+    input.now_ms = 250U;
+    output = gimbal_maintenance_stiction_update(&state, &input);
+    assert(output.magnitude == 103U);
+    input.now_ms = 255U;
+    input.speed_raw = 2;
+    output = gimbal_maintenance_stiction_update(&state, &input);
+    assert(output.magnitude == 101U && !state.active &&
+           output.release_immediately);
+    input.speed_raw = 0;
+    input.now_ms = 1000U;
+    output = gimbal_maintenance_stiction_update(&state, &input);
+    assert(output.magnitude == 101U && !state.active);
+
+    gimbal_maintenance_stiction_reset_control(&state);
+    gimbal_maintenance_stiction_get_diagnostics(&state, &diagnostics);
+    assert(diagnostics.target_generation == 10U);
+    assert(diagnostics.attempted && diagnostics.active_ms == 5U);
+    input.requested_direction = 0;
+    output = gimbal_maintenance_stiction_update(&state, &input);
+    assert(output.magnitude == 101U && output.direction == 0);
+
+    gimbal_maintenance_stiction_new_target(&state, 11U);
+    gimbal_maintenance_stiction_get_diagnostics(&state, &diagnostics);
+    assert(diagnostics.target_generation == 11U);
+    assert(!diagnostics.attempted && !diagnostics.exhausted &&
+           diagnostics.active_ms == 0U && diagnostics.peak_floor == 0U);
 }
 
 static void test_encoding_and_selection(void) {
@@ -226,6 +345,13 @@ static void test_protocol_parser_and_state_matrix(void) {
     command = parse_ok("PROTECT CURRENT SET P_PEAK=900 P_AVG=500 Y_PEAK=850 Y_AVG=450 STALL_MS=250");
     assert(command.argument.protection.p_peak == 900U);
     assert(command.argument.protection.stall_ms == 250U);
+    command = parse_ok("MAINTASSIST?");
+    assert(command.type == GIMBAL_CMD_MAINTASSIST);
+    assert(!gimbal_protocol_changes_state(command.type));
+    assert(gimbal_protocol_command_allowed(GIMBAL_STATE_DISABLED,
+                                           command.type));
+    assert(gimbal_protocol_command_allowed(GIMBAL_STATE_MOVING,
+                                           command.type));
 
     assert(gimbal_protocol_parse("track YP 0 0", 12U, &command) ==
            GIMBAL_PARSE_UNKNOWN_COMMAND);
@@ -310,6 +436,9 @@ static void test_rx_fragmentation_sticky_lines_and_emergency(void) {
 int main(void) {
     test_angles();
     test_power_profile_isolation_and_reset();
+    test_maintenance_stiction_isolation_and_direction();
+    test_maintenance_stiction_time_bounds_and_wrap();
+    test_maintenance_stiction_reset_and_snapshot();
     test_encoding_and_selection();
     test_atomic_store_and_tombstones();
     test_protocol_parser_and_state_matrix();

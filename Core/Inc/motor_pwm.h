@@ -4,6 +4,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "gimbal_maintenance_stiction.h"
 #include "gimbal_nv.h"
 
 /* 逻辑云台轴。物理接口映射集中在 motor_pwm.c 中维护。 */
@@ -76,6 +77,9 @@ uint8_t motor_pwm_calibration_progress(void);
 bool motor_pwm_set_enabled(bool enabled);
 bool motor_pwm_is_enabled(void);
 void motor_pwm_set_maintenance_mode(bool enabled);
+void motor_pwm_maintenance_stiction_new_target(uint32_t target_generation);
+void motor_pwm_get_maintenance_stiction_diagnostics(
+    GimbalMaintenanceStictionDiagnostics *diagnostics);
 
 /* FOC 小角度往返测试，结束或故障后自动关闭输出。 */
 bool motor_pwm_test(gimbal_axis_t axis);
