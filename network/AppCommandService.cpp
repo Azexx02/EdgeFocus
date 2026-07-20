@@ -127,17 +127,42 @@ json stableSessionSnapshotData(const session::SessionSnapshot& value) {
         }},
         {"gimbal", {
             {"state", value.gimbal.state},
-            {"available", value.gimbal.health.available},
+            {"protocol_version", value.gimbal.protocol_version},
+            {"capabilities", value.gimbal.capabilities},
+            {"available", value.gimbal.available},
+            {"degraded_reason", value.gimbal.degraded_reason},
+            {"link_health", value.gimbal.link_health},
+            {"control_mode", value.gimbal.control_mode},
             {"degraded", value.gimbal.health.degraded},
             {"health_status", value.gimbal.health.status},
             {"angle_x", value.gimbal.angle_x ? json(*value.gimbal.angle_x) : json(nullptr)},
             {"angle_y", value.gimbal.angle_y ? json(*value.gimbal.angle_y) : json(nullptr)},
+            {"current_yaw10", value.gimbal.current_yaw10 ? json(*value.gimbal.current_yaw10) : json(nullptr)},
+            {"current_pitch10", value.gimbal.current_pitch10 ? json(*value.gimbal.current_pitch10) : json(nullptr)},
+            {"target_yaw10", value.gimbal.target_yaw10 ? json(*value.gimbal.target_yaw10) : json(nullptr)},
+            {"target_pitch10", value.gimbal.target_pitch10 ? json(*value.gimbal.target_pitch10) : json(nullptr)},
+            {"motion_generation", value.gimbal.motion_generation ? json(*value.gimbal.motion_generation) : json(nullptr)},
+            {"settled", value.gimbal.settled},
             {"manual_lease", value.gimbal.manual_lease},
+            {"lease_owner_id", value.gimbal.lease_owner_id},
+            {"lease_epoch", value.gimbal.lease_epoch},
+            {"lease_expires_at", value.gimbal.lease_expires_at_ms},
             {"search_generation", value.gimbal.search_generation},
             {"waypoint_index", value.gimbal.waypoint_index},
             {"subject_found", value.gimbal.subject_found},
+            {"search_completed", value.gimbal.search_completed},
+            {"calibration_valid", value.gimbal.calibration_valid},
+            {"calibration_epoch", value.gimbal.calibration_epoch},
+            {"origin_valid", value.gimbal.origin_valid},
+            {"origin_epoch", value.gimbal.origin_epoch},
             {"recoverable", value.gimbal.recoverable},
+            {"fault_class", value.gimbal.fault_class},
+            {"fault_code", value.gimbal.fault_code},
             {"fault_latched_reason", value.gimbal.fault_latched_reason},
+            {"last_pose_age_ms", value.gimbal.last_pose_age_ms},
+            {"last_queued_sequence", value.gimbal.last_queued_sequence},
+            {"acked_through_sequence", value.gimbal.acked_through_sequence},
+            {"current_protection_state", value.gimbal.current_protection_state},
             {"detail", value.gimbal.detail}
         }},
         {"degraded_features", value.degraded_features}
@@ -810,8 +835,10 @@ std::string AppCommandService::handleCommand(const std::string& json_cmd) {
         if (cmd == "event_ack")                return handleEventAck(data, req_id);
         if (cmd == "set_power_profile")         return handleSetPowerProfile(data, req_id);
         if (cmd == "band_control")              return handleBandControl(data, req_id);
-        if (cmd == "gimbal_nudge" || cmd == "gimbal_center" ||
-            cmd == "gimbal_stop" || cmd == "gimbal_realign" ||
+        if (cmd == "gimbal_manual_takeover" || cmd == "gimbal_lease_keepalive" ||
+            cmd == "gimbal_nudge" || cmd == "gimbal_center" ||
+            cmd == "gimbal_stop" || cmd == "gimbal_release" ||
+            cmd == "gimbal_force_release" || cmd == "gimbal_recover" ||
             cmd == "precheck_skip_auto_adjust" ||
             cmd == "precheck_confirm_position") {
             return handleGimbalPrecheckCommand(cmd, data, req_id);
@@ -915,8 +942,9 @@ std::string AppCommandService::handleGimbalPrecheckCommand(
     if (!gimbal_precheck_ || !session_orchestrator_) {
         return makeError(req_id, "Gimbal PRECHECK feature disabled");
     }
-    if (session_orchestrator_->phase() != session::Phase::Precheck) {
-        return makeError(req_id, "Gimbal control is only available during PRECHECK");
+    const auto phase = session_orchestrator_->phase();
+    if (phase != session::Phase::Precheck && phase != session::Phase::Focusing) {
+        return makeError(req_id, "Gimbal control is only available during PRECHECK or FOCUSING");
     }
     if (!data.contains("session_id") || !data["session_id"].is_string()) {
         return makeError(req_id, "session_id is required");
@@ -929,27 +957,55 @@ std::string AppCommandService::handleGimbalPrecheckCommand(
     const auto now_ms = monotonicMs();
     gimbal::CommandResult result;
     if (command == "precheck_skip_auto_adjust") {
-        result = gimbal_precheck_->skipAuto(session_id, sequence, now_ms);
-    } else if (command == "gimbal_nudge") {
-        if (!data.contains("direction") || !data["direction"].is_string()) {
-            return makeError(req_id, "direction must be UP, DOWN, LEFT or RIGHT");
+        if (phase != session::Phase::Precheck) {
+            return makeError(req_id, "Automatic adjustment can only be skipped during PRECHECK");
         }
-        const auto direction = lowerCopy(data["direction"].get<std::string>());
-        gimbal::NudgeDirection parsed;
-        if (direction == "left") parsed = gimbal::NudgeDirection::Left;
-        else if (direction == "right") parsed = gimbal::NudgeDirection::Right;
-        else if (direction == "up") parsed = gimbal::NudgeDirection::Up;
-        else if (direction == "down") parsed = gimbal::NudgeDirection::Down;
-        else return makeError(req_id, "direction must be UP, DOWN, LEFT or RIGHT");
-        result = gimbal_precheck_->nudge(session_id, sequence, parsed, now_ms);
-    } else if (command == "gimbal_center") {
-        result = gimbal_precheck_->center(session_id, sequence, now_ms);
-    } else if (command == "gimbal_stop") {
-        result = gimbal_precheck_->stopMotion(session_id, sequence, now_ms);
-    } else if (command == "gimbal_realign") {
+        result = gimbal_precheck_->skipAuto(session_id, sequence, now_ms);
+    } else if (command == "gimbal_recover") {
         result = gimbal_precheck_->realign(session_id, sequence, now_ms);
+    } else if (command == "gimbal_manual_takeover") {
+        if (!data.contains("owner_id") || !data["owner_id"].is_string()) {
+            return makeError(req_id, "owner_id is required");
+        }
+        result = gimbal_precheck_->manualTakeover(
+            session_id, data["owner_id"].get<std::string>(), sequence,
+            phase, now_ms);
     } else {
-        result = gimbal_precheck_->confirmPosition(session_id, sequence, now_ms);
+        if (!data.contains("owner_id") || !data["owner_id"].is_string() ||
+            !data.contains("lease_token") || !data["lease_token"].is_string()) {
+            return makeError(req_id, "owner_id and lease_token are required");
+        }
+        const gimbal::ManualCommandContext lease{
+            session_id, data["owner_id"].get<std::string>(),
+            data["lease_token"].get<std::string>(), sequence};
+        if (command == "gimbal_lease_keepalive") {
+            result = gimbal_precheck_->keepManualLease(lease, phase, now_ms);
+        } else if (command == "gimbal_nudge") {
+            if (!data.contains("direction") || !data["direction"].is_string()) {
+                return makeError(req_id, "direction must be UP, DOWN, LEFT or RIGHT");
+            }
+            const auto direction = lowerCopy(data["direction"].get<std::string>());
+            gimbal::NudgeDirection parsed;
+            if (direction == "left") parsed = gimbal::NudgeDirection::Left;
+            else if (direction == "right") parsed = gimbal::NudgeDirection::Right;
+            else if (direction == "up") parsed = gimbal::NudgeDirection::Up;
+            else if (direction == "down") parsed = gimbal::NudgeDirection::Down;
+            else return makeError(req_id, "direction must be UP, DOWN, LEFT or RIGHT");
+            result = gimbal_precheck_->nudge(lease, parsed, now_ms);
+        } else if (command == "gimbal_center") {
+            result = gimbal_precheck_->center(lease, now_ms);
+        } else if (command == "gimbal_stop") {
+            result = gimbal_precheck_->stopMotion(lease, now_ms);
+        } else if (command == "gimbal_release") {
+            result = gimbal_precheck_->releaseManualControl(lease, phase, now_ms);
+        } else if (command == "gimbal_force_release") {
+            if (!data.value("confirmed", false)) {
+                return makeError(req_id, "gimbal_force_release requires confirmed=true");
+            }
+            result = gimbal_precheck_->forceRelease(lease, phase, now_ms);
+        } else {
+            result = gimbal_precheck_->confirmPosition(lease, phase, now_ms);
+        }
     }
     if (!result.success) {
         return makeError(req_id, result.error.empty() ? "Gimbal command failed" : result.error);
@@ -959,9 +1015,19 @@ std::string AppCommandService::handleGimbalPrecheckCommand(
         {"accepted", true},
         {"state", gimbal::precheckStateName(status.state)},
         {"manual_lease", status.manual_lease},
+        {"lease_owner_id", status.lease_owner_id},
+        {"lease_token", status.lease_token},
+        {"lease_epoch", status.lease_epoch},
+        {"lease_expires_at", status.lease_expires_at_ms},
         {"search_generation", status.generation},
         {"waypoint_index", status.waypoint_index},
         {"subject_found", status.subject_found},
+        {"search_completed", status.search_completed},
+        {"queued", result.queued},
+        {"firmware_accepted", result.firmware_accepted},
+        {"settled", result.settled},
+        {"motion_generation", result.motion_generation
+             ? json(*result.motion_generation) : json(nullptr)},
         {"detail", status.detail}
     });
 }
@@ -1328,7 +1394,10 @@ std::string AppCommandService::handleClientHello(const json& data, int req_id) {
     json server_capabilities = json::array({
         "event_ack_v1", "event_dedupe_v1", "phone_heartbeat_v1",
         "external_power_v1", "power_profile_override_v1"});
-    if (gimbal_precheck_) server_capabilities.push_back("gimbal_precheck_v1");
+    if (gimbal_precheck_) {
+        server_capabilities.push_back("gimbal_session_control_v3");
+        server_capabilities.push_back("gimbal_manual_lease_v1");
+    }
     if (device_manager_) server_capabilities.push_back("band_proxy_control_v1");
     return makeResponse(req_id, {{"schema_version", "2.1"},
                                  {"reliable_push", reliable},
@@ -1661,6 +1730,42 @@ std::string AppCommandService::handleGetGimbalStatus(int req_id) {
         status["last_error"] = hardware.fault_latched_reason;
         status["state"] = gimbal::precheckStateName(precheck.state);
         status["manual_lease"] = precheck.manual_lease;
+        status["lease_owner_id"] = precheck.lease_owner_id;
+        status["lease_epoch"] = precheck.lease_epoch;
+        status["lease_expires_at"] = precheck.lease_expires_at_ms;
+        status["search_completed"] = precheck.search_completed;
+        status["protocol_version"] = hardware.snapshot.protocol_version;
+        status["capabilities"] = hardware.snapshot.capabilities;
+        status["available"] = hardware.snapshot.available;
+        status["degraded_reason"] = hardware.snapshot.degraded_reason;
+        switch (hardware.snapshot.link_health) {
+            case gimbal::LinkHealth::Unavailable: status["link_health"] = "unavailable"; break;
+            case gimbal::LinkHealth::Negotiating: status["link_health"] = "negotiating"; break;
+            case gimbal::LinkHealth::Healthy: status["link_health"] = "healthy"; break;
+            case gimbal::LinkHealth::Degraded: status["link_health"] = "degraded"; break;
+        }
+        status["control_mode"] = gimbal::controlModeName(hardware.snapshot.control_mode);
+        status["current_yaw10"] = hardware.snapshot.current_yaw10
+            ? json(*hardware.snapshot.current_yaw10) : json(nullptr);
+        status["current_pitch10"] = hardware.snapshot.current_pitch10
+            ? json(*hardware.snapshot.current_pitch10) : json(nullptr);
+        status["target_yaw10"] = hardware.snapshot.target_yaw10
+            ? json(*hardware.snapshot.target_yaw10) : json(nullptr);
+        status["target_pitch10"] = hardware.snapshot.target_pitch10
+            ? json(*hardware.snapshot.target_pitch10) : json(nullptr);
+        status["motion_generation"] = hardware.snapshot.motion_generation
+            ? json(*hardware.snapshot.motion_generation) : json(nullptr);
+        status["settled"] = hardware.snapshot.settled;
+        status["calibration_valid"] = hardware.snapshot.calibration_valid;
+        status["calibration_epoch"] = hardware.snapshot.calibration_epoch;
+        status["origin_valid"] = hardware.snapshot.origin_valid;
+        status["origin_epoch"] = hardware.snapshot.origin_epoch;
+        status["fault_class"] = gimbal::errorClassName(hardware.snapshot.fault_class);
+        status["fault_code"] = hardware.snapshot.fault_code;
+        status["last_pose_age_ms"] = hardware.snapshot.last_pose_age_ms;
+        status["last_queued_sequence"] = hardware.snapshot.last_queued_sequence;
+        status["acked_through_sequence"] = hardware.snapshot.acked_through_sequence;
+        status["current_protection_state"] = hardware.snapshot.current_protection_state;
         status["detail"] = precheck.detail;
     }
     return makeResponse(req_id, status);

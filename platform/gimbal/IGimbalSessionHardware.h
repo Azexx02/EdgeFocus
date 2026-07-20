@@ -22,6 +22,7 @@ public:
     virtual CommandResult hold(int timeout_ms = 1000) = 0;
     virtual CommandResult refreshAngle(int timeout_ms = 500) = 0;
     virtual CommandResult freezeAtCurrent(int timeout_ms = 2000) = 0;
+    virtual CommandResult recover(int timeout_ms = 5000) = 0;
 };
 
 }  // namespace edgefocus::gimbal

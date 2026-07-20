@@ -824,6 +824,14 @@ CommandResult GimbalHardwareService::probeRecovery() {
     return submit([this] { return probeRecoveryLocked(); }, 5000);
 }
 
+CommandResult GimbalHardwareService::recover(int timeout_ms) {
+    if (timeout_ms <= 0) {
+        return failure("invalid_recovery_timeout", ErrorClass::Command,
+                       "BAD_ARGUMENT");
+    }
+    return submit([this] { return probeRecoveryLocked(); }, timeout_ms);
+}
+
 CommandResult GimbalHardwareService::probeRecoveryLocked() {
     if (!initialized_) return failure("not_initialized", ErrorClass::Link, "NOT_INITIALIZED");
     std::string error;

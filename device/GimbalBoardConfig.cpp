@@ -17,15 +17,9 @@ std::int64_t continuousDeadlineMs(double yaw_distance,
                                   double pitch_distance,
                                   double speed_deg_s) {
     return static_cast<std::int64_t>(std::max(
-        3000.0,
+        1200.0,
         std::max(yaw_distance, pitch_distance) / speed_deg_s * 1000.0 +
-            1500.0));
-}
-
-double positiveCircularDistance(double from, double to) {
-    double distance = std::fmod(to - from, 360.0);
-    if (distance < 0.0) distance += 360.0;
-    return distance;
+            700.0));
 }
 
 }  // namespace
@@ -40,7 +34,7 @@ GimbalBoardConfig loadGimbalBoardConfig(const std::string& path) {
     try {
         nlohmann::json config;
         stream >> config;
-        if (config.value("schema_version", 0) != 2) {
+        if (config.value("schema_version", 0) != 3) {
             result.error = "unsupported_gimbal_board_schema";
             return result;
         }
@@ -68,50 +62,53 @@ GimbalBoardConfig loadGimbalBoardConfig(const std::string& path) {
             result.limits.pitch_max_offset_deg = numberOrNone(window, "pitch_max");
         }
         const auto nudge = numberOrNone(config, "small_nudge_deg");
-        result.precheck.relative_to_alignment = true;
+        result.precheck.relative_to_alignment = false;
         result.precheck.center = Waypoint{0.0, 0.0};
-        if (nudge) result.precheck.nudge_step_deg = *nudge;
+        result.precheck.nudge_step_deg = nudge.value_or(5.0);
 
         if (config.contains("search") && config["search"].is_object()) {
             const auto& search = config["search"];
-            const double yaw_min = search.value("yaw_min", -45.0);
-            const double yaw_max = search.value("yaw_max", 45.0);
-            const double pitch_min = search.value("pitch_min", -20.0);
-            const double pitch_max = search.value("pitch_max", 20.0);
-            const double speed = search.value("verified_min_speed_deg_s", 10.0);
-            const double vertical_fov =
-                search.value("effective_vertical_fov_deg", 50.0);
-            const double recovery_extent =
-                search.value("full_pitch_recovery_extent_deg", 0.0);
+            const double yaw_extent = search.value("yaw_extent_deg", 35.0);
+            const double pitch_extent = search.value("pitch_extent_deg", 25.0);
+            const double speed = search.value("profile_min_speed_deg_s", 20.0);
             result.precheck.initial_observe_ms =
-                search.value("initial_observe_ms", 1000LL);
+                search.value("initial_observe_ms", 600LL);
+            result.precheck.waypoint_period_ms =
+                search.value("waypoint_observe_ms", 350LL);
             result.precheck.stop_queueing_ms =
-                search.value("stop_queueing_ms", 72000LL);
+                search.value("stop_queueing_ms", 23000LL);
             result.precheck.hard_deadline_ms =
-                search.value("hard_deadline_ms", 75000LL);
+                search.value("hard_deadline_ms", 24000LL);
             result.precheck.visual_fresh_ms =
                 search.value("visual_fresh_ms", 600LL);
+            result.precheck.subject_stable_ms =
+                search.value("subject_stable_ms", 300LL);
+            result.precheck.subject_observations =
+                search.value("subject_observations", 2U);
             result.precheck.candidate_centering_ms =
                 search.value("candidate_centering_ms", 3000LL);
             result.precheck.framing_window_ms =
                 search.value("framing_window_ms", 1200LL);
             result.precheck.framing_pass_score =
                 search.value("framing_pass_score", 0.65);
+            result.precheck.settle_buffer_ms =
+                search.value("settle_buffer_ms", 200LL);
+            result.precheck.manual_lease_ttl_ms =
+                search.value("manual_lease_ttl_ms", 30000LL);
+            result.precheck.timing_source =
+                search.value("timing_source", std::string{});
 
-            if (yaw_min >= 0.0 || yaw_max <= 0.0 ||
-                pitch_min >= 0.0 || pitch_max <= 0.0 || speed <= 0.0 ||
-                vertical_fov <= 0.0 || recovery_extent <= 90.0 ||
-                recovery_extent >= 180.0) {
+            if (yaw_extent <= 0.0 || yaw_extent > 70.0 ||
+                pitch_extent <= 0.0 || pitch_extent > 70.0 || speed <= 0.0 ||
+                result.precheck.timing_source.empty()) {
                 result.error = "invalid_gimbal_search_geometry";
                 return result;
             }
             double previous_yaw = 0.0;
             double previous_pitch = 0.0;
             const std::vector<std::pair<double, double>> primary = {
-                {yaw_min, 0.0}, {yaw_max, 0.0},
-                {yaw_max, pitch_max}, {yaw_min, pitch_max},
-                {yaw_min, pitch_min}, {yaw_max, pitch_min},
-                {0.0, 0.0}};
+                {-yaw_extent, 0.0}, {yaw_extent, 0.0},
+                {0.0, -pitch_extent}, {0.0, pitch_extent}};
             for (const auto& target : primary) {
                 result.precheck.search_waypoints.push_back({
                     target.first, target.second,
@@ -120,36 +117,6 @@ GimbalBoardConfig loadGimbalBoardConfig(const std::string& path) {
                         std::abs(target.second - previous_pitch), speed)});
                 previous_yaw = target.first;
                 previous_pitch = target.second;
-            }
-
-            const double spacing_limit = vertical_fov * 0.80;
-            const auto half_steps = static_cast<std::size_t>(
-                std::ceil(recovery_extent / spacing_limit));
-            if (half_steps == 0) {
-                result.error = "invalid_gimbal_recovery_geometry";
-                return result;
-            }
-            std::vector<double> recovery{0.0};
-            for (std::size_t step = 1; step <= half_steps; ++step) {
-                recovery.push_back(
-                    recovery_extent * static_cast<double>(step) /
-                    static_cast<double>(half_steps));
-            }
-            recovery.push_back(-recovery_extent);
-            for (std::size_t step = half_steps - 1; step > 0; --step) {
-                recovery.push_back(
-                    -recovery_extent * static_cast<double>(step) /
-                    static_cast<double>(half_steps));
-            }
-            recovery.push_back(0.0);
-            previous_pitch = 0.0;
-            for (const double pitch : recovery) {
-                const double distance =
-                    positiveCircularDistance(previous_pitch, pitch);
-                result.precheck.recovery_waypoints.push_back({
-                    0.0, pitch,
-                    continuousDeadlineMs(0.0, distance, speed)});
-                previous_pitch = pitch;
             }
         }
 
@@ -163,8 +130,7 @@ GimbalBoardConfig loadGimbalBoardConfig(const std::string& path) {
             const auto down = numberOrNone(offsets, "down");
             if (left && right && up && down) {
                 result.precheck.search_waypoints = {
-                    {*left, 0.0}, {*right, 0.0}, {0.0, *up}, {0.0, *down},
-                    {*left, *up}, {*right, *up}, {*left, *down}, {*right, *down}
+                    {*left, 0.0}, {*right, 0.0}, {0.0, *down}, {0.0, *up}
                 };
             }
         }

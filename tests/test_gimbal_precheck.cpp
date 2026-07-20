@@ -1,5 +1,5 @@
-#include "device/GimbalPrecheckController.h"
 #include "device/GimbalBoardConfig.h"
+#include "device/GimbalPrecheckController.h"
 
 #include <cassert>
 #include <iostream>
@@ -13,81 +13,99 @@ namespace {
 
 class FakeHardware final : public IGimbalSessionHardware {
 public:
-    Status status() const override { return current; }
+    FakeHardware() {
+        current.snapshot.calibration_valid = true;
+        current.snapshot.origin_valid = true;
+        current.snapshot.current_protection_state = "CONFIGURED";
+    }
 
+    Status status() const override { return current; }
     CommandResult enableAndAlign(int) override {
         calls.push_back("align");
-        if (!align_success) return {false, false, "align_failed"};
+        if (!align_success) {
+            CommandResult result{false, false, align_error};
+            result.error_code = align_code;
+            return result;
+        }
         current.state = State::Ready;
         current.recoverable = false;
         return {true};
     }
-
     CommandResult stopAndDisable(int) override {
         calls.push_back("disable");
         current.state = State::Disabled;
         return {true};
     }
-
     CommandResult moveTo(double yaw, double pitch, int) override {
-        calls.push_back("move:" + std::to_string(yaw) + "," + std::to_string(pitch));
+        calls.push_back("move:" + std::to_string(yaw) + "," +
+                        std::to_string(pitch));
+        targets.push_back({yaw, pitch});
         if (!move_success) return {false, false, move_error};
         current.state = State::Holding;
-        current.yaw_deg = yaw;
-        current.pitch_deg = pitch;
+        if (update_measurements) {
+            current.yaw_deg = yaw;
+            current.pitch_deg = pitch;
+        }
         return {true};
     }
-
     CommandResult moveToVerified(double yaw, double pitch, int timeout_ms,
                                  double) override {
         return moveTo(yaw, pitch, timeout_ms);
     }
-
     CommandResult moveToManualVerified(double yaw, double pitch, int timeout_ms,
                                        double) override {
         return moveTo(yaw, pitch, timeout_ms);
     }
-
     CommandResult rebaseAlignmentAtCurrent(int) override {
         calls.push_back("rebase");
         return {true};
     }
-
     CommandResult trackTo(double yaw, double pitch, int timeout_ms) override {
         return moveTo(yaw, pitch, timeout_ms);
     }
-
     CommandResult hold(int) override {
         calls.push_back("hold");
         if (!hold_success) return {false, false, "hold_failed"};
         current.state = State::Holding;
         return {true};
     }
-
     CommandResult refreshAngle(int) override { return {true}; }
     CommandResult freezeAtCurrent(int) override {
         calls.push_back("freeze");
         return {true};
     }
+    CommandResult recover(int) override {
+        calls.push_back("recover");
+        current.state = State::Disabled;
+        current.recoverable = false;
+        current.fault_active = false;
+        current.fault_latched_reason.clear();
+        return {true};
+    }
 
     Status current{State::Ready, false, false, true, {}, 0.0, 0.0};
     bool align_success{true};
+    std::string align_error{"align_failed"};
+    std::string align_code;
     bool move_success{true};
     std::string move_error{"move_failed"};
     bool hold_success{true};
+    bool update_measurements{true};
     std::vector<std::string> calls;
+    std::vector<std::pair<double, double>> targets;
 };
 
 PrecheckConfig config() {
-    PrecheckConfig result;
-    result.search_waypoints = {{-5.0, 0.0}, {5.0, 0.0}};
-    result.center = Waypoint{0.0, 0.0};
-    result.nudge_step_deg = 2.0;
-    return result;
+    PrecheckConfig value;
+    value.search_waypoints = {{-5.0, 0.0, 1000}, {5.0, 0.0, 1000}};
+    value.center = Waypoint{0.0, 0.0};
+    value.nudge_step_deg = 2.0;
+    return value;
 }
 
-session::VisualSnapshot subjectAt(
-    std::int64_t at_ms, double center_x = 0.5, double center_y = 0.525) {
+session::VisualSnapshot subjectAt(std::int64_t at_ms,
+                                  double center_x = 0.5,
+                                  double center_y = 0.525) {
     session::VisualSnapshot visual;
     visual.frame_id = static_cast<std::uint64_t>(at_ms);
     visual.presence = 1.0;
@@ -99,296 +117,185 @@ session::VisualSnapshot subjectAt(
     visual.keypoints.resize(17);
     for (std::size_t index = 0; index < 10; ++index) {
         visual.keypoints[index] = {
-                                   center_x - 0.02 +
-                                       0.01 * static_cast<double>(index % 3),
-                                   center_y - 0.225 +
-                                       0.02 * static_cast<double>(index),
-                                   0.9};
+            center_x - 0.02 + 0.01 * static_cast<double>(index % 3),
+            center_y - 0.225 + 0.02 * static_cast<double>(index), 0.9};
     }
     return visual;
 }
 
-TrackingConfig centeringTrackingConfig() {
-    TrackingConfig result;
-    result.smoothing_alpha = 1.0;
-    result.minimum_command_period_ms = 100;
-    return result;
+ManualCommandContext command(const PrecheckStatus& status,
+                             std::uint64_t sequence,
+                             std::string owner = "web") {
+    return {status.session_id, std::move(owner), status.lease_token, sequence};
 }
 
-void test_current_position_subject_causes_zero_motion() {
+void test_board_config_is_protocol3_compact_profile() {
+    const auto board = loadGimbalBoardConfig(
+        std::string(EDGEFOCUS_SOURCE_DIR) + "/config/gimbal-board.json");
+    assert(board.readyForSession());
+    assert(board.precheck.hard_deadline_ms == 24000);
+    assert(board.precheck.search_waypoints.size() == 4);
+    assert(board.precheck.recovery_waypoints.empty());
+    assert(board.precheck.nudge_step_deg == 5.0);
+    assert(!board.precheck.relative_to_alignment);
+}
+
+void test_missing_persistent_calibration_enters_maintenance() {
     FakeHardware hardware;
+    hardware.current.snapshot.calibration_valid = false;
     GimbalPrecheckController controller(hardware, config());
     std::string error;
-    assert(controller.start("s1", 0, &error));
-    controller.observe(100, subjectAt(100));
-    controller.observe(500, subjectAt(500));
-    const auto state = controller.snapshot();
-    assert(state.state == PrecheckState::Manual);
-    assert(state.subject_found);
-    assert(state.manual_lease);
-    assert(hardware.calls.size() == 2);
-    assert(hardware.calls.front() == "freeze");
-    assert(hardware.calls.back() == "hold");
+    assert(!controller.start("maintenance", 0, &error));
+    assert(error == "calibration_required");
+    assert(controller.snapshot().state == PrecheckState::MaintenanceRequired);
 }
 
-void test_waypoints_finish_at_center() {
+void test_candidate_requires_distinct_stable_frames_and_no_implicit_lease() {
     FakeHardware hardware;
     GimbalPrecheckController controller(hardware, config());
-    assert(controller.start("s2", 0));
-    controller.observe(1000, {});
-    controller.observe(4000, {});
-    controller.observe(7000, {});
-    const auto state = controller.snapshot();
-    assert(state.state == PrecheckState::Manual);
-    assert(!state.subject_found);
-    assert(state.manual_lease);
-    assert(hardware.calls.size() == 4);
-    assert(hardware.calls[0].find("move:-5.000000") == 0);
-    assert(hardware.calls[1].find("move:5.000000") == 0);
-    assert(hardware.calls[2].find("move:0.000000") == 0);
-    assert(hardware.calls[3] == "hold");
-}
-
-void test_pose_candidate_is_centered_then_framed_before_manual_lease() {
-    FakeHardware hardware;
-    GimbalVisualTracker tracker(hardware, centeringTrackingConfig());
-    GimbalPrecheckController controller(hardware, config(), &tracker);
-    assert(controller.start("center-and-frame", 0));
-
-    controller.observe(100, subjectAt(100, 0.65));
-    assert(controller.snapshot().state == PrecheckState::Centering);
-    controller.observe(200, subjectAt(200, 0.60));
-    controller.observe(300, subjectAt(300));
-    controller.observe(400, subjectAt(400));
-    assert(controller.snapshot().state == PrecheckState::Framing);
-    controller.observe(500, subjectAt(500));
-    controller.observe(600, subjectAt(600));
-    controller.observe(700, subjectAt(700));
-
-    const auto state = controller.snapshot();
-    assert(state.state == PrecheckState::Manual);
-    assert(state.subject_found);
-    assert(state.manual_lease);
-    unsigned freeze_calls = 0;
-    unsigned tracking_moves = 0;
-    for (const auto& call : hardware.calls) {
-        if (call == "freeze") ++freeze_calls;
-        if (call.rfind("move:", 0) == 0) ++tracking_moves;
-    }
-    assert(freeze_calls == 2);
-    assert(tracking_moves >= 1);
-    assert(hardware.calls.back() == "hold");
-}
-
-void test_two_missing_candidate_frames_resume_waypoint_search() {
-    FakeHardware hardware;
-    GimbalVisualTracker tracker(hardware, centeringTrackingConfig());
-    GimbalPrecheckController controller(hardware, config(), &tracker);
-    assert(controller.start("candidate-lost", 0));
-    controller.observe(100, subjectAt(100));
-    assert(controller.snapshot().state == PrecheckState::Centering);
-
-    session::VisualSnapshot missing;
-    missing.presence = 0.0;
-    missing.frame_id = 200;
-    missing.evidence_timestamp_ms = 200;
-    controller.observe(200, missing);
-    missing.frame_id = 300;
-    missing.evidence_timestamp_ms = 300;
-    controller.observe(300, missing);
-
-    const auto state = controller.snapshot();
-    assert(state.state == PrecheckState::Searching);
-    assert(!state.manual_lease);
-    assert(state.detail == "primary_search");
-}
-
-void test_hard_deadline_centers_and_releases_manual_control() {
-    FakeHardware hardware;
-    GimbalVisualTracker tracker(hardware, centeringTrackingConfig());
-    GimbalPrecheckController controller(hardware, config(), &tracker);
-    assert(controller.start("hard-deadline", 0));
-    controller.observe(75000, {});
-
-    const auto state = controller.snapshot();
-    assert(state.state == PrecheckState::Manual);
-    assert(!state.subject_found);
-    assert(state.manual_lease);
-    assert(state.detail == "search_timeout_manual");
-    assert(hardware.calls.size() == 2);
-    assert(hardware.calls.front().find("move:0.000000") == 0);
-    assert(hardware.calls.back() == "hold");
-}
-
-void test_production_clock_excludes_alignment_from_search_budget() {
-    FakeHardware hardware;
-    hardware.current.state = State::Disabled;
-    std::int64_t monotonic_ms = 30000;
-    GimbalVisualTracker tracker(hardware, centeringTrackingConfig());
-    GimbalPrecheckController controller(
-        hardware, config(), &tracker, [&] { return monotonic_ms; });
-    assert(controller.start("post-align-deadline", 0));
-
-    controller.observe(75000, {});
+    assert(controller.start("candidate", 0));
+    const auto first = subjectAt(100);
+    controller.observe(100, first);
+    controller.observe(200, first);
     assert(controller.snapshot().state == PrecheckState::Searching);
-    controller.observe(105000, {});
-    assert(controller.snapshot().state == PrecheckState::Manual);
-    assert(controller.snapshot().detail == "search_timeout_manual");
-}
-
-void test_manual_lease_session_and_sequence_guards() {
-    FakeHardware hardware;
-    GimbalPrecheckController controller(hardware, config());
-    assert(controller.start("s3", 0));
-    auto skipped = controller.skipAuto("s3", 1, 50);
-    assert(skipped.success);
-    auto wrong = controller.nudge("wrong", 2, NudgeDirection::Left, 60);
-    assert(!wrong.success && wrong.error == "session_mismatch");
-    auto moved = controller.nudge("s3", 2, NudgeDirection::Right, 70);
-    assert(moved.success);
-    assert(hardware.current.yaw_deg == 30.0);
-    auto stale = controller.nudge("s3", 2, NudgeDirection::Right, 80);
-    assert(!stale.success && stale.error == "stale_command_sequence");
-    auto confirmed = controller.confirmPosition("s3", 3, 90);
-    assert(confirmed.success);
-    assert(controller.snapshot().state == PrecheckState::Holding);
-}
-
-void test_holding_can_reenter_manual_control() {
-    FakeHardware hardware;
-    GimbalPrecheckController controller(hardware, config());
-    assert(controller.start("holding-manual", 0));
-    assert(controller.skipAuto("holding-manual", 1, 50).success);
-    assert(controller.confirmPosition("holding-manual", 2, 60).success);
-    assert(controller.snapshot().state == PrecheckState::Holding);
-    assert(!controller.snapshot().manual_lease);
-
-    const auto resumed = controller.skipAuto("holding-manual", 3, 70);
-    assert(resumed.success);
-    assert(controller.snapshot().state == PrecheckState::Manual);
-    assert(controller.snapshot().manual_lease);
-    assert(controller.nudge(
-        "holding-manual", 4, NudgeDirection::Right, 80).success);
-}
-
-void test_nudge_wraps_protocol_angles_at_zero() {
-    FakeHardware hardware;
-    GimbalPrecheckController controller(hardware, config());
-    assert(controller.start("angle-wrap", 0));
-    assert(controller.skipAuto("angle-wrap", 1, 50).success);
-
-    hardware.current.yaw_deg = 0.0;
-    hardware.current.pitch_deg = 0.0;
-    assert(controller.nudge("angle-wrap", 2, NudgeDirection::Left, 60).success);
-    assert(hardware.current.yaw_deg == 330.0);
-    assert(controller.nudge("angle-wrap", 3, NudgeDirection::Down, 70).success);
-    assert(hardware.current.pitch_deg == 330.0);
-}
-
-void test_safe_window_rejection_keeps_manual_lease() {
-    FakeHardware hardware;
-    GimbalPrecheckController controller(hardware, config());
-    assert(controller.start("safe-window", 0));
-    assert(controller.skipAuto("safe-window", 1, 50).success);
-
-    hardware.move_success = false;
-    hardware.move_error = "target_out_of_bounds";
-    const auto rejected = controller.nudge(
-        "safe-window", 2, NudgeDirection::Right, 60);
-    assert(!rejected.success);
-    assert(rejected.error == "target_out_of_bounds");
-    assert(controller.snapshot().state == PrecheckState::Manual);
-    assert(controller.snapshot().manual_lease);
-
-    hardware.move_success = true;
-    assert(controller.nudge("safe-window", 3, NudgeDirection::Left, 70).success);
-}
-
-void test_failed_motion_degrades_and_disables() {
-    FakeHardware hardware;
-    hardware.move_success = false;
-    GimbalPrecheckController controller(hardware, config());
-    assert(controller.start("s4", 0));
-    controller.observe(1000, {});
-    const auto state = controller.snapshot();
-    assert(state.state == PrecheckState::Degraded);
-    assert(!state.manual_lease);
-    assert(hardware.current.state == State::Disabled);
-}
-
-void test_realign_requires_recoverable_disabled_state() {
-    FakeHardware hardware;
-    GimbalPrecheckController controller(hardware, config());
-    assert(controller.start("s5", 0));
-    controller.observe(100, subjectAt(100));
     controller.observe(500, subjectAt(500));
-    hardware.current.state = State::Disabled;
-    hardware.current.recoverable = true;
-    auto realigned = controller.realign("s5", 1, 600);
-    assert(realigned.success);
-    assert(controller.snapshot().state == PrecheckState::Manual);
+    const auto status = controller.snapshot();
+    assert(status.state == PrecheckState::ManualAvailable);
+    assert(status.subject_found && status.search_completed);
+    assert(!status.manual_lease);
+    assert(hardware.calls[0] == "freeze");
+    assert(hardware.calls[1] == "hold");
 }
 
-void test_runtime_fault_disables_use_until_passive_recovery_is_confirmed() {
+void test_search_waits_for_verified_waypoints_then_returns_origin() {
     FakeHardware hardware;
     GimbalPrecheckController controller(hardware, config());
-    assert(controller.start("s6", 0));
-    controller.holdForSession(100);
+    assert(controller.start("search", 0));
+    controller.observe(600, {});
+    controller.observe(2000, {});
+    controller.observe(3000, {});
+    const auto status = controller.snapshot();
+    assert(status.state == PrecheckState::ManualAvailable);
+    assert(!status.subject_found && !status.manual_lease);
+    assert(hardware.targets.size() == 3);
+    assert(hardware.targets[0].first == -5.0);
+    assert(hardware.targets[1].first == 5.0);
+    assert(hardware.targets[2].first == 0.0);
+}
+
+void test_manual_lease_owner_ttl_and_idempotency() {
+    FakeHardware hardware;
+    GimbalPrecheckController controller(hardware, config());
+    assert(controller.start("lease", 0));
+    assert(controller.skipAuto("lease", 1, 50).success);
+    assert(controller.snapshot().state == PrecheckState::ManualAvailable);
+
+    PrecheckStatus issued;
+    assert(controller.manualTakeover("lease", "web", 1,
+                                     session::Phase::Precheck, 100,
+                                     &issued).success);
+    assert(issued.manual_lease && !issued.lease_token.empty());
+    const auto before = hardware.targets.size();
+    assert(controller.nudge(command(issued, 2), NudgeDirection::Right, 200).success);
+    assert(hardware.targets.size() == before + 1);
+    assert(controller.nudge(command(issued, 2), NudgeDirection::Right, 201).success);
+    assert(hardware.targets.size() == before + 1);
+    const auto conflict = controller.manualTakeover(
+        "lease", "app", 1, session::Phase::Precheck, 300);
+    assert(!conflict.success &&
+           conflict.error == "manual_lease_owned_by_other_client");
+    const auto targets_after_conflict = hardware.targets.size();
+    assert(controller.nudge(command(issued, 2), NudgeDirection::Right, 301).success);
+    assert(hardware.targets.size() == targets_after_conflict);
+    const auto stale = controller.nudge(
+        command(issued, 1), NudgeDirection::Right, 302);
+    assert(!stale.success && stale.error == "STALE_SEQUENCE");
+    assert(controller.keepManualLease(command(issued, 3),
+                                      session::Phase::Precheck, 5000).success);
+    const auto late_conflict = controller.manualTakeover(
+        "lease", "app", 2, session::Phase::Precheck, 5001);
+    assert(!late_conflict.success &&
+           late_conflict.error == "manual_lease_owned_by_other_client");
+    controller.maintain(session::Phase::Precheck, 35001);
+    assert(controller.snapshot().state == PrecheckState::ManualAvailable);
+    assert(!controller.snapshot().manual_lease);
+    const auto expired_replay = controller.manualTakeover(
+        "lease", "web", 3, session::Phase::Precheck, 35002);
+    assert(!expired_replay.success &&
+           expired_replay.error == "manual_lease_expired");
+}
+
+void test_authoritative_target_preserves_net_displacement() {
+    FakeHardware hardware;
+    hardware.update_measurements = false;
+    GimbalPrecheckController controller(hardware, config());
+    assert(controller.start("net", 0));
+    assert(controller.skipAuto("net", 1, 50).success);
+    PrecheckStatus issued;
+    assert(controller.manualTakeover("net", "web", 1,
+                                     session::Phase::Precheck, 100,
+                                     &issued).success);
+    assert(controller.nudge(command(issued, 2), NudgeDirection::Right, 200).success);
+    assert(controller.nudge(command(issued, 3), NudgeDirection::Right, 300).success);
+    assert(hardware.targets[hardware.targets.size() - 2].first == 2.0);
+    assert(hardware.targets.back().first == 4.0);
+}
+
+void test_fault_recovery_does_not_repeat_completed_search() {
+    FakeHardware hardware;
+    GimbalPrecheckController controller(hardware, config());
+    assert(controller.start("recover", 0));
+    assert(controller.skipAuto("recover", 1, 50).success);
+    const auto waypoint_before = controller.snapshot().waypoint_index;
     hardware.current.state = State::Fault;
-    hardware.current.fault_latched_reason = "pd6_low";
-    controller.maintain(session::Phase::Focusing, 200);
-    assert(controller.snapshot().state == PrecheckState::Degraded);
-
-    hardware.current.state = State::Disabled;
-    hardware.current.recoverable = false;
-    controller.maintain(session::Phase::Focusing, 5200);
-    assert(controller.snapshot().state == PrecheckState::Degraded);
-
+    hardware.current.fault_active = true;
     hardware.current.recoverable = true;
-    controller.maintain(session::Phase::Focusing, 10200);
-    assert(controller.snapshot().state == PrecheckState::Holding);
-    assert(hardware.calls[hardware.calls.size() - 2] == "align");
-    assert(hardware.calls.back() == "hold");
+    hardware.current.fault_latched_reason = "STALL";
+    controller.maintain(session::Phase::Precheck, 100);
+    assert(controller.snapshot().state == PrecheckState::Degraded);
+    controller.maintain(session::Phase::Precheck, 5100);
+    assert(controller.snapshot().state == PrecheckState::ManualAvailable);
+    assert(controller.snapshot().waypoint_index == waypoint_before);
+    assert(controller.snapshot().search_completed);
 }
 
-void test_stop_is_idempotent_after_safe_disable() {
+void test_force_release_and_session_end_origin_policy() {
     FakeHardware hardware;
     GimbalPrecheckController controller(hardware, config());
-    assert(controller.start("stop-once", 0));
+    assert(controller.start("release", 0));
+    assert(controller.skipAuto("release", 1, 50).success);
+    PrecheckStatus issued;
+    assert(controller.manualTakeover("release", "web", 1,
+                                     session::Phase::Precheck, 100,
+                                     &issued).success);
+    assert(controller.forceRelease(command(issued, 2),
+                                   session::Phase::Precheck, 200).success);
+    assert(controller.snapshot().state == PrecheckState::Released);
     controller.stop();
-    controller.stop();
+    assert(hardware.targets.empty());
 
-    unsigned disable_calls = 0;
-    for (const auto& call : hardware.calls) {
-        if (call == "disable") ++disable_calls;
-    }
-    assert(disable_calls == 1);
-    assert(hardware.current.state == State::Disabled);
+    FakeHardware second_hardware;
+    second_hardware.current.yaw_deg = 20.0;
+    GimbalPrecheckController second(second_hardware, config());
+    assert(second.start("return-origin", 0));
+    second.stop();
+    assert(!second_hardware.targets.empty());
+    assert(second_hardware.targets.back().first == 0.0);
+    assert(second_hardware.targets.back().second == 0.0);
+    assert(second_hardware.calls.back() == "disable");
 }
 
 }  // namespace
 
 int main() {
-    const auto board = loadGimbalBoardConfig(
-        std::string(EDGEFOCUS_SOURCE_DIR) + "/config/gimbal-board.json");
-    assert(board.readyForSession());
-    assert(board.error.empty());
-    assert(board.precheck.hard_deadline_ms == 9000);
-    assert(!board.precheck.recovery_waypoints.empty());
-    test_current_position_subject_causes_zero_motion();
-    test_waypoints_finish_at_center();
-    test_pose_candidate_is_centered_then_framed_before_manual_lease();
-    test_two_missing_candidate_frames_resume_waypoint_search();
-    test_hard_deadline_centers_and_releases_manual_control();
-    test_production_clock_excludes_alignment_from_search_budget();
-    test_manual_lease_session_and_sequence_guards();
-    test_holding_can_reenter_manual_control();
-    test_nudge_wraps_protocol_angles_at_zero();
-    test_safe_window_rejection_keeps_manual_lease();
-    test_failed_motion_degrades_and_disables();
-    test_realign_requires_recoverable_disabled_state();
-    test_runtime_fault_disables_use_until_passive_recovery_is_confirmed();
-    test_stop_is_idempotent_after_safe_disable();
+    test_board_config_is_protocol3_compact_profile();
+    test_missing_persistent_calibration_enters_maintenance();
+    test_candidate_requires_distinct_stable_frames_and_no_implicit_lease();
+    test_search_waits_for_verified_waypoints_then_returns_origin();
+    test_manual_lease_owner_ttl_and_idempotency();
+    test_authoritative_target_preserves_net_displacement();
+    test_fault_recovery_does_not_repeat_completed_search();
+    test_force_release_and_session_end_origin_policy();
     std::cout << "gimbal precheck tests passed\n";
     return 0;
 }

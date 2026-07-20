@@ -146,16 +146,42 @@ struct ReminderSnapshot {
 
 struct GimbalSnapshot {
     std::string state{"idle"};
+    std::string protocol_version;
+    std::vector<std::string> capabilities;
+    bool available{};
+    std::string degraded_reason;
+    std::string link_health{"unavailable"};
+    std::string control_mode{"uart_only"};
     FeatureHealth health;
     std::optional<double> angle_x;
     std::optional<double> angle_y;
+    std::optional<std::int32_t> current_yaw10;
+    std::optional<std::int32_t> current_pitch10;
+    std::optional<std::int32_t> target_yaw10;
+    std::optional<std::int32_t> target_pitch10;
+    std::optional<std::uint32_t> motion_generation;
+    bool settled{};
     bool tracking{};
     bool manual_lease{};
+    std::string lease_owner_id;
+    std::uint64_t lease_epoch{};
+    std::int64_t lease_expires_at_ms{};
     std::uint64_t search_generation{};
     std::uint32_t waypoint_index{};
     bool subject_found{};
+    bool search_completed{};
+    bool calibration_valid{};
+    std::uint32_t calibration_epoch{};
+    bool origin_valid{};
+    std::uint32_t origin_epoch{};
     bool recoverable{};
+    std::string fault_class{"none"};
+    std::string fault_code;
     std::string fault_latched_reason;
+    std::int64_t last_pose_age_ms{-1};
+    std::uint64_t last_queued_sequence{};
+    std::uint64_t acked_through_sequence{};
+    std::string current_protection_state;
     std::string detail;
 };
 

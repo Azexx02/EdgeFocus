@@ -1,18 +1,17 @@
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "board": "edgefocus-stm32mp257-custom",
-  "protocol": "g431-2.0",
+  "protocol": "g431-3.0",
   "control_mode": "uart_only",
   "uart_device": "/dev/ttySTM3",
   "motion_verified": true,
   "safe_window_offsets_deg": {
-    "yaw_min": -45.0,
-    "yaw_max": 45.0,
-    "pitch_min": -180.0,
-    "pitch_max": 180.0
+    "yaw_min": -70.0,
+    "yaw_max": 70.0,
+    "pitch_min": -70.0,
+    "pitch_max": 70.0
   },
-  "small_nudge_deg": 30.0,
-  "maximum_safe_target_speed": null,
+  "small_nudge_deg": 5.0,
   "tracking": {
     "target_x": 0.5,
     "target_y": 0.3333333333,
@@ -25,26 +24,23 @@
     "yaw_direction": 1.0,
     "pitch_direction": -1.0
   },
-  "waypoint_offsets": {
-    "up": 10.0,
-    "down": -10.0,
-    "left": -15.0,
-    "right": 15.0
-  },
   "search": {
-    "yaw_min": -30.0,
-    "yaw_max": 30.0,
-    "pitch_min": -15.0,
-    "pitch_max": 15.0,
-    "effective_vertical_fov_deg": 50.0,
-    "verified_min_speed_deg_s": 40.0,
-    "full_pitch_recovery_extent_deg": 170.0,
-    "initial_observe_ms": 400,
-    "stop_queueing_ms": 6000,
-    "hard_deadline_ms": 9000,
+    "profile": "national_compact_four_point",
+    "yaw_extent_deg": 35.0,
+    "pitch_extent_deg": 25.0,
+    "profile_min_speed_deg_s": 20.0,
+    "timing_source": "g431-protocol3-20260720-conservative-profile",
+    "initial_observe_ms": 600,
+    "waypoint_observe_ms": 350,
+    "settle_buffer_ms": 200,
+    "stop_queueing_ms": 23000,
+    "hard_deadline_ms": 24000,
     "visual_fresh_ms": 600,
+    "subject_stable_ms": 300,
+    "subject_observations": 2,
     "candidate_centering_ms": 3000,
     "framing_window_ms": 1200,
-    "framing_pass_score": 0.65
+    "framing_pass_score": 0.65,
+    "manual_lease_ttl_ms": 30000
   }
 }

@@ -45,7 +45,12 @@ session::PrepareResult GimbalSessionFeature::prepare(const session::SessionConte
     running_.store(true);
     worker_ = std::thread(&GimbalSessionFeature::workerLoop, this);
     if (!ready) {
-        setHealth(false, true, "recovering", error);
+        const auto status = controller_.snapshot();
+        setHealth(false, true,
+                  status.state == PrecheckState::MaintenanceRequired
+                      ? "maintenance_required"
+                      : "recovering",
+                  !status.detail.empty() ? status.detail : error);
         return session::PrepareResult::degraded_success(error);
     }
     setHealth(true, false, "ready");
@@ -81,7 +86,14 @@ void GimbalSessionFeature::workerLoop() {
             // A browser/App manual lease temporarily owns motion.  The formal
             // session and visual inference continue, but automatic tracking
             // must not race manual nudge commands on the shared UART.
-            if (!controller_.snapshot().manual_lease) {
+            const auto control = controller_.snapshot();
+            const bool tracking_allowed =
+                !control.manual_lease &&
+                control.state != PrecheckState::MaintenanceRequired &&
+                control.state != PrecheckState::Released &&
+                control.state != PrecheckState::Degraded &&
+                control.state != PrecheckState::Inactive;
+            if (tracking_allowed) {
                 const auto visual = snapshots_.read().visual;
                 if (visual.evidence_timestamp_ms >
                     tracking_accept_after_ms_.load()) {
@@ -96,10 +108,21 @@ void GimbalSessionFeature::workerLoop() {
                 controller_.maintain(current_phase, now_ms);
                 const auto status = controller_.snapshot();
                 const auto hardware = controller_.snapshotHardware();
-                const bool healthy = status.state != PrecheckState::Degraded &&
+                const bool controller_available =
+                    status.state != PrecheckState::Degraded &&
+                    status.state != PrecheckState::MaintenanceRequired &&
+                    status.state != PrecheckState::Released &&
+                    status.state != PrecheckState::Inactive;
+                const bool healthy = controller_available &&
                     (hardware.state == State::Ready || hardware.state == State::Holding ||
                      hardware.state == State::Moving);
-                setHealth(healthy, !healthy, healthy ? "ready" : "recovering",
+                const char* unhealthy_status =
+                    status.state == PrecheckState::MaintenanceRequired
+                        ? "maintenance_required"
+                        : status.state == PrecheckState::Released
+                              ? "released"
+                              : "recovering";
+                setHealth(healthy, !healthy, healthy ? "ready" : unhealthy_status,
                           healthy ? status.detail
                                   : (!status.detail.empty() ? status.detail
                                                             : hardware.fault_latched_reason));
@@ -120,13 +143,45 @@ void GimbalSessionFeature::publish(std::int64_t now_ms) {
     projected.search_generation = status.generation;
     projected.waypoint_index = static_cast<std::uint32_t>(status.waypoint_index);
     projected.subject_found = status.subject_found;
+    projected.search_completed = status.search_completed;
+    projected.lease_owner_id = status.lease_owner_id;
+    projected.lease_epoch = status.lease_epoch;
+    projected.lease_expires_at_ms = status.lease_expires_at_ms;
     projected.detail = status.detail;
     const auto hardware = controller_.snapshotHardware();
+    const auto& wire = hardware.snapshot;
+    projected.protocol_version = wire.protocol_version;
+    projected.capabilities = wire.capabilities;
+    projected.available = wire.available;
+    projected.degraded_reason = wire.degraded_reason;
+    switch (wire.link_health) {
+        case LinkHealth::Unavailable: projected.link_health = "unavailable"; break;
+        case LinkHealth::Negotiating: projected.link_health = "negotiating"; break;
+        case LinkHealth::Healthy: projected.link_health = "healthy"; break;
+        case LinkHealth::Degraded: projected.link_health = "degraded"; break;
+    }
+    projected.control_mode = controlModeName(wire.control_mode);
     projected.angle_x = hardware.yaw_deg;
     projected.angle_y = hardware.pitch_deg;
+    projected.current_yaw10 = wire.current_yaw10;
+    projected.current_pitch10 = wire.current_pitch10;
+    projected.target_yaw10 = wire.target_yaw10;
+    projected.target_pitch10 = wire.target_pitch10;
+    projected.motion_generation = wire.motion_generation;
+    projected.settled = wire.settled;
     projected.tracking = tracker_.status().tracking;
+    projected.calibration_valid = wire.calibration_valid;
+    projected.calibration_epoch = wire.calibration_epoch;
+    projected.origin_valid = wire.origin_valid;
+    projected.origin_epoch = wire.origin_epoch;
     projected.recoverable = hardware.recoverable;
+    projected.fault_class = errorClassName(wire.fault_class);
+    projected.fault_code = wire.fault_code;
     projected.fault_latched_reason = hardware.fault_latched_reason;
+    projected.last_pose_age_ms = wire.last_pose_age_ms;
+    projected.last_queued_sequence = wire.last_queued_sequence;
+    projected.acked_through_sequence = wire.acked_through_sequence;
+    projected.current_protection_state = wire.current_protection_state;
     snapshots_.updateGimbal(projected, now_ms);
 }
 

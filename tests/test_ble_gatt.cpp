@@ -29,6 +29,11 @@ using json = nlohmann::json;
 
 class FakePrecheckGimbalHardware final : public gimbal::IGimbalSessionHardware {
 public:
+    FakePrecheckGimbalHardware() {
+        state.snapshot.calibration_valid = true;
+        state.snapshot.origin_valid = true;
+        state.snapshot.current_protection_state = "CONFIGURED";
+    }
     gimbal::Status status() const override { return state; }
     gimbal::CommandResult enableAndAlign(int) override {
         state.state = gimbal::State::Ready;
@@ -63,6 +68,7 @@ public:
     }
     gimbal::CommandResult refreshAngle(int) override { return {true}; }
     gimbal::CommandResult freezeAtCurrent(int) override { return {true}; }
+    gimbal::CommandResult recover(int) override { return {true}; }
     gimbal::Status state{gimbal::State::Ready, false, false, true, {}, 0.0, 0.0};
 };
 
@@ -457,7 +463,7 @@ int main() {
         assertSuccess(hello, 47);
         assert(std::find(hello["data"]["server_capabilities"].begin(),
                          hello["data"]["server_capabilities"].end(),
-                         "gimbal_precheck_v1") != hello["data"]["server_capabilities"].end());
+                         "gimbal_session_control_v3") != hello["data"]["server_capabilities"].end());
 
         const auto skip_payload = std::string(
             "{\"cmd\":\"precheck_skip_auto_adjust\",\"id\":48,\"data\":{"
@@ -465,21 +471,32 @@ int main() {
             "\",\"sequence\":1}}";
         json skipped = parseResponse(typed_server.handleCommand(skip_payload));
         assertSuccess(skipped, 48);
-        assert(skipped["data"]["state"] == "manual");
-        assert(skipped["data"]["manual_lease"] == true);
+        assert(skipped["data"]["state"] == "manual_available");
+        assert(skipped["data"]["manual_lease"] == false);
+
+        const auto takeover_payload = std::string(
+            "{\"cmd\":\"gimbal_manual_takeover\",\"id\":481,\"data\":{"
+            "\"session_id\":\"") + started.context->session_id +
+            "\",\"owner_id\":\"app-test\",\"sequence\":1}}";
+        json takeover = parseResponse(typed_server.handleCommand(takeover_payload));
+        assertSuccess(takeover, 481);
+        assert(takeover["data"]["manual_lease"] == true);
+        const auto lease_token = takeover["data"]["lease_token"].get<std::string>();
 
         const auto nudge_payload = std::string(
             "{\"cmd\":\"gimbal_nudge\",\"id\":49,\"data\":{"
             "\"session_id\":\"") + started.context->session_id +
+            "\",\"owner_id\":\"app-test\",\"lease_token\":\"" + lease_token +
             "\",\"sequence\":2,\"direction\":\"RIGHT\"}}";
         json nudged = parseResponse(typed_server.handleCommand(nudge_payload));
         assertSuccess(nudged, 49);
-        assert(hardware.state.yaw_deg == 30.0);
+        assert(hardware.state.yaw_deg == 2.0);
 
         assert(typed_orchestrator.confirmReady().success);
+        controller.holdForSession(monotonic);
         json wrong_phase = parseResponse(typed_server.handleCommand(nudge_payload));
         assert(wrong_phase["status"] == "error");
-        assert(wrong_phase["error"] == "Gimbal control is only available during PRECHECK");
+        assert(wrong_phase["error"] == "manual_lease_unavailable");
 
         typed_orchestrator.end(session::StopReason::Cancelled);
         monotonic += 1000;

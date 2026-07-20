@@ -34,6 +34,7 @@ public:
     CommandResult hold(int) override { return {true}; }
     CommandResult refreshAngle(int) override { return {true}; }
     CommandResult freezeAtCurrent(int) override { return {true}; }
+    CommandResult recover(int) override { return {true}; }
 
     Status current{State::Holding, false, false, true, {}, 0.0, 0.0};
     bool track_success{true};

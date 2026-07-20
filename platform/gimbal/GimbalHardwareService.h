@@ -84,6 +84,7 @@ public:
     CommandResult hold(int timeout_ms = 1000) override;
     CommandResult refreshAngle(int timeout_ms = 500) override;
     CommandResult freezeAtCurrent(int timeout_ms = 2000) override;
+    CommandResult recover(int timeout_ms = 5000) override;
     CommandResult probeRecovery();
 
 private:
