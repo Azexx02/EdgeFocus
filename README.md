@@ -1,21 +1,25 @@
-# STM32G431 双轴云台副板
+# STM32G431 双轴云台副板（协议 3.0）
 
-双轴连续旋转云台固件，使用双 AS5600 编码器、双 STSPIN830 驱动器和连续 FOC 位置保持。当前版本按“无机械限位、摄像头可侧装”的云台结构整理，P 轴已加入低增益平滑位置环和自适应重力补偿，实测已解决俯仰轴终点/克服重力时的持续抖动问题。
+本分支是 EdgeFocus 国赛版云台固件。G431 负责两轴实时控制、安全停机、持久化电气参数/机械原点和电流保护；STM32MP257 主机负责 PRECHECK 搜索、会话跟踪和跨端控制。
 
-- PITCH 对应俯仰 P 轴，YAW 对应航向 Y 轴；协议不使用 X/XY 命名。
-- 两轴逻辑角度均为 `0..359°`，不使用机械限位和撞限位标定。
-- 串口控制为 UART4、115200、8N1、3.3 V TTL。
-- 当前推荐纯串口模式：连接 TX、RX、GND，上电后发送 `ARM`，收到 `OK,ARM` 后才能运动，结束时发送 `STOP`。
+- UART4：115200、8N1、3.3 V TTL，命令必须以 `\r\n` 或 `\n` 结束。
+- 主机必须先完成 `VER` 和 `HELLO HOST PROTO=3.0` 协商。
+- 普通 `ARM` 不校准、不改变零位；缺少电气校准、机械原点或电流保护时拒绝生产使能。
+- `TRACK YP yaw10 pitch10` 使用 0.1° 环形坐标，ACK 只表示目标已接受；物理到位以同 generation 的 `POSE,SETTLED=1` 为准。
+- 单字节 `!` 是独立急停入口；`STOP` 关闭 PWM/Boost，但不清除 NVM。
+- 电气校准、永久原点、电流保护和 NVM 清除只允许通过主机维护向导执行。
 
-文档：
-
-- [文档导航与当前产品基线](docs/README.md)
-- [接线、板级信号与 STM32MP257/ESP32 适配](docs/g431_board_control_signals.md)
-- [串口命令速查表](docs/uart_command_table.md)
-
-常用构建命令：
+构建：
 
 ```powershell
 cmake --preset Debug
 cmake --build --preset Debug -j 4
+cmake --preset Release
+cmake --build --preset Release -j 4
 ```
+
+文档：
+
+- [协议 3.0 命令速查](docs/uart_command_table.md)
+- [板级信号与接线](docs/g431_board_control_signals.md)
+- 主机完整规格：`focus_app_national/docs/superpowers/specs/2026-07-20-gimbal-protocol-v3-national-redesign.md`
