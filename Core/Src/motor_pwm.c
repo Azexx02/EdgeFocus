@@ -4,6 +4,7 @@
 #include "current_sample.h"
 #include "gimbal_angle.h"
 #include "gimbal_config.h"
+#include "gimbal_power_profile.h"
 #include "main.h"
 #include "tim.h"
 #include "uart_protocol.h"
@@ -45,7 +46,6 @@ typedef struct {
 } axis_hardware_t;
 
 static bool all_motors_enabled;
-static bool maintenance_mode;
 static uint16_t axis_home_raw[2];
 static bool position_guard_enabled;
 static uint16_t position_guard_min_deg;
@@ -413,15 +413,14 @@ static uint32_t axis_center_duty(gimbal_axis_t axis, int8_t mechanical_dir)
 
 static uint32_t axis_hold_duty(gimbal_axis_t axis)
 {
-  if (maintenance_mode) return axis_hold_min_duty(axis);
-  return axis == GIMBAL_AXIS_X ? GIMBAL_X_HOLD_DUTY_TICKS :
-         GIMBAL_Y_HOLD_DUTY_TICKS;
+  return gimbal_power_profile_hold_max(
+      axis == GIMBAL_AXIS_X ? GIMBAL_POWER_AXIS_P : GIMBAL_POWER_AXIS_Y);
 }
 
 static uint32_t axis_hold_min_duty(gimbal_axis_t axis)
 {
-  return axis == GIMBAL_AXIS_X ? GIMBAL_X_HOLD_MIN_DUTY_TICKS :
-         GIMBAL_Y_HOLD_MIN_DUTY_TICKS;
+  return gimbal_power_profile_hold_min(
+      axis == GIMBAL_AXIS_X ? GIMBAL_POWER_AXIS_P : GIMBAL_POWER_AXIS_Y);
 }
 
 static uint16_t axis_center_dac(gimbal_axis_t axis, int8_t mechanical_dir)
@@ -850,6 +849,7 @@ static uint16_t read_encoder_live(const axis_hardware_t *hardware)
 
 void motor_pwm_init(void)
 {
+  gimbal_power_profile_reset();
   set_all_compare(&htim1, 0U);
   set_all_compare(&htim8, 0U);
   axis_home_raw[GIMBAL_AXIS_X] = axis_current_raw(GIMBAL_AXIS_X);
@@ -1238,7 +1238,7 @@ bool motor_pwm_is_enabled(void)
 
 void motor_pwm_set_maintenance_mode(bool enabled)
 {
-  maintenance_mode = enabled;
+  gimbal_power_profile_set_maintenance(enabled);
 }
 
 bool motor_pwm_test(gimbal_axis_t axis)
@@ -2207,7 +2207,7 @@ void motor_pwm_hold_process(void)
           GIMBAL_X_TRACK_TARGET_SLEW_RAW :
           GIMBAL_Y_TRACK_TARGET_SLEW_RAW;
     }
-    if (maintenance_mode && step > 0.25f) step = 0.25f;
+    if (gimbal_power_profile_is_maintenance() && step > 0.25f) step = 0.25f;
     step *= (float)dt_ms / (float)GIMBAL_FOC_PERIOD_MS;
     if ((float)target_delta > step) {
       hold_target_raw_filtered[axis] += step;

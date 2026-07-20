@@ -1,5 +1,6 @@
 #include "gimbal_angle.h"
 #include "gimbal_nv.h"
+#include "gimbal_power_profile.h"
 #include "gimbal_protocol.h"
 #include "gimbal_rx.h"
 
@@ -84,6 +85,28 @@ static void test_angles(void) {
     assert(gimbal_raw_to_angle10(2024U, 1000U, 1) == 900U);
     assert(gimbal_raw_to_angle10(2024U, 1000U, -1) == 2700U);
     assert(gimbal_raw_to_angle10(100U, 4000U, 1) == 172U);
+}
+
+static void test_power_profile_isolation_and_reset(void) {
+    gimbal_power_profile_reset();
+    assert(!gimbal_power_profile_is_maintenance());
+    assert(gimbal_power_profile_hold_min(GIMBAL_POWER_AXIS_P) == 260U);
+    assert(gimbal_power_profile_hold_min(GIMBAL_POWER_AXIS_Y) == 80U);
+    assert(gimbal_power_profile_hold_max(GIMBAL_POWER_AXIS_P) == 360U);
+    assert(gimbal_power_profile_hold_max(GIMBAL_POWER_AXIS_Y) == 520U);
+
+    gimbal_power_profile_set_maintenance(true);
+    assert(gimbal_power_profile_is_maintenance());
+    assert(gimbal_power_profile_hold_max(GIMBAL_POWER_AXIS_P) == 260U);
+    assert(gimbal_power_profile_hold_max(GIMBAL_POWER_AXIS_Y) == 180U);
+    assert(gimbal_power_profile_hold_max(GIMBAL_POWER_AXIS_P) <= 360U);
+    assert(gimbal_power_profile_hold_max(GIMBAL_POWER_AXIS_Y) <= 520U);
+
+    /* STOP/output-off uses the same false transition before the next ARM. */
+    gimbal_power_profile_set_maintenance(false);
+    assert(!gimbal_power_profile_is_maintenance());
+    assert(gimbal_power_profile_hold_max(GIMBAL_POWER_AXIS_P) == 360U);
+    assert(gimbal_power_profile_hold_max(GIMBAL_POWER_AXIS_Y) == 520U);
 }
 
 static void test_encoding_and_selection(void) {
@@ -286,6 +309,7 @@ static void test_rx_fragmentation_sticky_lines_and_emergency(void) {
 
 int main(void) {
     test_angles();
+    test_power_profile_isolation_and_reset();
     test_encoding_and_selection();
     test_atomic_store_and_tombstones();
     test_protocol_parser_and_state_matrix();
