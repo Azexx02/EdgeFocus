@@ -75,15 +75,21 @@ output = clamp(controller_output,
 - 滤波速度处于 `-1..+1 raw/control-cycle`；
 - 上述条件连续保持 30 个 5 ms 控制周期，即 150 ms。
 
-触发前完全返回原 PD/static `requested_duty`。触发后，临时 duty floor 从当前 `requested_duty` 起每个控制周期增加 2 tick，最终输出为：
+状态机只处理无符号 PWM 幅值，绝不生成或改变方向。`requested_magnitude` 是原 PD/static 控制器输出的绝对值，`requested_direction` 完全沿用现有控制器方向；方向无效、误差为零或控制器没有请求扭矩时不得触发补偿。触发前完全返回原 `requested_magnitude`。触发后，临时 duty floor 从当前 `requested_magnitude` 起每个控制周期增加 2 tick，最终输出为：
 
 ```text
-assist_floor = min(max(previous_floor, requested_duty) + 2,
+requested_magnitude = abs(requested_duty)
+requested_direction = existing_controller_direction
+
+assist_floor = min(max(previous_floor, requested_magnitude) + 2,
                    maintenance_yaw_max_duty /* 180 */)
-output = max(requested_duty, assist_floor)
+output_magnitude = max(requested_magnitude, assist_floor)
+output_direction = requested_direction
 ```
 
-下列任一条件出现时立即把资格计数和临时 floor 清零：退出 maintenance、轴不是 yaw、目标斜坡重新运动、进入 settled 误差带 `error_abs <= 8`、或实际速度离开 `-1..+1`。因此补偿只形成有界的“停滞解锁脉冲”，不会在轴已恢复运动后持续顶到 180，也不会进入生产模式。
+每个新 yaw 目标最多允许一次补偿尝试：进入激活态时立即锁存 `assist_attempted`，在该目标生命周期内不得第二次触发。补偿单次最多激活 60 个 5 ms 控制周期，即 300 ms。达到期限但仍未检测到运动恢复时，立即撤销临时 floor、恢复原 `requested_magnitude`，并锁存 `assist_exhausted`。该期限由 G431 本地计数，独立于主机 5 秒 verified-settle 超时、UART 和 STOP 是否正常；因此即使主机失联，也不会重复脉冲或无限保持 180 tick。
+
+下列任一条件出现时立即把资格计数和临时 floor 清零：退出 maintenance、轴不是 yaw、目标斜坡重新运动、进入 settled 误差带 `error_abs <= 8`、或实际速度离开 `-1..+1`。其中速度恢复只撤销本次 floor；同一目标仍保留 `assist_attempted`，因而不会再次补偿。`assist_attempted` 和 `assist_exhausted` 只允许由新目标、STOP、重新 ARM 或显式 reset 清除。由此补偿只形成每目标至多一次、有界的“停滞解锁脉冲”，不会在轴已恢复运动后持续顶到 180，也不会进入生产模式。
 
 `motor_pwm_hold_enable(false)`、STOP、Fault、重新 ARM 和新 yaw 目标均必须显式清除该状态。原 `gimbal_power_profile` 的生产/维护上限隔离和编译期约束继续保留。
 
@@ -91,17 +97,20 @@ output = max(requested_duty, assist_floor)
 
 纯 C 测试必须覆盖：
 
-1. 生产 yaw、maintenance pitch、目标斜坡未完成或已 settled 时，输出严格等于原 requested duty。
+1. 生产 yaw、maintenance pitch、目标斜坡未完成或已 settled 时，输出幅值和方向严格等于原控制器输出。
 2. maintenance yaw 停滞不足 150 ms 时不介入。
-3. 满足 150 ms 后 floor 单调上升、永不超过 180，并且不改变扭矩方向。
+3. 满足 150 ms 后 floor 单调上升、永不超过 180；分别覆盖正向和负向请求，并验证输出相位/方向与原控制器完全一致。
 4. 速度恢复、误差进入 settled 带、STOP/reset 或新目标到来时，计数与 floor 立即归零。
 5. 归零后再次停滞必须重新等待完整 150 ms，不允许沿用旧补偿。
+6. 首次激活即锁存 `assist_attempted`；无论因速度恢复还是达到 300 ms 而撤销 floor，同一目标均不得再次触发。
+7. 激活达到 300 ms 时立即撤销 floor 并额外锁存 `assist_exhausted`；即使主机不发送 STOP，也不得无限保持 180。
+8. 方向无效、误差为零或原控制器不请求扭矩时不触发补偿；新目标、STOP、重新 ARM 和显式 reset 可以清除 `assist_attempted` 与 `assist_exhausted`。
 
 ### 6.4 实机验证顺序
 
 1. G431 纯 C 测试、Debug/Release 重建、Flash/RAM 检查和 ST-LINK 下载校验。
 2. 无运动 `probe` 确认协议 3、calibration/origin epoch 1、无 Fault。
-3. 单独运行 yaw +1°，要求同 generation `SETTLED=1`；随后 STOP，检查无 Fault、电流有效且未饱和。
+3. 单独运行 yaw +1°，要求同 generation `SETTLED=1`；记录实际补偿激活时长并确认不超过 300 ms，随后 STOP，检查无 Fault、电流有效且未饱和。
 4. +1°通过后，单独运行 yaw +3°并执行相同检查；失败则 STOP，不测试反向，不提高 180 上限。
 5. +3°通过后再运行 yaw -3°；只有正反向均通过才运行完整 `current-sample`。
 6. 本修订仍不写电流保护阈值；只有完整样本满足有效、未饱和、窗口至少 1000 ms 后，才另行评估阈值。
