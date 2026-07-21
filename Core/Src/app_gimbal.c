@@ -141,34 +141,28 @@ static void apply_persistent_record(void)
 
 static bool target_allowed(uint16_t yaw10, uint16_t pitch10)
 {
-  int16_t p_min = app_gimbal_nv_storage.record.safe_min_tenths[GIMBAL_AXIS_P];
-  int16_t p_max = app_gimbal_nv_storage.record.safe_max_tenths[GIMBAL_AXIS_P];
-  int16_t y_min = app_gimbal_nv_storage.record.safe_min_tenths[GIMBAL_AXIS_Y];
-  int16_t y_max = app_gimbal_nv_storage.record.safe_max_tenths[GIMBAL_AXIS_Y];
-  if (runtime_profile == APP_GIMBAL_PROFILE_MAINTENANCE) {
-    p_min = y_min = -MAINTENANCE_LIMIT_TENTHS;
-    p_max = y_max = MAINTENANCE_LIMIT_TENTHS;
-  }
-  return yaw10 < GIMBAL_ANGLE10_FULL_TURN &&
-         pitch10 < GIMBAL_ANGLE10_FULL_TURN &&
-         gimbal_angle10_target_in_window(yaw10, y_min, y_max) &&
-         gimbal_angle10_target_in_window(pitch10, p_min, p_max);
+  const GimbalNvRecordV3 *record = &app_gimbal_nv_storage.record;
+  return gimbal_angle10_profile_target_allowed(
+      yaw10, pitch10,
+      record->safe_min_tenths[GIMBAL_AXIS_Y],
+      record->safe_max_tenths[GIMBAL_AXIS_Y],
+      record->safe_min_tenths[GIMBAL_AXIS_P],
+      record->safe_max_tenths[GIMBAL_AXIS_P],
+      runtime_profile == APP_GIMBAL_PROFILE_MAINTENANCE, false,
+      MAINTENANCE_LIMIT_TENTHS);
 }
 
 static bool hold_position_allowed(uint16_t yaw10, uint16_t pitch10)
 {
   const GimbalNvRecordV3 *record = &app_gimbal_nv_storage.record;
-  if (runtime_profile != APP_GIMBAL_PROFILE_MAINTENANCE) {
-    return target_allowed(yaw10, pitch10);
-  }
-  return yaw10 < GIMBAL_ANGLE10_FULL_TURN &&
-         pitch10 < GIMBAL_ANGLE10_FULL_TURN &&
-         gimbal_angle10_target_in_window(
-             yaw10, record->safe_min_tenths[GIMBAL_AXIS_Y],
-             record->safe_max_tenths[GIMBAL_AXIS_Y]) &&
-         gimbal_angle10_target_in_window(
-             pitch10, record->safe_min_tenths[GIMBAL_AXIS_P],
-             record->safe_max_tenths[GIMBAL_AXIS_P]);
+  return gimbal_angle10_profile_target_allowed(
+      yaw10, pitch10,
+      record->safe_min_tenths[GIMBAL_AXIS_Y],
+      record->safe_max_tenths[GIMBAL_AXIS_Y],
+      record->safe_min_tenths[GIMBAL_AXIS_P],
+      record->safe_max_tenths[GIMBAL_AXIS_P],
+      runtime_profile == APP_GIMBAL_PROFILE_MAINTENANCE, true,
+      MAINTENANCE_LIMIT_TENTHS);
 }
 
 GimbalNvStoreResult app_gimbal_nv_commit(const GimbalNvRecordV3 *record)

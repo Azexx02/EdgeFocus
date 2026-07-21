@@ -31,6 +31,26 @@ bool gimbal_angle10_target_in_window(uint16_t target10, int16_t minimum10,
         gimbal_angle10_shortest_delta(0U, target10), minimum10, maximum10);
 }
 
+bool gimbal_angle10_profile_target_allowed(
+    uint16_t yaw10, uint16_t pitch10,
+    int16_t yaw_min10, int16_t yaw_max10,
+    int16_t pitch_min10, int16_t pitch_max10,
+    bool maintenance_profile, bool hold_operation,
+    int16_t maintenance_limit10) {
+    if (maintenance_profile && !hold_operation) {
+        if (maintenance_limit10 <= 0 || maintenance_limit10 > 1799) {
+            return false;
+        }
+        yaw_min10 = pitch_min10 = (int16_t)-maintenance_limit10;
+        yaw_max10 = pitch_max10 = maintenance_limit10;
+    }
+    return yaw10 < GIMBAL_ANGLE10_FULL_TURN &&
+           pitch10 < GIMBAL_ANGLE10_FULL_TURN &&
+           gimbal_angle10_target_in_window(yaw10, yaw_min10, yaw_max10) &&
+           gimbal_angle10_target_in_window(pitch10, pitch_min10,
+                                           pitch_max10);
+}
+
 uint16_t gimbal_raw_to_angle10(uint16_t raw, uint16_t origin_raw,
                                int8_t positive_raw_sign) {
     int32_t delta = ((int32_t)(raw & 0x0FFFU) -
