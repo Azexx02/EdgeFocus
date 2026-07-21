@@ -9,7 +9,7 @@
 
 ## 2. 目标与非目标
 
-目标：让维护 profile 的 yaw ±3° 验证能够克服实机静摩擦并按现有 settled 条件真实到位，以便取得有效电流样本。
+目标：让维护 profile 的 yaw ±10°验收运动能够克服实机静摩擦，在允许2°机械静差的前提下完成至少约8°同向有效位移，以便取得有效电流样本。
 
 非目标：不修改生产 profile，不放宽 settled 条件，不扩大维护 ±10° 安全窗，不改变既有 UART 控制命令、速度斜坡、原点、校准结果或电流保护策略。允许增加一条只读、无运动副作用的维护诊断查询，但协议版本和既有命令语义不变。
 
@@ -32,16 +32,16 @@ output = clamp(controller_output,
 
 配置层新增独立的 `GIMBAL_X/Y_MAINTENANCE_MAX_DUTY_TICKS`，`axis_hold_duty()` 在 maintenance mode 下只返回对应维护**上限**；`axis_hold_min_duty()` 和现有最小起步 duty 不修改。生产 mode 继续返回原生产上限。目标斜坡、PD/积分控制和 settle 门限均保持原样。这样 yaw 仍从 80 平滑启动，但最多可增加到 180 以跨过静摩擦；`180` 来自本机刚完成且成功的校准探测，不是经验占位值。
 
-主机维护 CLI 新增一次性 `maintenance-move --axis yaw|pitch --delta-deg N`：仅通过类型化 `GimbalHardwareService` 完成 Probe → ARM MAINTENANCE → HOLD → Current Reset → 相对当前位置的小角度 verified move → Current Read → STOP。每次进程只执行一个增量运动并输出起点、最终绝对目标、最终位置、generation、settled 和电流状态，不开放任意 UART 文本。
+主机维护 CLI 提供一次性 `maintenance-move --axis yaw|pitch (--delta-deg N|--target-deg N)`：仅通过类型化 `GimbalHardwareService` 完成 Probe → ARM MAINTENANCE → HOLD → 运动位置稳定验收 → Current Reset → 固定目标保持电流采样 → STOP。每次进程只执行一个运动并输出起点、最终绝对目标、最终位置、generation、真实settled和电流状态，不开放任意UART文本。
 
 ## 4. 安全与失败处理
 
 - 维护命令仍必须经过 `ARM MAINTENANCE`、HELLO 和校准/原点有效门。
-- 维护目标仍限制在永久原点 ±10°，本次 CLI 只运行 ±3°。
+- 维护目标仍限制在永久原点 ±10°；CLI 支持绝对0°回中与最大10°相对运动。
 - STOP、紧急字符、UART 超时和 Fault 路径不变。
-- 若 yaw 仍不能在 5 秒内达到同 generation 的 `SETTLED=1`，立即 STOP，保持电流保护为 `UNCONFIGURED`，不继续加大 duty。
-- 一次性维护运动的最终绝对目标必须由主机再次确认处于永久原点 ±10°；`delta-deg` 是相对当前权威位置的增量，不代表绝对目标一定在 ±3°。例如现场首点增量为 +3°，绝对目标实际为 yaw 5.7°、pitch 7.4°。
-- 180 tick 在进入完整六段路径前必须分阶段验证：先单独 yaw +3°，STOP 并检查有效/未饱和电流、无 Fault；再单独 yaw -3°，STOP 并重复检查。任一阶段超时、越过 ±10°、ADC 饱和、Fault 或急停均终止验证。
+- 若 yaw 不能在5秒内达到同generation、误差≤2°并连续稳定3个80 ms采样，立即STOP，保持电流保护为 `UNCONFIGURED`，不继续加大duty；`SETTLED=1`是更强结果但不是维护验收唯一必要条件。
+- 一次性维护运动的最终绝对目标必须由主机再次确认处于永久原点±10°；`delta-deg`支持最大10°相对运动但计算出的绝对目标越界时拒绝，`target-deg`支持-10°到+10°确定性绝对目标。
+- 180 tick 在进入完整六段路径前必须分阶段验证绝对位置0°、+10°、0°、-10°。任一阶段越界、ADC饱和、Fault或急停均终止验证。
 - 若运动过快、振荡或机械声音异常，立即 STOP 并回刷当前 `222d08e` 固件。
 
 ## 5. 验证
@@ -51,7 +51,7 @@ output = clamp(controller_output,
 3. 刷写后用 ST-LINK 回读校验固件。
 4. 新增模式隔离单测：PRODUCTION 下 yaw/pitch 上限与修改前完全一致；MAINTENANCE 下仅 yaw 上限为 180、pitch 为 260；两轴维护上限不超过生产上限；STOP 清除 maintenance profile 后普通 ARM 使用生产上限；非维护命令不能进入维护分支。
 5. `probe` 验证协议 3、校准 epoch 1、原点 epoch 1 和无 Fault。
-6. 分别运行 `maintenance-move --axis yaw --delta-deg 3` 和 `--delta-deg -3`；每次完成后必须 STOP，并验证同 generation settled、目标仍在永久原点 ±10°、电流有效且未饱和、无 Fault。
+6. 依次运行 `maintenance-move --axis yaw --target-deg 0`、`--target-deg 10`、`--target-deg 0`、`--target-deg -10`；每次完成后必须STOP，并验证同generation位置连续稳定、最终误差不超过2°、电流有效且未饱和、无Fault。
 7. 两个单向阶段均通过后重跑 `current-sample`，要求六段相对基准的 ±3° 路径全部以同 generation `SETTLED=1` 完成，并记录每段实际绝对目标。
 8. 仅在 `current.valid=true`、`saturated=false`、`window_ms>=1000` 后评估保护阈值；本改动本身不写阈值。
 
@@ -112,7 +112,7 @@ MAINTASSIST,GEN=<target_generation>,ATTEMPTED=<0|1>,EXHAUSTED=<0|1>,ACTIVE_MS=<0
 3. 满足 150 ms 后 floor 单调上升、永不超过 180；分别覆盖正向和负向请求，并验证输出相位/方向与原控制器完全一致。
 4. 激活后速度恢复本身不得提前撤销；误差进入 settled 带、方向反转、STOP/reset、新目标到来或达到 300 ms 时，计数与 floor 归零。
 5. 归零后再次停滞必须重新等待完整 150 ms，不允许沿用旧补偿。
-6. 首次激活即锁存 `assist_attempted`；无论因速度恢复还是达到 300 ms 而撤销 floor，同一目标均不得再次触发。
+6. 首次激活即锁存 `assist_attempted`；无论因误差进入到位带、方向反转、控制器不再请求扭矩、STOP/reset、新目标，还是达到300 ms而撤销floor，同一目标均不得再次触发；速度恢复本身不得作为撤销条件。
 7. 激活达到 300 ms 时，在该次输出计算前立即撤销 floor 并额外锁存 `assist_exhausted`；以 5 ms、20 ms 和 50 ms 调用间隔验证基于 `now_ms` 的期限，并覆盖计数器回绕。即使主机不发送 STOP，也不得再次触发或在状态机继续运行时保持 180。
 8. 方向无效、误差为零或原控制器不请求扭矩时不触发补偿；新目标、STOP、重新 ARM 和显式 reset 可以清除 `assist_attempted` 与 `assist_exhausted`。
 9. 诊断快照正确记录 generation、实际激活时长和峰值 floor；STOP 清除控制状态但不擦除最近快照，新 yaw 目标清零快照，查询本身不得改变任何控制状态。
@@ -121,7 +121,7 @@ MAINTASSIST,GEN=<target_generation>,ATTEMPTED=<0|1>,EXHAUSTED=<0|1>,ACTIVE_MS=<0
 
 1. G431 纯 C 测试、Debug/Release 重建、Flash/RAM 检查和 ST-LINK 下载校验。
 2. 无运动 `probe` 确认协议 3、calibration/origin epoch 1、无 Fault。
-3. 单独运行 yaw +1°，要求同 generation `SETTLED=1`。settled 后保持当前目标和 HOLD，不再改变目标；每 100 ms 轮询 CURRENT，最多再等待 2000 ms，直到 `WINDOW_MS>=1000` 且 `VALID=1`。期间若出现饱和、Fault 或采样 deadline 到期则判本阶段失败。读取 `MAINTASSIST?`，记录同 generation 的实际补偿激活时长并确认不超过 300 ms，随后无条件 STOP，再检查无 Fault。
-4. +1°通过后，单独运行 yaw +3°并执行相同检查；失败则 STOP，不测试反向，不提高 180 上限。
-5. +3°通过后再运行 yaw -3°；只有正反向均通过才运行完整 `current-sample`。
+3. 使用绝对目标0°在维护窗口内自动回中；要求误差≤2°并连续稳定3个80 ms样本，失败则STOP并提示人工检查，不循环撞限位。
+4. 依次运行绝对+10°、0°和-10°，要求方向正确、每个10°行程至少约8°同向有效位移。每次位置验收后才执行 `CURRENT RESET`，保持目标并每100 ms轮询CURRENT，最多等待2000 ms，直到 `WINDOW_MS>=1000` 且 `VALID=1`；读取同generation的 `MAINTASSIST?` 并确认仍受300 ms/180 tick限制，随后无条件STOP。
+5. 只有0°、+10°、再次0°和-10°均通过才运行完整 `current-sample`；任一失败均不提高180上限。
 6. CLI 对成功和失败路径都执行 finally 风格 STOP；为凑满电流窗口不得继续改变目标。只有完整样本满足有效、未饱和、窗口至少 1000 ms 后，才另行评估保护阈值；本修订仍不写阈值。
