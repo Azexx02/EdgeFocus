@@ -155,6 +155,22 @@ static bool target_allowed(uint16_t yaw10, uint16_t pitch10)
          gimbal_angle10_target_in_window(pitch10, p_min, p_max);
 }
 
+static bool hold_position_allowed(uint16_t yaw10, uint16_t pitch10)
+{
+  const GimbalNvRecordV3 *record = &app_gimbal_nv_storage.record;
+  if (runtime_profile != APP_GIMBAL_PROFILE_MAINTENANCE) {
+    return target_allowed(yaw10, pitch10);
+  }
+  return yaw10 < GIMBAL_ANGLE10_FULL_TURN &&
+         pitch10 < GIMBAL_ANGLE10_FULL_TURN &&
+         gimbal_angle10_target_in_window(
+             yaw10, record->safe_min_tenths[GIMBAL_AXIS_Y],
+             record->safe_max_tenths[GIMBAL_AXIS_Y]) &&
+         gimbal_angle10_target_in_window(
+             pitch10, record->safe_min_tenths[GIMBAL_AXIS_P],
+             record->safe_max_tenths[GIMBAL_AXIS_P]);
+}
+
 GimbalNvStoreResult app_gimbal_nv_commit(const GimbalNvRecordV3 *record)
 {
   return gimbal_nv_storage_commit(&app_gimbal_nv_storage, record);
@@ -286,7 +302,7 @@ AppGimbalResult app_gimbal_hold_now(uint32_t *generation)
       !motor_pwm_get_angle_tenths(GIMBAL_AXIS_P, &pitch10)) {
     return APP_GIMBAL_SAMPLE_STALE;
   }
-  if (!target_allowed(yaw10, pitch10)) return APP_GIMBAL_BAD_RANGE;
+  if (!hold_position_allowed(yaw10, pitch10)) return APP_GIMBAL_BAD_RANGE;
   motor_pwm_hold_enable(true);
   if (!motor_pwm_hold_is_enabled()) {
     latch_fault("DRIVER_FAULT");
