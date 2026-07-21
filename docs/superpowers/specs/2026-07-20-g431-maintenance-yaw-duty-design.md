@@ -91,7 +91,7 @@ output_direction = requested_direction
 
 每个新 yaw 目标最多允许一次补偿尝试：进入激活态时立即记录 `assist_started_ms` 并锁存 `assist_attempted`，在该目标生命周期内不得第二次触发。每次状态更新都必须先判断 `now_ms - assist_started_ms >= 300`，到期则在本轮输出计算前立即撤销临时 floor、恢复原 `requested_magnitude`，并锁存 `assist_exhausted`。该期限由 G431 本地单调时间判断，独立于主机 5 秒 verified-settle 超时、UART 和 STOP 是否正常；因此即使主机失联，也不会重复脉冲。正常控制任务继续运行时，补偿在真实 300 ms 到期后的首个控制调用撤销；若整个 MCU/控制中断停止运行，则由既有硬件 Fault/看门狗安全链负责关断，不把控制循环停摆误表述为软件状态机可单独解决的问题。
 
-退出 maintenance、轴不是 yaw、目标斜坡重新运动、进入 settled 误差带 `error_abs <= 8`、控制器不再请求扭矩或请求方向反转时，立即把资格计数和临时 floor 清零。实际速度离开 `-1..+1` 时先进入恢复确认；只有连续保持至少 50 ms 才撤销 floor，期间若速度重新回到停滞带则清零恢复计时。该去抖只过滤单个编码器速度毛刺，不改变 300 ms 总上限；速度确认撤销后同一目标仍保留 `assist_attempted`，因而不会再次补偿。`assist_attempted` 和 `assist_exhausted` 只允许由新目标、STOP、重新 ARM 或显式 reset 清除。由此补偿只形成每目标至多一次、有界的“停滞解锁脉冲”，不会进入生产模式。
+退出 maintenance、轴不是 yaw、目标斜坡重新运动、进入 settled 误差带 `error_abs <= 8`、控制器不再请求扭矩或请求方向反转时，立即把资格计数和临时 floor 清零。速度 `-1..+1` 只用于确认触发前确实停滞；补偿一旦触发，不因已经开始运动而提前撤销，而是在误差进入到位带、方向反转或满 300 ms 时结束。这样不会把单次编码器速度跳变误当成已完成脱粘，同时最坏持续时间和 180 tick 上限仍完全不变。`assist_attempted` 和 `assist_exhausted` 只允许由新目标、STOP、重新 ARM 或显式 reset 清除，且不会进入生产模式。
 
 `motor_pwm_hold_enable(false)`、STOP、Fault、重新 ARM 和新 yaw 目标均必须显式清除该状态。原 `gimbal_power_profile` 的生产/维护上限隔离和编译期约束继续保留。
 
@@ -110,7 +110,7 @@ MAINTASSIST,GEN=<target_generation>,ATTEMPTED=<0|1>,EXHAUSTED=<0|1>,ACTIVE_MS=<0
 1. 生产 yaw、maintenance pitch、目标斜坡未完成或已 settled 时，输出幅值和方向严格等于原控制器输出。
 2. maintenance yaw 停滞不足 150 ms 时不介入；以 5 ms、20 ms 和 50 ms 的不规则调用间隔验证资格按 `now_ms` 而不是调用次数计算，并覆盖毫秒计数器回绕。
 3. 满足 150 ms 后 floor 单调上升、永不超过 180；分别覆盖正向和负向请求，并验证输出相位/方向与原控制器完全一致。
-4. 速度恢复连续不足 50 ms 时不得因毛刺撤销；连续达到 50 ms、误差进入 settled 带、方向反转、STOP/reset 或新目标到来时，计数与 floor 归零。
+4. 激活后速度恢复本身不得提前撤销；误差进入 settled 带、方向反转、STOP/reset、新目标到来或达到 300 ms 时，计数与 floor 归零。
 5. 归零后再次停滞必须重新等待完整 150 ms，不允许沿用旧补偿。
 6. 首次激活即锁存 `assist_attempted`；无论因速度恢复还是达到 300 ms 而撤销 floor，同一目标均不得再次触发。
 7. 激活达到 300 ms 时，在该次输出计算前立即撤销 floor 并额外锁存 `assist_exhausted`；以 5 ms、20 ms 和 50 ms 调用间隔验证基于 `now_ms` 的期限，并覆盖计数器回绕。即使主机不发送 STOP，也不得再次触发或在状态机继续运行时保持 180。

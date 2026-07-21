@@ -9,8 +9,6 @@ static void clear_live_state(GimbalMaintenanceStictionState *state)
   state->qualify_started_ms = 0U;
   state->active = false;
   state->assist_started_ms = 0U;
-  state->recovering = false;
-  state->recovery_started_ms = 0U;
   state->assist_direction = 0;
   state->assist_attempted = false;
   state->assist_exhausted = false;
@@ -88,7 +86,6 @@ GimbalMaintenanceStictionOutput gimbal_maintenance_stiction_update(
       state->active = false;
       state->assist_floor = 0U;
       state->qualifying = false;
-      state->recovering = false;
       output.release_immediately = true;
       return output;
     }
@@ -97,24 +94,8 @@ GimbalMaintenanceStictionOutput gimbal_maintenance_stiction_update(
       state->assist_floor = 0U;
       state->assist_exhausted = true;
       state->diagnostics.exhausted = true;
-      state->recovering = false;
       output.release_immediately = true;
       return output;
-    }
-    if (!input_eligible) {
-      if (!state->recovering) {
-        state->recovering = true;
-        state->recovery_started_ms = input->now_ms;
-      } else if ((uint32_t)(input->now_ms - state->recovery_started_ms) >=
-                 GIMBAL_MAINT_STICTION_RECOVERY_MS) {
-        state->active = false;
-        state->assist_floor = 0U;
-        state->recovering = false;
-        output.release_immediately = true;
-        return output;
-      }
-    } else {
-      state->recovering = false;
     }
     next_floor = state->assist_floor;
     if (next_floor < input->requested_magnitude) {

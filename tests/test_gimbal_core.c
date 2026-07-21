@@ -208,11 +208,11 @@ static void test_maintenance_stiction_reset_and_snapshot(void) {
     output = gimbal_maintenance_stiction_update(&state, &input);
     assert(output.magnitude == 105U && state.active &&
            !output.release_immediately);
-    input.now_ms = 304U;
+    input.now_ms = 549U;
     output = gimbal_maintenance_stiction_update(&state, &input);
     assert(output.magnitude == 107U && state.active &&
            !output.release_immediately);
-    input.now_ms = 305U;
+    input.now_ms = 550U;
     output = gimbal_maintenance_stiction_update(&state, &input);
     assert(output.magnitude == 101U && !state.active &&
            output.release_immediately);
@@ -225,7 +225,8 @@ static void test_maintenance_stiction_reset_and_snapshot(void) {
     gimbal_maintenance_stiction_reset_control(&state);
     gimbal_maintenance_stiction_get_diagnostics(&state, &diagnostics);
     assert(diagnostics.target_generation == 10U);
-    assert(diagnostics.attempted && diagnostics.active_ms == 55U);
+    assert(diagnostics.attempted && diagnostics.exhausted &&
+           diagnostics.active_ms == 300U);
     input.requested_direction = 0;
     output = gimbal_maintenance_stiction_update(&state, &input);
     assert(output.magnitude == 101U && output.direction == 0);
@@ -237,7 +238,7 @@ static void test_maintenance_stiction_reset_and_snapshot(void) {
            diagnostics.active_ms == 0U && diagnostics.peak_floor == 0U);
 }
 
-static void test_maintenance_stiction_recovery_debounce(void) {
+static void test_maintenance_stiction_bounded_motion_boost(void) {
     GimbalMaintenanceStictionState state;
     GimbalMaintenanceStictionInput input = stalled_input(100U, 1);
     GimbalMaintenanceStictionOutput output;
@@ -261,10 +262,10 @@ static void test_maintenance_stiction_recovery_debounce(void) {
     input.now_ms = 320U;
     output = gimbal_maintenance_stiction_update(&state, &input);
     assert(output.magnitude == 109U && state.active);
-    input.now_ms = 369U;
+    input.now_ms = 549U;
     output = gimbal_maintenance_stiction_update(&state, &input);
     assert(output.magnitude == 111U && state.active);
-    input.now_ms = 370U;
+    input.now_ms = 550U;
     output = gimbal_maintenance_stiction_update(&state, &input);
     assert(output.magnitude == 101U && !state.active &&
            output.release_immediately);
@@ -493,7 +494,7 @@ int main(void) {
     test_maintenance_stiction_isolation_and_direction();
     test_maintenance_stiction_time_bounds_and_wrap();
     test_maintenance_stiction_reset_and_snapshot();
-    test_maintenance_stiction_recovery_debounce();
+    test_maintenance_stiction_bounded_motion_boost();
     test_encoding_and_selection();
     test_atomic_store_and_tombstones();
     test_protocol_parser_and_state_matrix();
