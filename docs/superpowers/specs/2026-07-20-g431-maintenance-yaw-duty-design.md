@@ -32,7 +32,7 @@ output = clamp(controller_output,
 
 配置层新增独立的 `GIMBAL_X/Y_MAINTENANCE_MAX_DUTY_TICKS`，`axis_hold_duty()` 在 maintenance mode 下只返回对应维护**上限**；`axis_hold_min_duty()` 和现有最小起步 duty 不修改。生产 mode 继续返回原生产上限。目标斜坡、PD/积分控制和 settle 门限均保持原样。这样 yaw 仍从 80 平滑启动，但最多可增加到 180 以跨过静摩擦；`180` 来自本机刚完成且成功的校准探测，不是经验占位值。
 
-主机维护 CLI 提供一次性 `maintenance-move --axis yaw|pitch (--delta-deg N|--target-deg N)`：仅通过类型化 `GimbalHardwareService` 完成 Probe → ARM MAINTENANCE → HOLD → 运动位置稳定验收 → Current Reset → 固定目标保持电流采样 → STOP。每次进程只执行一个运动并输出起点、最终绝对目标、最终位置、generation、真实settled和电流状态，不开放任意UART文本。
+主机维护 CLI 提供 `maintenance-move --axis yaw|pitch (--delta-deg N|--target-deg N)`：验收行程使用永久零位的0°、+10°、0°、-10°，避免±3°小行程被静摩擦淹没。仅通过类型化 `GimbalHardwareService` 完成 Probe → ARM MAINTENANCE → HOLD → 必要时一次性 `AUTO_CENTER_RECOVERY` → 请求目标稳定验收 → Current Reset → 固定目标保持电流采样 → STOP。自动回中只允许目标 `(0°,0°)`，并要求raw有效、样本新鲜、无Fault、起点处于持久化产品安全窗；5秒超时、持续背离或越界立即STOP。普通请求目标仍严格限制在永久零位±10°。输出保留初始位置、回中结果、最终目标、generation、真实settled和电流状态，不开放任意UART文本。
 
 ## 4. 安全与失败处理
 
