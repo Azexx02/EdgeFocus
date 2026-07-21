@@ -386,8 +386,16 @@ int main(int argc, char** argv) {
         if (ok) ok = adopt(service.executeMaintenance({MaintenanceOperation::Hold}));
         if (ok) ok = adopt(service.refreshAngle(1000));
 
+        std::optional<double> initial_yaw;
+        std::optional<double> initial_pitch;
         std::optional<double> start_yaw;
         std::optional<double> start_pitch;
+        bool auto_center_attempted = false;
+        bool auto_center_succeeded = false;
+        std::optional<std::uint32_t> auto_center_generation;
+        std::optional<double> auto_center_final_yaw;
+        std::optional<double> auto_center_final_pitch;
+        std::string auto_center_error;
         std::optional<double> target_yaw;
         std::optional<double> target_pitch;
         std::optional<double> final_yaw;
@@ -397,11 +405,51 @@ int main(int argc, char** argv) {
         bool motion_attempted = false;
         if (ok) {
             const auto status = service.status();
+            initial_yaw = status.yaw_deg;
+            initial_pitch = status.pitch_deg;
+            const auto& snapshot = status.snapshot;
+            const bool pose_usable = snapshot.yaw_raw_valid.value_or(false) &&
+                snapshot.pitch_raw_valid.value_or(false) &&
+                snapshot.pose_sample_age_ms &&
+                *snapshot.pose_sample_age_ms <= 50U && !status.fault_active;
+            const bool product_safe = initial_yaw && initial_pitch &&
+                limits.contains(0.0, 0.0, *initial_yaw, *initial_pitch);
+            if (!pose_usable || !product_safe) {
+                result.success = false;
+                result.error = "auto_center_unsafe_start";
+                result.error_code = "AUTO_CENTER_UNSAFE_START";
+                result.error_class = edgefocus::gimbal::ErrorClass::Safety;
+                ok = false;
+            } else {
+                const bool outside_maintenance_window =
+                    std::abs(edgefocus::gimbal::shortestAngleDelta(
+                        0.0, *initial_yaw)) > 10.0 ||
+                    std::abs(edgefocus::gimbal::shortestAngleDelta(
+                        0.0, *initial_pitch)) > 10.0;
+                if (outside_maintenance_window) {
+                    auto_center_attempted = true;
+                    auto center_result = service.moveToMaintenanceVerified(
+                        0.0, 0.0, 5000, 2.0, true);
+                    auto_center_generation = center_result.motion_generation;
+                    auto_center_error = center_result.error_code;
+                    ok = adopt(std::move(center_result));
+                    auto_center_succeeded = ok;
+                    if (ok) {
+                        ok = adopt(service.refreshAngle(1000));
+                        const auto center_status = service.status();
+                        auto_center_final_yaw = center_status.yaw_deg;
+                        auto_center_final_pitch = center_status.pitch_deg;
+                    }
+                }
+            }
+        }
+        if (ok) {
+            const auto status = service.status();
             start_yaw = status.yaw_deg;
             start_pitch = status.pitch_deg;
             if (!start_yaw || !start_pitch) {
                 result.success = false;
-                result.error = "maintenance_angle_unknown";
+                result.error = "maintenance_center_angle_unknown";
                 result.error_code = "SAMPLE_STALE";
                 ok = false;
             }
@@ -516,6 +564,20 @@ int main(int argc, char** argv) {
             {"axis", axis},
             {"request_mode", absolute_target ? "absolute" : "relative"},
             {"requested_deg", requested_degrees},
+            {"initial_yaw_deg", initial_yaw ? nlohmann::json(*initial_yaw)
+                                             : nlohmann::json(nullptr)},
+            {"initial_pitch_deg", initial_pitch ? nlohmann::json(*initial_pitch)
+                                                 : nlohmann::json(nullptr)},
+            {"auto_center_attempted", auto_center_attempted},
+            {"auto_center_succeeded", auto_center_succeeded},
+            {"auto_center_generation", auto_center_generation
+                 ? nlohmann::json(*auto_center_generation) : nlohmann::json(nullptr)},
+            {"auto_center_final_yaw_deg", auto_center_final_yaw
+                 ? nlohmann::json(*auto_center_final_yaw) : nlohmann::json(nullptr)},
+            {"auto_center_final_pitch_deg", auto_center_final_pitch
+                 ? nlohmann::json(*auto_center_final_pitch) : nlohmann::json(nullptr)},
+            {"auto_center_error", auto_center_error.empty()
+                 ? nlohmann::json(nullptr) : nlohmann::json(auto_center_error)},
             {"start_yaw_deg", start_yaw ? nlohmann::json(*start_yaw) : nlohmann::json(nullptr)},
             {"start_pitch_deg", start_pitch ? nlohmann::json(*start_pitch) : nlohmann::json(nullptr)},
             {"target_yaw_deg", target_yaw ? nlohmann::json(*target_yaw) : nlohmann::json(nullptr)},

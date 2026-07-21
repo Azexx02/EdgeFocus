@@ -513,7 +513,7 @@ CLI和网页均提供维护能力。
 2. `CAL ELECTRICAL ALL`，显示进度并允许紧急停止。
 3. 提示人工将云台摆到产品正前方。
 4. 确认编码器稳定后执行 `ORIGIN CAPTURE`。
-5. 执行 `ARM MAINTENANCE` 和 `HOLD NOW`，按绝对目标0°、+10°、0°、-10°低功率验收。每段要求同generation、位置有效、无Fault、目标未越界，并在误差≤2°内连续稳定3个80 ms样本；`SETTLED=1` 是更强成功条件但非维护验收唯一门槛，生产settled定义不变。
+5. 执行 `ARM MAINTENANCE` 和 `HOLD NOW`。维护验收采用0°、+10°、0°、-10°，不采用易受静摩擦影响的±3°小行程。若STOP后的自然下垂使任一轴超出±10°，只有两轴raw有效、样本年龄≤50 ms、无Fault且起点仍在持久化产品安全窗（当前±70°）内时，工具才允许一次目标固定为 `(0°,0°)`、独立5秒期限的 `AUTO_CENTER_RECOVERY`；持续背离、越出产品安全窗或超时均STOP且不执行请求目标。请求目标本身始终限制在永久零位±10°，每段要求同generation，并在误差≤2°内连续稳定3个80 ms样本；生产settled定义不变。
 6. `maintenance-move` 到达目标后才执行 `CURRENT RESET`，固定目标不再运动，再取得完整1000 ms保持电流窗口；完整 `current-sample` 仍按其既定流程在运动前RESET。`VALID=0` 或 `SATURATED=1` 时禁止生成阈值并要求重采。
 7. 完成采样后执行STOP并确认DISABLED，再生成建议峰值/平均值/stall参数；人工确认后用 `PROTECT CURRENT SET` 原子保存。
 8. 执行普通ARM，确认生产安全门已开放，再做配置范围内的验证。

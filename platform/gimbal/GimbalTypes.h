@@ -144,6 +144,9 @@ struct GimbalSnapshot {
     ArmProfile arm_profile{ArmProfile::None};
     std::optional<std::int32_t> current_yaw10;
     std::optional<std::int32_t> current_pitch10;
+    std::optional<bool> yaw_raw_valid;
+    std::optional<bool> pitch_raw_valid;
+    std::optional<std::uint32_t> pose_sample_age_ms;
     std::optional<std::int32_t> target_yaw10;
     std::optional<std::int32_t> target_pitch10;
     std::optional<std::uint32_t> motion_generation;

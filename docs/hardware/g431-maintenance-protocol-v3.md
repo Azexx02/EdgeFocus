@@ -56,7 +56,7 @@ gimbal_bringup protect-current-set \
 
 新固件通过 `MAINT_ASSIST_DIAG` 能力声明只读诊断 `MAINTASSIST?`。该辅助仅作用于维护模式 yaw：目标斜坡完成、误差大于 8 raw、速度在 ±1 raw、连续停滞至少 150 ms 时，一次性把既有请求下限每个控制周期提高 2 tick，最高 180，最长 300 ms。速度只用于触发前确认停滞；触发后持续到误差进入到位带、方向反转或 300 ms 到期，单个编码器速度跳变不会提前撤销；生产模式和 pitch 不变。
 
-上板必须分级执行。先使用绝对目标回0°，再做+10°和-10°验证；每一步都确认 STOP、Fault 未触发和诊断边界后才继续：
+上板必须分级执行。维护验收目标为永久零位的 `0° / +10° / -10°`，不再使用容易受静摩擦影响的±3°小行程。若任一轴起点超出±10°，仅在两轴raw有效、样本年龄≤50 ms、无Fault且仍处于持久化产品安全窗（当前±70°）时，CLI才允许一次特殊 `AUTO_CENTER_RECOVERY` 双轴回到 `(0°,0°)`；该恢复不能用于其他目标，5秒超时、持续背离或越出产品安全窗都会立即STOP。随后执行请求目标并最终STOP，无需人工持续扶正：
 
 ```sh
 gimbal_bringup maintenance-move --axis yaw --target-deg 0 --allow-motion --confirm-board

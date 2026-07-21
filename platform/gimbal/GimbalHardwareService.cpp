@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <exception>
+#include <limits>
 #include <thread>
 #include <utility>
 
@@ -265,6 +266,15 @@ void GimbalHardwareService::applyEventLocked(const Event& event) {
     if (event.arm_profile) snapshot_.arm_profile = *event.arm_profile;
     if (event.yaw_deg) snapshot_.current_yaw10 = degreeToTenths(*event.yaw_deg);
     if (event.pitch_deg) snapshot_.current_pitch10 = degreeToTenths(*event.pitch_deg);
+    if (event.kind == EventKind::Pose) {
+        const auto yaw_raw_valid = event.fields.find("Y_RAW_VALID");
+        const auto pitch_raw_valid = event.fields.find("P_RAW_VALID");
+        snapshot_.yaw_raw_valid = yaw_raw_valid != event.fields.end() &&
+                                  yaw_raw_valid->second == "1";
+        snapshot_.pitch_raw_valid = pitch_raw_valid != event.fields.end() &&
+                                    pitch_raw_valid->second == "1";
+        snapshot_.pose_sample_age_ms = event.sample_age_ms;
+    }
     if (event.target_yaw_deg) snapshot_.target_yaw10 = degreeToTenths(*event.target_yaw_deg);
     if (event.target_pitch_deg) snapshot_.target_pitch10 = degreeToTenths(*event.target_pitch_deg);
     if (event.motion_generation) snapshot_.motion_generation = event.motion_generation;
@@ -759,7 +769,7 @@ CommandResult GimbalHardwareService::executeMaintenanceLocked(
             for (const auto& target : targets) {
                 auto moved = moveToVerifiedLocked(target.first, target.second,
                                                   std::min(timeout_ms, 5000),
-                                                  1.0, true, true, 1U);
+                                                  1.0, true, true, 1U, false);
                 result.transcript.insert(result.transcript.end(),
                                          moved.transcript.begin(),
                                          moved.transcript.end());
@@ -900,15 +910,28 @@ CommandResult GimbalHardwareService::moveToVerified(
     double yaw_deg, double pitch_deg, int timeout_ms, double tolerance_deg) {
     return submit([this, yaw_deg, pitch_deg, timeout_ms, tolerance_deg] {
         return moveToVerifiedLocked(yaw_deg, pitch_deg, timeout_ms,
-                                    tolerance_deg, true, true, 1U);
+                                    tolerance_deg, true, true, 1U, false);
     }, timeout_ms + 2000);
 }
 
 CommandResult GimbalHardwareService::moveToMaintenanceVerified(
-    double yaw_deg, double pitch_deg, int timeout_ms, double tolerance_deg) {
-    return submit([this, yaw_deg, pitch_deg, timeout_ms, tolerance_deg] {
+    double yaw_deg, double pitch_deg, int timeout_ms, double tolerance_deg,
+    bool reject_divergence) {
+    const double yaw_offset = std::abs(shortestAngleDelta(0.0, yaw_deg));
+    const double pitch_offset = std::abs(shortestAngleDelta(0.0, pitch_deg));
+    if (reject_divergence && (yaw_offset > 0.05 || pitch_offset > 0.05)) {
+        return failure("auto_center_target_must_be_origin", ErrorClass::Safety,
+                       "AUTO_CENTER_TARGET_INVALID");
+    }
+    if (!reject_divergence && (yaw_offset > 10.0 || pitch_offset > 10.0)) {
+        return failure("maintenance_target_out_of_bounds", ErrorClass::Safety,
+                       "TARGET_OUT_OF_BOUNDS");
+    }
+    return submit([this, yaw_deg, pitch_deg, timeout_ms, tolerance_deg,
+                   reject_divergence] {
         return moveToVerifiedLocked(yaw_deg, pitch_deg, timeout_ms,
-                                    tolerance_deg, true, false, 3U);
+                                    tolerance_deg, true, false, 3U,
+                                    reject_divergence);
     }, timeout_ms + 2000);
 }
 
@@ -916,13 +939,14 @@ CommandResult GimbalHardwareService::moveToManualVerified(
     double yaw_deg, double pitch_deg, int timeout_ms, double tolerance_deg) {
     return submit([this, yaw_deg, pitch_deg, timeout_ms, tolerance_deg] {
         return moveToVerifiedLocked(yaw_deg, pitch_deg, timeout_ms,
-                                    tolerance_deg, false, true, 1U);
+                                    tolerance_deg, false, true, 1U, false);
     }, timeout_ms + 2000);
 }
 
 CommandResult GimbalHardwareService::moveToVerifiedLocked(
     double yaw_deg, double pitch_deg, int timeout_ms, double tolerance_deg,
-    bool enforce_limits, bool require_settled, unsigned stable_samples) {
+    bool enforce_limits, bool require_settled, unsigned stable_samples,
+    bool reject_divergence) {
     if (timeout_ms <= 0 || tolerance_deg <= 0.0 || tolerance_deg > 5.0 ||
         stable_samples == 0U) {
         return failure("invalid_move_verify_parameters", ErrorClass::Command,
@@ -934,6 +958,10 @@ CommandResult GimbalHardwareService::moveToVerifiedLocked(
     const auto generation = *aggregate.motion_generation;
     const auto deadline = clock_() + timeout_ms;
     unsigned consecutive_samples = 0U;
+    unsigned yaw_divergence_samples = 0U;
+    unsigned pitch_divergence_samples = 0U;
+    double best_yaw_error = std::numeric_limits<double>::infinity();
+    double best_pitch_error = std::numeric_limits<double>::infinity();
     while (clock_() < deadline) {
         sleeper_(std::chrono::milliseconds(80));
         Event pose;
@@ -958,9 +986,57 @@ CommandResult GimbalHardwareService::moveToVerifiedLocked(
             consecutive_samples = 0U;
             continue;
         }
-        const double final_error = std::max(
-            std::abs(shortestAngleDelta(*pose.yaw_deg, yaw_deg)),
-            std::abs(shortestAngleDelta(*pose.pitch_deg, pitch_deg)));
+        if (reject_divergence) {
+            const auto yaw_valid = pose.fields.find("Y_RAW_VALID");
+            const auto pitch_valid = pose.fields.find("P_RAW_VALID");
+            const bool raw_valid = yaw_valid != pose.fields.end() &&
+                                   yaw_valid->second == "1" &&
+                                   pitch_valid != pose.fields.end() &&
+                                   pitch_valid->second == "1";
+            const bool fresh = pose.sample_age_ms && *pose.sample_age_ms <= 50U;
+            if (!raw_valid || !fresh ||
+                !limits_.contains(0.0, 0.0, *pose.yaw_deg, *pose.pitch_deg)) {
+                emergencyStopLocked();
+                aggregate.success = false;
+                aggregate.error_class = ErrorClass::Safety;
+                aggregate.error_code = !raw_valid || !fresh
+                    ? "AUTO_CENTER_POSE_INVALID"
+                    : "AUTO_CENTER_LEFT_SAFE_WINDOW";
+                aggregate.error = !raw_valid || !fresh
+                    ? "auto_center_pose_invalid"
+                    : "auto_center_left_safe_window";
+                return aggregate;
+            }
+        }
+        const double yaw_error =
+            std::abs(shortestAngleDelta(*pose.yaw_deg, yaw_deg));
+        const double pitch_error =
+            std::abs(shortestAngleDelta(*pose.pitch_deg, pitch_deg));
+        const double final_error = std::max(yaw_error, pitch_error);
+        if (reject_divergence) {
+            const auto update_divergence = [](double error, double& best,
+                                               unsigned& samples) {
+                if (error + 0.25 < best) {
+                    best = error;
+                    samples = 0U;
+                } else if (error > best + 2.0) {
+                    ++samples;
+                } else {
+                    samples = 0U;
+                }
+            };
+            update_divergence(yaw_error, best_yaw_error, yaw_divergence_samples);
+            update_divergence(pitch_error, best_pitch_error,
+                              pitch_divergence_samples);
+            if (yaw_divergence_samples >= 3U || pitch_divergence_samples >= 3U) {
+                emergencyStopLocked();
+                aggregate.success = false;
+                aggregate.error_class = ErrorClass::Safety;
+                aggregate.error_code = "AUTO_CENTER_DIVERGING";
+                aggregate.error = "auto_center_diverging";
+                return aggregate;
+            }
+        }
         if (final_error > tolerance_deg) {
             consecutive_samples = 0U;
             continue;

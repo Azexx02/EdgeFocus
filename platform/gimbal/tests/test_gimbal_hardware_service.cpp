@@ -278,6 +278,8 @@ void testProtocol3AckAndSettled() {
     assert(snapshot.compatibility == ProtocolCompatibility::Protocol3Control);
     assert(snapshot.calibration_epoch == 7 && snapshot.origin_epoch == 9);
     assert(snapshot.current_protection_state == "VALID");
+    assert(snapshot.yaw_raw_valid.value_or(false));
+    assert(snapshot.pitch_raw_valid.value_or(false));
 
     result = service.moveTo(10.0, -5.0, 500);
     assert(result.success && result.firmware_accepted && !result.settled);
@@ -409,6 +411,11 @@ void testTypedMaintenanceCommandsAndTelemetry() {
     assert(result.success);
     result = service.executeMaintenance({MaintenanceOperation::Hold});
     assert(result.success && result.settled);
+    result = service.moveToMaintenanceVerified(11.0, 0.0, 2000, 2.0);
+    assert(!result.success && result.error_code == "TARGET_OUT_OF_BOUNDS");
+    result = service.moveToMaintenanceVerified(1.0, 0.0, 2000, 2.0, true);
+    assert(!result.success &&
+           result.error_code == "AUTO_CENTER_TARGET_INVALID");
     const std::string stable_maintenance_pose =
         "POSE,STATE=MOVING,ARM_PROFILE=MAINTENANCE,YAW10=30,PITCH10=0,"
         "TYAW10=30,TPITCH10=0,GEN=2,SETTLED=0,CAL_EPOCH=7,ORIGIN_EPOCH=9,"
