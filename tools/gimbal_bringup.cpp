@@ -383,6 +383,7 @@ int main(int argc, char** argv) {
         bool ok = adopt(service.executeMaintenance({MaintenanceOperation::Probe}));
         if (ok) ok = adopt(service.executeMaintenance(
             {MaintenanceOperation::ArmMaintenance}));
+        if (ok) ok = adopt(service.executeMaintenance({MaintenanceOperation::Hold}));
         if (ok) ok = adopt(service.refreshAngle(1000));
 
         std::optional<double> initial_yaw;
@@ -439,9 +440,6 @@ int main(int argc, char** argv) {
                         auto_center_final_yaw = center_status.yaw_deg;
                         auto_center_final_pitch = center_status.pitch_deg;
                     }
-                } else {
-                    ok = adopt(service.executeMaintenance({MaintenanceOperation::Hold}));
-                    if (ok) ok = adopt(service.refreshAngle(1000));
                 }
             }
         }
