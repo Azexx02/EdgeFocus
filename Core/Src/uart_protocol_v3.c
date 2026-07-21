@@ -243,7 +243,7 @@ static void execute(const char *line, size_t length)
     uart_protocol_send("OK,G431\r\n");
     break;
   case GIMBAL_CMD_VER:
-    uart_protocol_send("VER,PROTO=3.0,FW=G431-GIMBAL,CAPS=ASYNC_MOTION|POSE|ORIGIN|FAULT_CLASS|HOLD_NOW|NVM_V3|MAINT_ASSIST_DIAG|NEGOTIATION_REQUIRED,MAX_SPEED10=NA,MAX_ACCEL10=NA,SETTLE_MS=250\r\n");
+    uart_protocol_send("VER,PROTO=3.0,FW=G431-GIMBAL,REV=8C67ADE,CAPS=ASYNC_MOTION|POSE|ORIGIN|FAULT_CLASS|HOLD_NOW|NVM_V3|MAINT_ASSIST_DIAG|NEGOTIATION_REQUIRED,MAX_SPEED10=NA,MAX_ACCEL10=NA,SETTLE_MS=250\r\n");
     break;
   case GIMBAL_CMD_HELLO:
     hello_complete = true;
@@ -317,14 +317,18 @@ static void execute(const char *line, size_t length)
     break;
   case GIMBAL_CMD_NVM_STATUS:
     snprintf(response, sizeof(response),
-             "NVM,SCHEMA=3,ACTIVE_SLOT=%d,GEN=%lu,A=%s,B=%s,FLAGS=%lu,CAL_EPOCH=%lu,ORIGIN_EPOCH=%lu\r\n",
+             "NVM,SCHEMA=3,ACTIVE_SLOT=%d,GEN=%lu,A=%s,B=%s,FLAGS=%lu,CAL_EPOCH=%lu,ORIGIN_EPOCH=%lu,Y_MIN10=%d,Y_MAX10=%d,P_MIN10=%d,P_MAX10=%d\r\n",
              (int)app_gimbal_nv_storage.active_slot,
              (unsigned long)app_gimbal_nv_storage.record.generation,
              slot_status_name(app_gimbal_nv_storage.slot_status[0]),
              slot_status_name(app_gimbal_nv_storage.slot_status[1]),
              (unsigned long)app_gimbal_nv_storage.record.valid_flags,
              (unsigned long)app_gimbal_nv_storage.record.calibration_epoch,
-             (unsigned long)app_gimbal_nv_storage.record.origin_epoch);
+             (unsigned long)app_gimbal_nv_storage.record.origin_epoch,
+             (int)app_gimbal_nv_storage.record.safe_min_tenths[GIMBAL_AXIS_Y],
+             (int)app_gimbal_nv_storage.record.safe_max_tenths[GIMBAL_AXIS_Y],
+             (int)app_gimbal_nv_storage.record.safe_min_tenths[GIMBAL_AXIS_P],
+             (int)app_gimbal_nv_storage.record.safe_max_tenths[GIMBAL_AXIS_P]);
     uart_protocol_send(response);
     break;
   case GIMBAL_CMD_NVM_CLEAR_ORIGIN:
