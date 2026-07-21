@@ -513,8 +513,8 @@ CLI和网页均提供维护能力。
 2. `CAL ELECTRICAL ALL`，显示进度并允许紧急停止。
 3. 提示人工将云台摆到产品正前方。
 4. 确认编码器稳定后执行 `ORIGIN CAPTURE`。
-5. 执行 `ARM MAINTENANCE` 和 `HOLD NOW`，发送 `CURRENT RESET`，以低功率在±10°内做3°四向运动并回0°，验证方向、零位和settled。
-6. 通过 `CURRENT` 取得完整1000 ms窗口和自RESET后的两轴ADC raw/average/peak；`VALID=0` 或 `SATURATED=1` 时禁止生成阈值并要求重采。
+5. 执行 `ARM MAINTENANCE` 和 `HOLD NOW`，按绝对目标0°、+10°、0°、-10°低功率验收。每段要求同generation、位置有效、无Fault、目标未越界，并在误差≤2°内连续稳定3个80 ms样本；`SETTLED=1` 是更强成功条件但非维护验收唯一门槛，生产settled定义不变。
+6. `maintenance-move` 到达目标后才执行 `CURRENT RESET`，固定目标不再运动，再取得完整1000 ms保持电流窗口；完整 `current-sample` 仍按其既定流程在运动前RESET。`VALID=0` 或 `SATURATED=1` 时禁止生成阈值并要求重采。
 7. 完成采样后执行STOP并确认DISABLED，再生成建议峰值/平均值/stall参数；人工确认后用 `PROTECT CURRENT SET` 原子保存。
 8. 执行普通ARM，确认生产安全门已开放，再做配置范围内的验证。
 9. 导出校准和测试日志。
@@ -567,7 +567,7 @@ CLI和网页均提供维护能力。
 3. 物理断电后同一正前方逻辑角误差每轴≤±1°。
 4. 会话切换和故障恢复不做电校准。
 5. 两轴±70°边界低速验证；越界目标由主机和固件分别拒绝。
-6. 3°正反向小步进方向正确、可重复且无丢失净位移。
+6. 10°正反向维护运动方向正确，最终误差不超过2°，因此单次同向净位移不少于约8°，且全程无Fault。
 7. 运动中 `HOLD NOW` 后200 ms内停止明显运动，最终误差≤1°。
 8. 普通运动和 `CAL ELECTRICAL` 中发送 `!`，均在50 ms内关PWM/Boost。
 9. 到位条件连续维持约250 ms后才报告settled。

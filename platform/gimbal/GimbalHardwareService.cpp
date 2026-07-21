@@ -759,7 +759,7 @@ CommandResult GimbalHardwareService::executeMaintenanceLocked(
             for (const auto& target : targets) {
                 auto moved = moveToVerifiedLocked(target.first, target.second,
                                                   std::min(timeout_ms, 5000),
-                                                  1.0, true);
+                                                  1.0, true, true, 1U);
                 result.transcript.insert(result.transcript.end(),
                                          moved.transcript.begin(),
                                          moved.transcript.end());
@@ -900,7 +900,15 @@ CommandResult GimbalHardwareService::moveToVerified(
     double yaw_deg, double pitch_deg, int timeout_ms, double tolerance_deg) {
     return submit([this, yaw_deg, pitch_deg, timeout_ms, tolerance_deg] {
         return moveToVerifiedLocked(yaw_deg, pitch_deg, timeout_ms,
-                                    tolerance_deg, true);
+                                    tolerance_deg, true, true, 1U);
+    }, timeout_ms + 2000);
+}
+
+CommandResult GimbalHardwareService::moveToMaintenanceVerified(
+    double yaw_deg, double pitch_deg, int timeout_ms, double tolerance_deg) {
+    return submit([this, yaw_deg, pitch_deg, timeout_ms, tolerance_deg] {
+        return moveToVerifiedLocked(yaw_deg, pitch_deg, timeout_ms,
+                                    tolerance_deg, true, false, 3U);
     }, timeout_ms + 2000);
 }
 
@@ -908,14 +916,15 @@ CommandResult GimbalHardwareService::moveToManualVerified(
     double yaw_deg, double pitch_deg, int timeout_ms, double tolerance_deg) {
     return submit([this, yaw_deg, pitch_deg, timeout_ms, tolerance_deg] {
         return moveToVerifiedLocked(yaw_deg, pitch_deg, timeout_ms,
-                                    tolerance_deg, false);
+                                    tolerance_deg, false, true, 1U);
     }, timeout_ms + 2000);
 }
 
 CommandResult GimbalHardwareService::moveToVerifiedLocked(
     double yaw_deg, double pitch_deg, int timeout_ms, double tolerance_deg,
-    bool enforce_limits) {
-    if (timeout_ms <= 0 || tolerance_deg <= 0.0 || tolerance_deg > 5.0) {
+    bool enforce_limits, bool require_settled, unsigned stable_samples) {
+    if (timeout_ms <= 0 || tolerance_deg <= 0.0 || tolerance_deg > 5.0 ||
+        stable_samples == 0U) {
         return failure("invalid_move_verify_parameters", ErrorClass::Command,
                        "BAD_ARGUMENT");
     }
@@ -924,6 +933,7 @@ CommandResult GimbalHardwareService::moveToVerifiedLocked(
     if (!aggregate.success || !aggregate.motion_generation) return aggregate;
     const auto generation = *aggregate.motion_generation;
     const auto deadline = clock_() + timeout_ms;
+    unsigned consecutive_samples = 0U;
     while (clock_() < deadline) {
         sleeper_(std::chrono::milliseconds(80));
         Event pose;
@@ -937,20 +947,34 @@ CommandResult GimbalHardwareService::moveToVerifiedLocked(
         aggregate.transcript.insert(aggregate.transcript.end(),
                                     current.transcript.begin(), current.transcript.end());
         if (!current.success) {
-            if (current.timeout) continue;
+            if (current.timeout) {
+                consecutive_samples = 0U;
+                continue;
+            }
             current.transcript = std::move(aggregate.transcript);
             return current;
         }
-        if (!pose.settled.value_or(false)) continue;
-        if (!pose.yaw_deg || !pose.pitch_deg) continue;
+        if (!pose.yaw_deg || !pose.pitch_deg) {
+            consecutive_samples = 0U;
+            continue;
+        }
         const double final_error = std::max(
             std::abs(shortestAngleDelta(*pose.yaw_deg, yaw_deg)),
             std::abs(shortestAngleDelta(*pose.pitch_deg, pitch_deg)));
-        if (final_error > tolerance_deg) continue;
+        if (final_error > tolerance_deg) {
+            consecutive_samples = 0U;
+            continue;
+        }
+        const bool firmware_settled = pose.settled.value_or(false);
+        if (require_settled && !firmware_settled) {
+            consecutive_samples = 0U;
+            continue;
+        }
+        if (!require_settled && ++consecutive_samples < stable_samples) continue;
         (void)machine_.markHolding(clock_());
-        snapshot_.settled = true;
+        snapshot_.settled = firmware_settled;
         aggregate.success = true;
-        aggregate.settled = true;
+        aggregate.settled = firmware_settled;
         aggregate.firmware_accepted = true;
         aggregate.error.clear();
         publishLocked();
@@ -959,8 +983,10 @@ CommandResult GimbalHardwareService::moveToVerifiedLocked(
     aggregate.success = false;
     aggregate.timeout = true;
     aggregate.error_class = ErrorClass::Business;
-    aggregate.error_code = "MOTION_NOT_SETTLED";
-    aggregate.error = "motion_settle_timeout";
+    aggregate.error_code = require_settled ? "MOTION_NOT_SETTLED"
+                                           : "MAINTENANCE_POSITION_NOT_STABLE";
+    aggregate.error = require_settled ? "motion_settle_timeout"
+                                      : "maintenance_position_stability_timeout";
     return aggregate;
 }
 

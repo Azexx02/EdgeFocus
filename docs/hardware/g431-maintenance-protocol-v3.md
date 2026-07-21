@@ -52,21 +52,24 @@ gimbal_bringup protect-current-set \
 
 上例的 `0` 只是参数位置示意，工具会拒绝无效组合；必须替换为实测值，且 peak 大于对应 average。
 
-### 3.1 维护 yaw 小角度验证与脱粘诊断
+### 3.1 维护 yaw 运动验证与脱粘诊断
 
 新固件通过 `MAINT_ASSIST_DIAG` 能力声明只读诊断 `MAINTASSIST?`。该辅助仅作用于维护模式 yaw：目标斜坡完成、误差大于 8 raw、速度在 ±1 raw、连续停滞至少 150 ms 时，一次性把既有请求下限每个控制周期提高 2 tick，最高 180，最长 300 ms。速度只用于触发前确认停滞；触发后持续到误差进入到位带、方向反转或 300 ms 到期，单个编码器速度跳变不会提前撤销；生产模式和 pitch 不变。
 
-上板必须分级执行，每一步都确认 STOP、Fault 未触发和诊断边界后才继续：
+上板必须分级执行。先使用绝对目标回0°，再做+10°和-10°验证；每一步都确认 STOP、Fault 未触发和诊断边界后才继续：
 
 ```sh
-gimbal_bringup maintenance-move --axis yaw --delta-deg 1 --allow-motion --confirm-board
-gimbal_bringup maintenance-move --axis yaw --delta-deg 3 --allow-motion --confirm-board
-gimbal_bringup maintenance-move --axis yaw --delta-deg -3 --allow-motion --confirm-board
+gimbal_bringup maintenance-move --axis yaw --target-deg 0 --allow-motion --confirm-board
+gimbal_bringup maintenance-move --axis yaw --target-deg 10 --allow-motion --confirm-board
+gimbal_bringup maintenance-move --axis yaw --target-deg 0 --allow-motion --confirm-board
+gimbal_bringup maintenance-move --axis yaw --target-deg -10 --allow-motion --confirm-board
 ```
+
+维护验收要求同generation、位置有效、无Fault且目标未越界；误差不超过2°并连续稳定3个80 ms采样即可通过，`SETTLED=1` 是更强结果但不是该维护命令的唯一必要条件。10°目标仍保证约8°同向有效位移；该规则不改变生产控制器的settled定义。
 
 每次输出应包含 `maintenance_assist`：其 `target_generation` 与运动 generation 一致，`active_ms <= 300`，`peak_floor <= 180`。到位后工具先执行 `CURRENT RESET`，保持固定目标并每 100 ms 读取一次电流，最多等待 2 秒取得完整、未饱和的 1000 ms 窗口；Fault、饱和或超时均失败。无论成功与否，工具退出前都执行 STOP。
 
-只有三段小角度验证全部通过，才允许继续完整 `current-sample`；本步骤不写入任何电流保护阈值。
+只有0°、+10°、再次0°和-10°验证全部通过，才允许继续完整 `current-sample`；本步骤不写入任何电流保护阈值。
 
 ## 4. 生产前验证
 
@@ -109,4 +112,4 @@ mkdir -p /var/log/edgefocus/gimbal-maintenance
 gimbal_bringup probe > /var/log/edgefocus/gimbal-maintenance/probe-$(date +%Y%m%d-%H%M%S).json
 ```
 
-验收时不得把 `firmware_accepted=true` 等同于物理完成；校准看 operation 结束与 epoch/valid，运动看同 generation 的 `POSE,SETTLED=1`。
+验收时不得把 `firmware_accepted=true` 等同于物理完成；校准看 operation 结束与 epoch/valid，生产运动看同generation的 `POSE,SETTLED=1`。`maintenance-move` 例外地按同generation位置误差≤2°且连续3个80 ms样本稳定验收，并保留真实settled字段。

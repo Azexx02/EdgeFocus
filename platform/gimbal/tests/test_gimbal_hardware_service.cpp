@@ -409,8 +409,14 @@ void testTypedMaintenanceCommandsAndTelemetry() {
     assert(result.success);
     result = service.executeMaintenance({MaintenanceOperation::Hold});
     assert(result.success && result.settled);
-    result = service.moveToVerified(3.0, 0.0, 2000, 1.0);
-    assert(result.success && result.settled && result.firmware_accepted);
+    const std::string stable_maintenance_pose =
+        "POSE,STATE=MOVING,ARM_PROFILE=MAINTENANCE,YAW10=30,PITCH10=0,"
+        "TYAW10=30,TPITCH10=0,GEN=2,SETTLED=0,CAL_EPOCH=7,ORIGIN_EPOCH=9,"
+        "CAL_VALID=1,ORIGIN_VALID=1,CURRENT_PROTECTION=VALID,SAMPLE_AGE_MS=2,"
+        "FAULT=NONE,OP=NONE,OP_GEN=0,OP_PROGRESS=0,LAST_OP_STATUS=OK\n";
+    for (int i = 0; i < 3; ++i) io->pose_overrides.push_back(stable_maintenance_pose);
+    result = service.moveToMaintenanceVerified(3.0, 0.0, 2000, 2.0);
+    assert(result.success && !result.settled && result.firmware_accepted);
     assert(service.snapshot().arm_profile == ArmProfile::Maintenance);
     result = service.executeMaintenance({MaintenanceOperation::VerifyMotionPattern});
     assert(result.success && result.settled);

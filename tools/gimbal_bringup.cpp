@@ -41,7 +41,8 @@ void printUsage() {
         << "  gimbal_bringup calibrate-electrical --allow-motion --confirm-board [--config PATH]\n"
         << "  gimbal_bringup capture-origin --confirm-origin-capture [--config PATH]\n"
         << "  gimbal_bringup current-sample --allow-motion --confirm-board [--config PATH]\n"
-        << "  gimbal_bringup maintenance-move --axis yaw|pitch --delta-deg N "
+        << "  gimbal_bringup maintenance-move --axis yaw|pitch "
+           "(--delta-deg N|--target-deg N) "
            "--allow-motion --confirm-board [--config PATH]\n"
         << "  gimbal_bringup protect-current-set --p-peak N --p-avg N --y-peak N --y-avg N "
            "--stall-ms N --confirm-current-protection [--config PATH]\n"
@@ -343,18 +344,28 @@ int main(int argc, char** argv) {
         }
         const std::string axis = valueAfter(argc, argv, "--axis");
         const std::string delta_text = valueAfter(argc, argv, "--delta-deg");
-        double delta = 0.0;
-        try {
-            delta = std::stod(delta_text);
-        } catch (...) {
-            std::cerr << "Maintenance move requires a numeric --delta-deg\n";
+        const std::string target_text = valueAfter(argc, argv, "--target-deg");
+        const bool absolute_target = !target_text.empty();
+        double requested_degrees = 0.0;
+        if (delta_text.empty() == target_text.empty()) {
+            std::cerr << "Maintenance move requires exactly one of --delta-deg "
+                         "or --target-deg\n";
             service.stop();
             return 64;
         }
-        if ((axis != "yaw" && axis != "pitch") || delta == 0.0 ||
-            std::abs(delta) > 3.0) {
-            std::cerr << "Maintenance move requires yaw|pitch and a non-zero "
-                         "delta no larger than 3 degrees\n";
+
+        try {
+            requested_degrees = std::stod(absolute_target ? target_text : delta_text);
+        } catch (...) {
+            std::cerr << "Maintenance move requires a numeric angle\n";
+            service.stop();
+            return 64;
+        }
+        if ((axis != "yaw" && axis != "pitch") ||
+            (!absolute_target && requested_degrees == 0.0) ||
+            std::abs(requested_degrees) > 10.0) {
+            std::cerr << "Maintenance move requires yaw|pitch and an angle "
+                         "inside the +/-10 degree maintenance window\n";
             service.stop();
             return 64;
         }
@@ -396,10 +407,18 @@ int main(int argc, char** argv) {
             }
         }
         if (ok) {
+            const double requested_target = absolute_target
+                ? edgefocus::gimbal::offsetAngle(0.0, requested_degrees) : 0.0;
             target_yaw = axis == "yaw"
-                ? edgefocus::gimbal::offsetAngle(*start_yaw, delta) : *start_yaw;
+                ? (absolute_target ? requested_target
+                                   : edgefocus::gimbal::offsetAngle(
+                                         *start_yaw, requested_degrees))
+                : *start_yaw;
             target_pitch = axis == "pitch"
-                ? edgefocus::gimbal::offsetAngle(*start_pitch, delta) : *start_pitch;
+                ? (absolute_target ? requested_target
+                                   : edgefocus::gimbal::offsetAngle(
+                                         *start_pitch, requested_degrees))
+                : *start_pitch;
             const bool inside_maintenance_window =
                 std::abs(edgefocus::gimbal::shortestAngleDelta(0.0, *target_yaw)) <= 10.0 &&
                 std::abs(edgefocus::gimbal::shortestAngleDelta(0.0, *target_pitch)) <= 10.0;
@@ -412,7 +431,8 @@ int main(int argc, char** argv) {
         }
         if (ok) {
             motion_attempted = true;
-            ok = adopt(service.moveToVerified(*target_yaw, *target_pitch, 5000, 1.0));
+            ok = adopt(service.moveToMaintenanceVerified(
+                *target_yaw, *target_pitch, 5000, 2.0));
             motion_generation = result.motion_generation;
             motion_settled = result.settled;
             const auto status = service.status();
@@ -493,7 +513,9 @@ int main(int argc, char** argv) {
         }
 
         const nlohmann::json details = {
-            {"axis", axis}, {"delta_deg", delta},
+            {"axis", axis},
+            {"request_mode", absolute_target ? "absolute" : "relative"},
+            {"requested_deg", requested_degrees},
             {"start_yaw_deg", start_yaw ? nlohmann::json(*start_yaw) : nlohmann::json(nullptr)},
             {"start_pitch_deg", start_pitch ? nlohmann::json(*start_pitch) : nlohmann::json(nullptr)},
             {"target_yaw_deg", target_yaw ? nlohmann::json(*target_yaw) : nlohmann::json(nullptr)},

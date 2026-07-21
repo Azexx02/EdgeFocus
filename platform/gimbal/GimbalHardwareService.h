@@ -79,6 +79,9 @@ public:
     CommandResult moveToManualVerified(double yaw_deg, double pitch_deg,
                                        int timeout_ms = 8000,
                                        double tolerance_deg = 1.5) override;
+    CommandResult moveToMaintenanceVerified(double yaw_deg, double pitch_deg,
+                                             int timeout_ms = 8000,
+                                             double tolerance_deg = 2.0);
     CommandResult rebaseAlignmentAtCurrent(int timeout_ms = 1000) override;
     CommandResult trackTo(double yaw_deg, double pitch_deg, int timeout_ms = 500) override;
     CommandResult hold(int timeout_ms = 1000) override;
@@ -121,7 +124,8 @@ private:
                                bool enforce_limits);
     CommandResult moveToVerifiedLocked(double yaw_deg, double pitch_deg,
                                        int timeout_ms, double tolerance_deg,
-                                       bool enforce_limits);
+                                       bool enforce_limits, bool require_settled,
+                                       unsigned stable_samples);
     CommandResult refreshPoseLocked(int timeout_ms);
     CommandResult holdLocked(int timeout_ms);
     CommandResult probeRecoveryLocked();
