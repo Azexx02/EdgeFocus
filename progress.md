@@ -395,3 +395,8 @@
 - 2026-07-22：G431 Production 接受完整单圈、Maintenance 保持 ±10°，`VER` 新增 `FULL_RANGE_POSITION`；旧 NVM V3 结构未修改。
 - 2026-07-22：主机启用 Demo HTTP 的完整构建与 CTest 32/32、G431 host-core 1/1 和 STM32 Release 构建全部通过；BIN/HEX 已由新 ELF 重新生成并记录 SHA-256。
 - 2026-07-22：已生成待批准的 `config/gimbal-full-range-acceptance-v1.json`，`board_motion_allowed=false`；尚未刷写、部署或执行板端运动。
+- 2026-07-22：用户明确批准板端验收配置；提交 `7fc36a4` 将 `approval_state` 改为 `approved`、`board_motion_allowed=true`。
+- 2026-07-22：使用 `hu@192.168.10.6` 完成 ARM 全量构建，发布包 SHA-256 为 `EF14A0E7ED5CA03492D2D705034F3DFC723E8A06523E95E9DC2172C2E31B5E64`。
+- 2026-07-22：发布 `edgefocus-fullrange-7fc36a4-20260722-130700` 已原子部署至 `192.168.10.173`；安装二进制与 release 哈希一致，HTTP 状态、BLE GATT 注册和广播均正常。
+- 2026-07-22：部署前无运动 UART 探测五项均超时，因此未把当前 G431 视为新固件；尚未执行云台运动，等待刷入 `3014b53` 对应 HEX 后继续能力协商与分阶段验收。
+- 2026-07-22：板端 RTC 仍显示 2024-02-28，解包产生 future timestamp 警告；不影响哈希与服务健康，但时间保持问题仍需单独修复。

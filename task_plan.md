@@ -14,7 +14,7 @@
 6. [complete] 主机纯 `GimbalMotionPolicy`、普通/微调配置、AUTO 双轴裁决和 MANUAL PENDING/ARMED 状态机
 7. [complete] AppCommandService/网页接入 `fine_tune`，保持旧客户端缺省普通步进兼容
 8. [complete] 完成本机 G431/Host 构建、专项测试、全量测试及静态检查
-9. [pending] 生成并批准版本化板端验收配置，再构建/部署/分阶段实机验收；未批准前禁止运动
+9. [in_progress] 验收配置已获用户批准，ARM 主机发布已原子部署并通过 HTTP/BLE 健康检查；等待 G431 新固件刷入后执行分阶段实机运动验收
 10. [complete] 输出 `docs/integration/gimbal-manual-boundary-app-fields.md`，完成源代码、测试、固件产物与本地交付证据
 
 ### 固定约束
