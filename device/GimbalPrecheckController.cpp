@@ -92,6 +92,35 @@ bool GimbalPrecheckController::isMaintenanceFailureLocked(
     return false;
 }
 
+CommandResult GimbalPrecheckController::moveAndHoldVerifiedLocked(
+    double yaw_deg, double pitch_deg, int timeout_ms, double tolerance_deg) {
+    auto moved = hardware_.moveToVerified(
+        yaw_deg, pitch_deg, timeout_ms, tolerance_deg);
+    if (!moved.success) return moved;
+    auto held = hardware_.hold(1000);
+    moved.transcript.insert(moved.transcript.end(),
+                            held.transcript.begin(), held.transcript.end());
+    if (!held.success) {
+        held.transcript = std::move(moved.transcript);
+        return held;
+    }
+    moved.motion_generation = held.motion_generation;
+    moved.settled = true;
+    moved.motion_status = "verified_and_held";
+    return moved;
+}
+
+void GimbalPrecheckController::containMotionFailureLocked() noexcept {
+    const auto hardware = hardware_.status();
+    if (!hardware.fault_active && hardware.snapshot.link_health == LinkHealth::Healthy &&
+        (hardware.state == State::Ready || hardware.state == State::Moving ||
+         hardware.state == State::Holding)) {
+        const auto held = hardware_.hold(1000);
+        if (held.success) return;
+    }
+    (void)hardware_.stopAndDisable(1000);
+}
+
 bool GimbalPrecheckController::start(
     const std::string& session_id, std::int64_t now_ms, std::string* error) {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -152,6 +181,38 @@ bool GimbalPrecheckController::start(
     } else {
         alignment_reference_.reset();
     }
+
+    // A production ARM leaves protocol v3 in READY. TRACK is only accepted
+    // after HOLD, so establish the motion state explicitly before the first
+    // automatic command.  Centering is part of PRECHECK preparation and must
+    // finish before the UI is allowed to publish SEARCHING.
+    const auto held = hardware_.hold(1000);
+    if (!held.success) {
+        const auto detail = held.error.empty() ? "gimbal_precheck_hold_failed"
+                                                : held.error;
+        (void)hardware_.stopAndDisable(1000);
+        if (error) *error = detail;
+        degradeLocked(detail);
+        return false;
+    }
+    const auto center = resolveWaypointLocked(*config_.center);
+    if (!center) {
+        (void)hardware_.stopAndDisable(1000);
+        if (error) *error = "gimbal_alignment_reference_unknown";
+        degradeLocked("gimbal_alignment_reference_unknown");
+        return false;
+    }
+    const auto centered = moveAndHoldVerifiedLocked(
+        center->yaw_deg, center->pitch_deg, 8000, 5.0);
+    if (!centered.success) {
+        const auto detail = centered.error.empty() ? "gimbal_precheck_center_failed"
+                                                    : centered.error;
+        containMotionFailureLocked();
+        if (error) *error = detail;
+        degradeLocked(detail);
+        return false;
+    }
+
     ++status_.generation;
     status_.state = PrecheckState::Searching;
     status_.session_id = session_id;
@@ -231,12 +292,11 @@ void GimbalPrecheckController::finishSearchLocked(
             degradeLocked("gimbal_alignment_reference_unknown");
             return;
         }
-        result = hardware_.moveToVerified(
-            center->yaw_deg, center->pitch_deg, 8000, 1.5);
-        if (result.success) result = hardware_.hold(1000);
+        result = moveAndHoldVerifiedLocked(
+            center->yaw_deg, center->pitch_deg, 8000, 5.0);
     }
     if (!result.success) {
-        (void)hardware_.stopAndDisable(1000);
+        containMotionFailureLocked();
         degradeLocked(result.error.empty() ? "gimbal_search_finish_failed" : result.error);
         return;
     }
@@ -286,7 +346,7 @@ void GimbalPrecheckController::advanceSearchLocked(std::int64_t now_ms) {
 
     const auto waypoint = resolveWaypointLocked(offset);
     if (!waypoint) {
-        (void)hardware_.stopAndDisable(1000);
+        containMotionFailureLocked();
         degradeLocked("gimbal_alignment_reference_unknown");
         return;
     }
@@ -295,10 +355,10 @@ void GimbalPrecheckController::advanceSearchLocked(std::int64_t now_ms) {
         1, config_.hard_deadline_ms - elapsed);
     const auto motion_deadline = static_cast<int>(std::min<std::int64_t>(
         offset.deadline_ms, remaining));
-    const auto moved = hardware_.moveToVerified(
-        waypoint->yaw_deg, waypoint->pitch_deg, motion_deadline, 1.5);
+    const auto moved = moveAndHoldVerifiedLocked(
+        waypoint->yaw_deg, waypoint->pitch_deg, motion_deadline, 5.0);
     if (!moved.success) {
-        (void)hardware_.stopAndDisable(1000);
+        containMotionFailureLocked();
         degradeLocked(moved.error.empty() ? "gimbal_waypoint_failed"
                                           : moved.error);
         return;
@@ -318,7 +378,7 @@ bool GimbalPrecheckController::beginCandidateLocked(
     if (!visual.subject_box) return false;
     const auto frozen = hardware_.freezeAtCurrent(2000);
     if (!frozen.success) {
-        (void)hardware_.stopAndDisable(1000);
+        containMotionFailureLocked();
         degradeLocked(frozen.error.empty() ? "gimbal_candidate_freeze_failed"
                                            : frozen.error);
         return false;
@@ -356,17 +416,17 @@ void GimbalPrecheckController::resumeSearchLocked(
     if (active_waypoint_) {
         const auto waypoint = resolveWaypointLocked(*active_waypoint_);
         if (!waypoint) {
-            (void)hardware_.stopAndDisable(1000);
+            containMotionFailureLocked();
             degradeLocked("gimbal_alignment_reference_unknown");
             return;
         }
-        const auto moved = hardware_.moveToVerified(
+        const auto moved = moveAndHoldVerifiedLocked(
             waypoint->yaw_deg, waypoint->pitch_deg,
             static_cast<int>(std::min<std::int64_t>(active_waypoint_->deadline_ms,
                                                     4000)),
-            1.5);
+            5.0);
         if (!moved.success) {
-            (void)hardware_.stopAndDisable(1000);
+            containMotionFailureLocked();
             degradeLocked(moved.error.empty() ? "gimbal_search_resume_failed"
                                               : moved.error);
             return;
@@ -378,7 +438,7 @@ void GimbalPrecheckController::resumeSearchLocked(
 void GimbalPrecheckController::beginFramingLocked(std::int64_t now_ms) {
     const auto frozen = hardware_.freezeAtCurrent(2000);
     if (!frozen.success) {
-        (void)hardware_.stopAndDisable(1000);
+        containMotionFailureLocked();
         degradeLocked(frozen.error.empty() ? "gimbal_centered_freeze_failed"
                                            : frozen.error);
         return;
@@ -410,7 +470,7 @@ void GimbalPrecheckController::observeCenteringLocked(
     frozen_subject_box_ = *association.subject_box;
     auto tracking = centering_tracker_->update(now_ms, visual);
     if (!tracking.success) {
-        (void)hardware_.stopAndDisable(1000);
+        containMotionFailureLocked();
         degradeLocked(tracking.error.empty() ? "gimbal_candidate_center_failed"
                                              : tracking.error);
         return;
@@ -465,8 +525,15 @@ void GimbalPrecheckController::observe(
     }
 
     const auto hardware = hardware_.status();
-    if (hardware.state != State::Ready && hardware.state != State::Holding &&
-        hardware.state != State::Moving) {
+    if (hardware.state == State::Ready) {
+        const auto held = hardware_.hold(1000);
+        if (!held.success) {
+            degradeLocked(held.error.empty() ? "gimbal_runtime_hold_failed"
+                                              : held.error);
+        }
+        return;
+    }
+    if (hardware.state != State::Holding && hardware.state != State::Moving) {
         degradeLocked(std::string("gimbal_runtime_unhealthy:") +
                       stateName(hardware.state));
         return;
@@ -530,6 +597,13 @@ bool GimbalPrecheckController::restoreLocked(
     const auto hardware = hardware_.status();
     if (status_.released || status_.maintenance_required ||
         now_ms < next_restore_attempt_ms_) return false;
+    const bool recoverable_hardware =
+        hardware.state == State::Fault ||
+        hardware.state == State::RecoveryCheck ||
+        hardware.recoverable ||
+        !hardware.fault_latched_reason.empty() ||
+        hardware.snapshot.link_health == LinkHealth::Degraded;
+    if (!recoverable_hardware) return false;
     next_restore_attempt_ms_ = now_ms + 5000;
     CommandResult recovered{true};
     if (hardware.state == State::Fault || hardware.state == State::RecoveryCheck ||
@@ -547,6 +621,12 @@ bool GimbalPrecheckController::restoreLocked(
         } else {
             degradeLocked(aligned.error.empty() ? "gimbal_recover_failed" : aligned.error);
         }
+        return false;
+    }
+    const auto search_hold = hardware_.hold(1000);
+    if (!search_hold.success) {
+        degradeLocked(search_hold.error.empty() ? "gimbal_recovered_hold_failed"
+                                                 : search_hold.error);
         return false;
     }
     ++status_.generation;
@@ -571,9 +651,9 @@ bool GimbalPrecheckController::restoreLocked(
         return true;
     }
     if (session_composition_target_) {
-        const auto repositioned = hardware_.moveToVerified(
+        const auto repositioned = moveAndHoldVerifiedLocked(
             session_composition_target_->yaw_deg,
-            session_composition_target_->pitch_deg, 8000, 1.5);
+            session_composition_target_->pitch_deg, 8000, 5.0);
         if (!repositioned.success) {
             status_.detail = "gimbal_recovered_fixed_position_unavailable";
         }
@@ -630,8 +710,15 @@ void GimbalPrecheckController::maintain(
                           : hardware.fault_latched_reason);
         return;
     }
-    if (hardware.state != State::Ready && hardware.state != State::Holding &&
-        hardware.state != State::Moving) {
+    if (hardware.state == State::Ready) {
+        const auto held = hardware_.hold(1000);
+        if (!held.success) {
+            degradeLocked(held.error.empty() ? "gimbal_runtime_hold_failed"
+                                              : held.error);
+        }
+        return;
+    }
+    if (hardware.state != State::Holding && hardware.state != State::Moving) {
         degradeLocked(std::string("gimbal_runtime_unhealthy:") + stateName(hardware.state));
     }
 }
@@ -988,6 +1075,7 @@ CommandResult GimbalPrecheckController::realign(
     }
     auto result = hardware_.recover(5000);
     if (result.success) result = hardware_.enableAndAlign(10000);
+    if (result.success) result = hardware_.hold(1000);
     if (!result.success) {
         degradeLocked(result.error.empty() ? "gimbal_realign_failed" : result.error);
         rememberCommandLocked(sequence, result);
@@ -1170,8 +1258,8 @@ void GimbalPrecheckController::stop() noexcept {
         (hardware.state == State::Ready || hardware.state == State::Holding ||
          hardware.state == State::Moving) && !hardware.fault_active) {
         center_attempted = true;
-        center_succeeded = hardware_.moveToVerified(
-            0.0, 0.0, 8000, 1.5).success;
+        center_succeeded = moveAndHoldVerifiedLocked(
+            0.0, 0.0, 8000, 5.0).success;
         if (!center_succeeded) {
             LOGW("GimbalPrecheckController", "RETURN_TO_ORIGIN_FAILED");
         }

@@ -281,15 +281,17 @@ void testProtocol3AckAndSettled() {
     assert(snapshot.yaw_raw_valid.value_or(false));
     assert(snapshot.pitch_raw_valid.value_or(false));
 
+    result = service.hold();
+    assert(result.success && result.settled);
     result = service.moveTo(10.0, -5.0, 500);
     assert(result.success && result.firmware_accepted && !result.settled);
-    assert(result.motion_generation == 1);
+    assert(result.motion_generation == 2);
     assert(service.status().state == State::Moving);
 
     io->pose_overrides.push_back(
         "POSE,STATE=HOLDING,YAW10=100,PITCH10=3550,TYAW10=100,TPITCH10=3550,"
         "GEN=1,SETTLED=1,CAL_EPOCH=7,ORIGIN_EPOCH=9,CAL_VALID=1,ORIGIN_VALID=1,"
-        "CURRENT_PROTECTION=VALID,SAMPLE_AGE_MS=2,FAULT=NONE\n");
+        "P_RAW_VALID=1,Y_RAW_VALID=1,CURRENT_PROTECTION=VALID,SAMPLE_AGE_MS=2,FAULT=NONE\n");
     io->pose_overrides.push_back(
         "POSE,STATE=MOVING,YAW10=120,PITCH10=30,TYAW10=120,TPITCH10=30,"
         "GEN=2,SETTLED=0,CAL_EPOCH=7,ORIGIN_EPOCH=9,CAL_VALID=1,ORIGIN_VALID=1,"
@@ -298,8 +300,11 @@ void testProtocol3AckAndSettled() {
         "POSE,STATE=HOLDING,YAW10=120,PITCH10=30,TYAW10=120,TPITCH10=30,"
         "GEN=2,SETTLED=1,CAL_EPOCH=7,ORIGIN_EPOCH=9,CAL_VALID=1,ORIGIN_VALID=1,"
         "CURRENT_PROTECTION=VALID,SAMPLE_AGE_MS=2,FAULT=NONE\n");
+    // The observation pause between PRECHECK waypoints may age the cached
+    // pose; an automatic move must refresh it instead of failing closed.
+    now += 1000;
     result = service.moveToVerified(12.0, 3.0, 2000, 1.0);
-    assert(result.success && result.settled && result.motion_generation == 2);
+    assert(result.success && result.settled && result.motion_generation == 3);
     assert(service.status().state == State::Holding);
 
     result = service.hold();
@@ -355,6 +360,7 @@ void testCommandErrorDoesNotLatchHardwareFault() {
     std::string error;
     assert(service.start(&error));
     assert(service.enableAndAlign().success);
+    assert(service.hold().success);
     io->next_track_error = "ERR,CLASS=COMMAND,CODE=INVALID_STATE";
     const auto result = service.moveTo(5.0, 5.0);
     assert(!result.success);
@@ -372,6 +378,7 @@ void testEmergencySlotInterruptsWait() {
     std::string error;
     assert(service.start(&error));
     assert(service.enableAndAlign().success);
+    assert(service.hold().success);
     io->suppress_track_response = true;
     auto moving = std::async(std::launch::async, [&] {
         return service.moveTo(5.0, 5.0, 2000);
@@ -433,7 +440,7 @@ void testTypedMaintenanceCommandsAndTelemetry() {
     assert(result.current->window_ms == 1200 && result.current->samples == 120);
     result = service.executeMaintenance({MaintenanceOperation::AssistRead});
     assert(result.success && result.maintenance_assist);
-    assert(result.maintenance_assist->target_generation == 8);
+    assert(result.maintenance_assist->target_generation == 10);
     assert(result.maintenance_assist->attempted);
     assert(!result.maintenance_assist->exhausted);
     assert(result.maintenance_assist->active_ms == 85);

@@ -72,8 +72,7 @@ CommandResult GimbalVisualTracker::update(
     }
 
     const auto hardware = hardware_.status();
-    if (hardware.state != State::Ready && hardware.state != State::Holding &&
-        hardware.state != State::Moving) {
+    if (hardware.state != State::Holding && hardware.state != State::Moving) {
         status_.tracking = false;
         status_.detail = "hardware_not_ready";
         return {false, false, "gimbal_tracking_hardware_not_ready", {}, {}};

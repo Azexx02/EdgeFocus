@@ -47,9 +47,8 @@ bool StateMachine::markReady(std::int64_t now_ms) {
 
 bool StateMachine::beginMove(std::int64_t now_ms) {
     if (status_.state == State::Moving) return true;
-    if (status_.state != State::Ready && status_.state != State::Holding) return false;
-    const State current = status_.state;
-    return transition(current, State::Moving, now_ms);
+    if (status_.state != State::Holding) return false;
+    return transition(State::Holding, State::Moving, now_ms);
 }
 
 bool StateMachine::markHolding(std::int64_t now_ms) {

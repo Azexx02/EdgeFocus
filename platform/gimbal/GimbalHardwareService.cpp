@@ -894,11 +894,23 @@ CommandResult GimbalHardwareService::moveToLocked(double yaw_deg, double pitch_d
                        "LIMITS_UNVERIFIED");
     }
     if (enforce_limits) {
-        const bool pose_valid = snapshot_.current_yaw10 && snapshot_.current_pitch10 &&
-            snapshot_.yaw_raw_valid.value_or(false) &&
-            snapshot_.pitch_raw_valid.value_or(false) &&
-            snapshot_.last_pose_at_ms > 0 &&
-            clock_() - snapshot_.last_pose_at_ms <= 500;
+        const auto poseValid = [this] {
+            return snapshot_.current_yaw10 && snapshot_.current_pitch10 &&
+                   snapshot_.yaw_raw_valid.value_or(false) &&
+                   snapshot_.pitch_raw_valid.value_or(false) &&
+                   snapshot_.last_pose_at_ms > 0 &&
+                   clock_() - snapshot_.last_pose_at_ms <= 500;
+        };
+        // PRECHECK deliberately observes the current camera view before each
+        // waypoint.  That pause can age the cached pose beyond 500 ms even
+        // though the UART link and encoders are healthy.  Refresh the pose at
+        // the command boundary instead of treating cache age as a hardware
+        // safety fault.
+        if (!poseValid()) {
+            auto refreshed = refreshPoseLocked(std::min(timeout_ms, 500));
+            if (!refreshed.success) return refreshed;
+        }
+        const bool pose_valid = poseValid();
         if (!pose_valid) {
             return failure("auto_motion_pose_unavailable", ErrorClass::Safety,
                            "AUTO_POSE_UNAVAILABLE");
@@ -957,7 +969,7 @@ CommandResult GimbalHardwareService::moveToVerified(
     double yaw_deg, double pitch_deg, int timeout_ms, double tolerance_deg) {
     return submit([this, yaw_deg, pitch_deg, timeout_ms, tolerance_deg] {
         return moveToVerifiedLocked(yaw_deg, pitch_deg, timeout_ms,
-                                    tolerance_deg, true, true, 1U, false);
+                                    tolerance_deg, true, false, 3U, false);
     }, timeout_ms + 2000);
 }
 

@@ -169,6 +169,10 @@ private:
     std::string issueLeaseTokenLocked(const std::string& owner_id) const;
     bool isMaintenanceFailureLocked(const CommandResult& result,
                                     std::string& detail) const;
+    CommandResult moveAndHoldVerifiedLocked(double yaw_deg, double pitch_deg,
+                                            int timeout_ms,
+                                            double tolerance_deg);
+    void containMotionFailureLocked() noexcept;
     void finishSearchLocked(bool subject_found, std::int64_t now_ms);
     void advanceSearchLocked(std::int64_t now_ms);
     bool beginCandidateLocked(std::int64_t now_ms,

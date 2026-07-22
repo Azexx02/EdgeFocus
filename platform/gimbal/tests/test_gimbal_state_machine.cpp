@@ -24,7 +24,9 @@ int main() {
     assert(machine.onEvent(ok, 30));
     assert(machine.status().state == State::Ready);
 
-    assert(machine.beginMove(40));
+    assert(!machine.beginMove(40));
+    assert(machine.markHolding(41));
+    assert(machine.beginMove(42));
     assert(machine.markHolding(50));
     assert(machine.beginStop(60));
     Event stop;

@@ -152,6 +152,34 @@ void test_missing_persistent_calibration_enters_maintenance() {
     assert(controller.snapshot().state == PrecheckState::MaintenanceRequired);
 }
 
+void test_precheck_holds_and_centers_before_searching() {
+    FakeHardware hardware;
+    hardware.current.yaw_deg = 35.0;
+    hardware.current.pitch_deg = -20.0;
+    GimbalPrecheckController controller(hardware, config());
+    assert(controller.start("prepared", 0));
+    assert(controller.snapshot().state == PrecheckState::Searching);
+    assert(hardware.calls.size() >= 2);
+    assert(hardware.calls[0] == "hold");
+    assert(hardware.calls[1] == "move:0.000000,0.000000");
+    assert(hardware.targets.size() == 1);
+    assert(hardware.targets[0].first == 0.0);
+    assert(hardware.targets[0].second == 0.0);
+}
+
+void test_precheck_does_not_publish_searching_when_hold_fails() {
+    FakeHardware hardware;
+    hardware.hold_success = false;
+    GimbalPrecheckController controller(hardware, config());
+    std::string error;
+    assert(!controller.start("hold-failure", 0, &error));
+    assert(error == "hold_failed");
+    assert(controller.snapshot().state == PrecheckState::Degraded);
+    assert(hardware.calls.size() == 2);
+    assert(hardware.calls[0] == "hold");
+    assert(hardware.calls[1] == "disable");
+}
+
 void test_candidate_requires_distinct_stable_frames_and_no_implicit_lease() {
     FakeHardware hardware;
     GimbalPrecheckController controller(hardware, config());
@@ -165,8 +193,8 @@ void test_candidate_requires_distinct_stable_frames_and_no_implicit_lease() {
     assert(status.state == PrecheckState::ManualAvailable);
     assert(status.subject_found && status.search_completed);
     assert(!status.manual_lease);
-    assert(hardware.calls[0] == "freeze");
-    assert(hardware.calls[1] == "hold");
+    assert(hardware.calls[3] == "freeze");
+    assert(hardware.calls[4] == "hold");
 }
 
 void test_search_waits_for_verified_waypoints_then_returns_origin() {
@@ -179,10 +207,11 @@ void test_search_waits_for_verified_waypoints_then_returns_origin() {
     const auto status = controller.snapshot();
     assert(status.state == PrecheckState::ManualAvailable);
     assert(!status.subject_found && !status.manual_lease);
-    assert(hardware.targets.size() == 3);
-    assert(hardware.targets[0].first == -5.0);
-    assert(hardware.targets[1].first == 5.0);
-    assert(hardware.targets[2].first == 0.0);
+    assert(hardware.targets.size() == 4);
+    assert(hardware.targets[0].first == 0.0);
+    assert(hardware.targets[1].first == -5.0);
+    assert(hardware.targets[2].first == 5.0);
+    assert(hardware.targets[3].first == 0.0);
 }
 
 void test_manual_lease_owner_ttl_and_idempotency() {
@@ -261,6 +290,22 @@ void test_fault_recovery_does_not_repeat_completed_search() {
     assert(controller.snapshot().search_completed);
 }
 
+void test_nonrecoverable_motion_failure_does_not_restart_search() {
+    FakeHardware hardware;
+    GimbalPrecheckController controller(hardware, config());
+    assert(controller.start("stable-degraded", 0));
+    hardware.current.state = State::Disabled;
+    hardware.current.recoverable = false;
+    hardware.current.fault_latched_reason.clear();
+    hardware.current.snapshot.link_health = LinkHealth::Healthy;
+    controller.maintain(session::Phase::Precheck, 100);
+    assert(controller.snapshot().state == PrecheckState::Degraded);
+    const auto calls_before_retry = hardware.calls.size();
+    controller.maintain(session::Phase::Precheck, 6000);
+    assert(controller.snapshot().state == PrecheckState::Degraded);
+    assert(hardware.calls.size() == calls_before_retry);
+}
+
 void test_manual_boundary_stop_then_alternating_fine_crossing() {
     FakeHardware hardware;
     hardware.current.yaw_deg = 50.0;
@@ -270,6 +315,8 @@ void test_manual_boundary_stop_then_alternating_fine_crossing() {
     boundary_config.fine_nudge_step_deg = 10.0;
     GimbalPrecheckController controller(hardware, boundary_config);
     assert(controller.start("boundary", 0));
+    hardware.current.yaw_deg = 50.0;
+    hardware.current.pitch_deg = 0.0;
     assert(controller.skipAuto("boundary", 1, 50).success);
     PrecheckStatus issued;
     assert(controller.manualTakeover("boundary", "web", 1,
@@ -305,8 +352,9 @@ void test_force_release_and_session_end_origin_policy() {
     assert(controller.forceRelease(command(issued, 2),
                                    session::Phase::Precheck, 200).success);
     assert(controller.snapshot().state == PrecheckState::Released);
+    const auto released_targets = hardware.targets.size();
     controller.stop();
-    assert(hardware.targets.empty());
+    assert(hardware.targets.size() == released_targets);
 
     FakeHardware second_hardware;
     second_hardware.current.yaw_deg = 20.0;
@@ -324,12 +372,15 @@ void test_force_release_and_session_end_origin_policy() {
 int main() {
     test_board_config_is_protocol3_compact_profile();
     test_missing_persistent_calibration_enters_maintenance();
+    test_precheck_holds_and_centers_before_searching();
+    test_precheck_does_not_publish_searching_when_hold_fails();
     test_candidate_requires_distinct_stable_frames_and_no_implicit_lease();
     test_search_waits_for_verified_waypoints_then_returns_origin();
     test_manual_lease_owner_ttl_and_idempotency();
     test_authoritative_target_preserves_net_displacement();
     test_manual_boundary_stop_then_alternating_fine_crossing();
     test_fault_recovery_does_not_repeat_completed_search();
+    test_nonrecoverable_motion_failure_does_not_restart_search();
     test_force_release_and_session_end_origin_policy();
     std::cout << "gimbal precheck tests passed\n";
     return 0;
