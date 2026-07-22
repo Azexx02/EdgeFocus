@@ -21,6 +21,7 @@ object ReliableEventPolicy {
     fun supportsAckStage(type: ReliableEventType, stage: EventAckStage): Boolean = when (type) {
         ReliableEventType.ALERT -> true
         ReliableEventType.SESSION_END -> stage != EventAckStage.USER_ACK
+        ReliableEventType.GIMBAL_COMMAND_RESULT -> stage == EventAckStage.RECEIVED
     }
 }
 

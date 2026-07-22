@@ -316,6 +316,7 @@ object HostJsonCodec {
         val type = when (root.optString("cmd")) {
             ReliableEventType.ALERT.command -> ReliableEventType.ALERT
             ReliableEventType.SESSION_END.command -> ReliableEventType.SESSION_END
+            ReliableEventType.GIMBAL_COMMAND_RESULT.command -> ReliableEventType.GIMBAL_COMMAND_RESULT
             else -> return null
         }
         val data = root.optJSONObject("data") ?: return null

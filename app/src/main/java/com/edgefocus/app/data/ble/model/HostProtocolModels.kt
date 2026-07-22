@@ -37,7 +37,8 @@ enum class EventAckStage(val wireValue: String) {
 
 enum class ReliableEventType(val command: String) {
     ALERT("push_alert"),
-    SESSION_END("push_session_end")
+    SESSION_END("push_session_end"),
+    GIMBAL_COMMAND_RESULT("push_gimbal_command_result")
 }
 
 data class ClientHelloResult(

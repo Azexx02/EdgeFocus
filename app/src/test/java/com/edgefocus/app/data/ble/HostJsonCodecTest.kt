@@ -185,6 +185,17 @@ class HostJsonCodecTest {
     }
 
     @Test
+    fun `gimbal command result is parsed as reliable event`() {
+        val event = HostJsonCodec.parseReliableEvent(
+            """{"cmd":"push_gimbal_command_result","data":{"event_id":"evt_gimbal_1","session_id":"session_1","ttl_ms":30000,"remaining_ttl_ms":25000,"command":"gimbal_nudge","request_sequence":7,"accepted":true}}"""
+        )!!
+
+        assertEquals(ReliableEventType.GIMBAL_COMMAND_RESULT, event.type)
+        assertEquals("evt_gimbal_1", event.eventId)
+        assertEquals("session_1", event.sessionId)
+    }
+
+    @Test
     fun `session end ack builder supports received without inventing user action`() {
         val request = HostJsonCodec.eventAck(
             requestId = 5,

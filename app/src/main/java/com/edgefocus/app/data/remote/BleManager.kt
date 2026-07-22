@@ -29,6 +29,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.UUID
@@ -88,6 +92,7 @@ class BleManager @Inject constructor(
 
     private val writeLock = Any()
     private val requestScheduler = BleRequestScheduler()
+    private val managerScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var pendingWriteCallback: ((Boolean) -> Unit)? = null
     private val nextRequestId = AtomicInteger(1)
     private val pendingResponseCallbacks = mutableMapOf<Int, (Result<ByteArray>) -> Unit>()
@@ -1357,6 +1362,7 @@ class BleManager @Inject constructor(
             val cmd = json.optString("cmd", "")
             val eventData = json.optJSONObject("data")
             if (cmd == "push_gimbal_command_result" && eventData != null) {
+                ackReliableGimbalResult(eventData)
                 val key = GimbalResultKey(
                     sessionId = eventData.optString("session_id"),
                     sequence = eventData.optLong("request_sequence"),
@@ -1413,6 +1419,16 @@ class BleManager @Inject constructor(
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to parse push event: ${e.message}")
+        }
+    }
+
+    private fun ackReliableGimbalResult(eventData: org.json.JSONObject) {
+        val eventId = eventData.optString("event_id").takeIf { it.isNotBlank() } ?: return
+        val sessionId = eventData.optString("session_id").takeIf { it.isNotBlank() } ?: return
+        managerScope.launch {
+            eventAck(eventId, sessionId, EventAckStage.RECEIVED.wireValue).onFailure { error ->
+                Log.w(TAG, "Failed to ACK gimbal result event $eventId: ${error.message}")
+            }
         }
     }
 }

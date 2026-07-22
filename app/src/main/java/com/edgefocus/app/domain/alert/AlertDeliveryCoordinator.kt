@@ -86,6 +86,9 @@ class AlertDeliveryCoordinator @Inject constructor(
     private suspend fun handle(event: ReliableEventEnvelope) {
         inbox.store(event)
         advanceAndFlush(event, EventAckStage.RECEIVED)
+        if (event.type == ReliableEventType.GIMBAL_COMMAND_RESULT) {
+            return
+        }
         val claimed = inbox.claim(event.eventId) ?: run {
             flushPendingAcks()
             return
@@ -122,6 +125,7 @@ class AlertDeliveryCoordinator @Inject constructor(
                     return
                 }
             }
+            ReliableEventType.GIMBAL_COMMAND_RESULT -> return
         }
         inbox.markPresented(claimed.eventId)
         advanceAndFlush(event, EventAckStage.PRESENTED)

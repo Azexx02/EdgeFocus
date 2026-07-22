@@ -22,4 +22,11 @@ class ReliableEventPolicyTest {
         assertFalse(ReliableEventPolicy.supportsAckStage(ReliableEventType.SESSION_END, EventAckStage.USER_ACK))
         assertTrue(ReliableEventPolicy.supportsAckStage(ReliableEventType.ALERT, EventAckStage.USER_ACK))
     }
+
+    @Test
+    fun gimbalCommandResultOnlyRequiresReceivedAck() {
+        assertTrue(ReliableEventPolicy.supportsAckStage(ReliableEventType.GIMBAL_COMMAND_RESULT, EventAckStage.RECEIVED))
+        assertFalse(ReliableEventPolicy.supportsAckStage(ReliableEventType.GIMBAL_COMMAND_RESULT, EventAckStage.PRESENTED))
+        assertFalse(ReliableEventPolicy.supportsAckStage(ReliableEventType.GIMBAL_COMMAND_RESULT, EventAckStage.USER_ACK))
+    }
 }
