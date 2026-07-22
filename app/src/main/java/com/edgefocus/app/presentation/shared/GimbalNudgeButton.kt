@@ -4,6 +4,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -14,7 +15,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -29,26 +33,47 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
+enum class GimbalButtonArrangement {
+    Horizontal,
+    Vertical
+}
+
 @Composable
 fun GimbalDirectionalStepButtons(
     directionLabel: String,
     enabled: Boolean,
     onNudge: (Boolean) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    arrangement: GimbalButtonArrangement = GimbalButtonArrangement.Horizontal
 ) {
-    Row(modifier = modifier, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+    val content: @Composable () -> Unit = {
+        GimbalNudgeButton(
+            label = directionLabel,
+            enabled = enabled,
+            fineTune = false,
+            onNudge = onNudge
+        )
         GimbalNudgeButton(
             label = "$directionLabel 微调",
             enabled = enabled,
             fineTune = true,
             onNudge = onNudge
         )
-        GimbalNudgeButton(
-            label = "$directionLabel 普通",
-            enabled = enabled,
-            fineTune = false,
-            onNudge = onNudge
-        )
+    }
+    when (arrangement) {
+        GimbalButtonArrangement.Horizontal -> Row(
+            modifier = modifier,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            content()
+        }
+        GimbalButtonArrangement.Vertical -> Column(
+            modifier = modifier,
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            content()
+        }
     }
 }
 
@@ -61,6 +86,7 @@ fun GimbalNudgeButton(
     modifier: Modifier = Modifier
 ) {
     val latestNudge by rememberUpdatedState(onNudge)
+    var pressed by remember { mutableStateOf(false) }
     val contentColor = if (enabled) {
         MaterialTheme.colorScheme.primary
     } else {
@@ -70,20 +96,25 @@ fun GimbalNudgeButton(
         Modifier.pointerInput(fineTune) {
             detectTapGestures(
                 onPress = press@ {
+                    pressed = true
                     var repeated = false
-                    coroutineScope {
-                        val repeatJob = launch {
-                            delay(LONG_PRESS_DELAY_MS)
-                            repeated = true
-                            latestNudge(fineTune)
-                            while (true) {
-                                delay(REPEAT_INTERVAL_MS)
+                    try {
+                        coroutineScope {
+                            val repeatJob = launch {
+                                delay(LONG_PRESS_DELAY_MS)
+                                repeated = true
                                 latestNudge(fineTune)
+                                while (true) {
+                                    delay(REPEAT_INTERVAL_MS)
+                                    latestNudge(fineTune)
+                                }
                             }
+                            val released = this@press.tryAwaitRelease()
+                            repeatJob.cancel()
+                            if (released && !repeated) latestNudge(fineTune)
                         }
-                        val released = this@press.tryAwaitRelease()
-                        repeatJob.cancel()
-                        if (released && !repeated) latestNudge(fineTune)
+                    } finally {
+                        pressed = false
                     }
                 }
             )
@@ -106,11 +137,17 @@ fun GimbalNudgeButton(
     Surface(
         modifier = modifier.then(accessibility).then(interaction),
         shape = RoundedCornerShape(20.dp),
-        color = Color.Transparent,
+        color = if (pressed && enabled) {
+            MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+        } else {
+            Color.Transparent
+        },
         contentColor = contentColor,
         border = BorderStroke(
             1.dp,
-            if (enabled) {
+            if (pressed && enabled) {
+                MaterialTheme.colorScheme.primary
+            } else if (enabled) {
                 MaterialTheme.colorScheme.outline
             } else {
                 MaterialTheme.colorScheme.outline.copy(alpha = 0.38f)

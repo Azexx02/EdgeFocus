@@ -66,6 +66,7 @@ import com.edgefocus.app.data.ble.model.ExternalPowerState
 import com.edgefocus.app.domain.model.TimerState
 import com.edgefocus.app.domain.precheck.PrecheckConfirmationPolicy
 import com.edgefocus.app.domain.precheck.PrecheckGimbalReadiness
+import com.edgefocus.app.presentation.shared.GimbalButtonArrangement
 import com.edgefocus.app.presentation.ui.home.DurationSelectorRing
 import com.edgefocus.app.presentation.ui.home.PomodoroTimer
 import com.edgefocus.app.presentation.shared.GimbalDirectionalStepButtons
@@ -534,7 +535,8 @@ private fun PrecheckPage(
                         GimbalDirectionalStepButtons(
                             directionLabel = "左",
                             enabled = manualControlsReady,
-                            onNudge = { viewModel.nudgeGimbal("LEFT", it) }
+                            onNudge = { viewModel.nudgeGimbal("LEFT", it) },
+                            arrangement = GimbalButtonArrangement.Vertical
                         )
                         OutlinedButton(
                             onClick = viewModel::centerGimbal,
@@ -543,7 +545,8 @@ private fun PrecheckPage(
                         GimbalDirectionalStepButtons(
                             directionLabel = "右",
                             enabled = manualControlsReady,
-                            onNudge = { viewModel.nudgeGimbal("RIGHT", it) }
+                            onNudge = { viewModel.nudgeGimbal("RIGHT", it) },
+                            arrangement = GimbalButtonArrangement.Vertical
                         )
                     }
                     GimbalDirectionalStepButtons(

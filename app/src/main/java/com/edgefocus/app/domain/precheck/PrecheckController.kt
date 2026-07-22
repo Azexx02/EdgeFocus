@@ -457,9 +457,7 @@ class PrecheckController @Inject constructor(
             check(!gimbal.state.equals("degraded", ignoreCase = true)) {
                 "云台已降级，当前无法人工接管"
             }
-            heldManualLease?.takeIf {
-                it.sessionId == sessionId && gimbal.manualLease
-            }?.let { return@withLock it }
+            heldManualLease?.takeIf { it.sessionId == sessionId }?.let { return@withLock it }
 
             check(gimbal.state.lowercase() !in setOf("searching", "centering", "framing")) {
                 "云台正在自动调整；请先点击跳过自动调整"
@@ -478,7 +476,6 @@ class PrecheckController @Inject constructor(
                 expiresAtMs = takeover.leaseExpiresAtMs
             ).also {
                 heldManualLease = it
-                timerStateHolder.refreshBoardState()
             }
         }
 

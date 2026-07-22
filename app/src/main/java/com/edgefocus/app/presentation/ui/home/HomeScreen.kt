@@ -59,6 +59,7 @@ import com.edgefocus.app.data.remote.ConnectionState
 import com.edgefocus.app.data.remote.PowerProfile
 import com.edgefocus.app.data.remote.BoardPreparationState
 import com.edgefocus.app.data.ble.model.ExternalPowerState
+import com.edgefocus.app.presentation.shared.GimbalButtonArrangement
 import com.edgefocus.app.presentation.shared.rememberCameraPreviewBitmap
 import com.edgefocus.app.presentation.shared.GimbalDirectionalStepButtons
 import com.edgefocus.app.domain.model.SessionType
@@ -441,13 +442,15 @@ private fun HomePrecheckPage(
                 GimbalDirectionalStepButtons(
                     directionLabel = "左",
                     enabled = manualControlsReady,
-                    onNudge = { viewModel.nudgeGimbal("LEFT", it) }
+                    onNudge = { viewModel.nudgeGimbal("LEFT", it) },
+                    arrangement = GimbalButtonArrangement.Vertical
                 )
                 OutlinedButton(onClick = viewModel::centerGimbal, enabled = manualControlsReady) { Text("归中") }
                 GimbalDirectionalStepButtons(
                     directionLabel = "右",
                     enabled = manualControlsReady,
-                    onNudge = { viewModel.nudgeGimbal("RIGHT", it) }
+                    onNudge = { viewModel.nudgeGimbal("RIGHT", it) },
+                    arrangement = GimbalButtonArrangement.Vertical
                 )
             }
             GimbalDirectionalStepButtons(
