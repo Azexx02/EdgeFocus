@@ -54,8 +54,7 @@ data class TimerUiState(
     val gimbalStatus: GimbalStatus? = null,
     val precheckGuidance: String? = null,
     val boardErrorMessage: String? = null,
-    val isPrecheckConfirming: Boolean = false,
-    val modernGimbalControlAvailable: Boolean = false
+    val isPrecheckConfirming: Boolean = false
 )
 
 @HiltViewModel
@@ -92,9 +91,6 @@ class HomeViewModel @Inject constructor(
                 _uiState.update { state ->
                     state.copy(
                         externalPowerState = snapshot.hostState?.power?.state ?: ExternalPowerState.UNKNOWN,
-                        modernGimbalControlAvailable =
-                            snapshot.hello?.supports("gimbal_async_motion_v1") == true &&
-                                snapshot.hello.supports("gimbal_manual_step_v1"),
                         boardPowerProfile = when (snapshot.hostState?.power?.profile) {
                             "home" -> PowerProfile.HOME
                             "go" -> PowerProfile.GO
@@ -235,8 +231,8 @@ class HomeViewModel @Inject constructor(
         runPrecheckCommand { precheckController.skipAutoAdjust() }
     }
 
-    fun nudgeGimbal(direction: String, stepDeg: Double = 3.0) {
-        runPrecheckCommand { precheckController.nudge(direction, stepDeg) }
+    fun nudgeGimbal(direction: String, fineTune: Boolean) {
+        runPrecheckCommand { precheckController.nudge(direction, fineTune) }
     }
 
     fun centerGimbal() {

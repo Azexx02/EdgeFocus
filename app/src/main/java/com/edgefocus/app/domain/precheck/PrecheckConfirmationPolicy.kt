@@ -38,10 +38,11 @@ internal object PrecheckConfirmationPolicy {
         gimbal.state.equals("degraded", ignoreCase = true) -> PrecheckGimbalReadiness.DEGRADED
         !gimbal.manualLease &&
             (gimbal.state.equals("holding", ignoreCase = true) ||
-                gimbal.state.equals("manual_available", ignoreCase = true) ||
                 gimbal.detail.equals("position_confirmed", ignoreCase = true)) ->
             PrecheckGimbalReadiness.POSITION_CONFIRMED
-        gimbal.manualLease && gimbal.manualControlAvailable -> PrecheckGimbalReadiness.MANUAL_READY
+        gimbal.manualLease || gimbal.state.equals("manual_available", ignoreCase = true) ||
+            gimbal.state.equals("manual", ignoreCase = true) ->
+            PrecheckGimbalReadiness.MANUAL_READY
         else -> PrecheckGimbalReadiness.BLOCKED_UNREADY
     }
 
@@ -55,9 +56,8 @@ internal object PrecheckConfirmationPolicy {
 
     fun canUseManualControls(gimbal: PrecheckGimbal?): Boolean = gimbal != null &&
         !gimbal.state.equals("degraded", ignoreCase = true) &&
-        (gimbal.manualControlAvailable || gimbal.state.lowercase() in setOf(
-            "searching", "centering", "framing", "manual_available", "holding", "manual"
-        ))
+        (gimbal.manualLease || gimbal.manualControlAvailable ||
+            gimbal.state.lowercase() in setOf("manual_available", "holding", "manual"))
 
     fun canSkipAutoAdjust(gimbal: PrecheckGimbal?): Boolean = gimbal != null &&
         !gimbal.manualLease &&

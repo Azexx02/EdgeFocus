@@ -57,7 +57,6 @@ interface BleCommand {
         sessionId: String,
         sequence: Long,
         direction: String? = null,
-        stepDeg: Double? = null,
         ownerId: String? = null,
         leaseToken: String? = null,
         fineTune: Boolean? = null,

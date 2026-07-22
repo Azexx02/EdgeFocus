@@ -98,8 +98,7 @@ data class ControlPanelUiState(
     val bandControlAvailable: Boolean = false,
     val bandControlInProgress: Boolean = false,
     val bandControlMessage: String? = null,
-    val isPrecheckConfirming: Boolean = false,
-    val modernGimbalControlAvailable: Boolean = false
+    val isPrecheckConfirming: Boolean = false
 )
 
 @HiltViewModel
@@ -133,9 +132,6 @@ class ControlPanelViewModel @Inject constructor(
                         externalPowerState = snapshot.hostState?.power?.state ?: ExternalPowerState.UNKNOWN,
                         braceletConnected = snapshot.hostState?.braceletConnected,
                         bandControlAvailable = snapshot.hello?.supports("band_proxy_control_v1") == true,
-                        modernGimbalControlAvailable =
-                            snapshot.hello?.supports("gimbal_async_motion_v1") == true &&
-                                snapshot.hello.supports("gimbal_manual_step_v1"),
                         boardPowerProfile = when (snapshot.hostState?.power?.profile) {
                             "home" -> PowerProfile.HOME
                             "go" -> PowerProfile.GO
@@ -437,11 +433,11 @@ class ControlPanelViewModel @Inject constructor(
             "nudge_up" -> "UP"
             else -> "DOWN"
         }
-        runPrecheckCommand { precheckController.nudge(direction) }
+        runPrecheckCommand { precheckController.nudge(direction, fineTune = true) }
     }
 
-    fun nudgeGimbal(direction: String, stepDeg: Double = 3.0) {
-        runPrecheckCommand { precheckController.nudge(direction, stepDeg) }
+    fun nudgeGimbal(direction: String, fineTune: Boolean) {
+        runPrecheckCommand { precheckController.nudge(direction, fineTune) }
     }
 
     fun stopGimbal() {

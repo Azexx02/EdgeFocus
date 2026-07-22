@@ -12,11 +12,11 @@ import org.junit.Test
 
 class HostJsonCodecTest {
     @Test
-    fun `client hello advertises gimbal manual input v2`() {
+    fun `client hello does not invent unsupported gimbal capabilities`() {
         val request = HostJsonCodec.clientHello(1)
         val capabilities = request.getJSONObject("data").getJSONArray("capabilities")
 
-        assertTrue((0 until capabilities.length()).any {
+        assertFalse((0 until capabilities.length()).any {
             capabilities.getString(it) == "gimbal_manual_input_v2"
         })
     }
@@ -29,7 +29,6 @@ class HostJsonCodecTest {
             sessionId = "session_1",
             sequence = 18,
             direction = "left",
-            stepDeg = 3.0,
             ownerId = "app-test",
             leaseToken = "lease-test"
         )
@@ -39,6 +38,24 @@ class HostJsonCodecTest {
         assertEquals("app-test", data.getString("owner_id"))
         assertEquals("lease-test", data.getString("lease_token"))
         assertTrue(data.getBoolean("fine_tune"))
+        assertFalse(data.has("step_deg"))
+    }
+
+    @Test
+    fun `normal step uses host configured normal step without app degrees`() {
+        val request = HostJsonCodec.gimbalCommand(
+            requestId = 3,
+            command = "gimbal_nudge",
+            sessionId = "session_1",
+            sequence = 19,
+            direction = "right",
+            ownerId = "app-test",
+            leaseToken = "lease-test",
+            fineTune = false
+        )
+        val data = request.getJSONObject("data")
+
+        assertFalse(data.getBoolean("fine_tune"))
         assertFalse(data.has("step_deg"))
     }
 

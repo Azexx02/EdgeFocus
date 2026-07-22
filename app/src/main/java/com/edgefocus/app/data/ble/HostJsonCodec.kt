@@ -18,18 +18,16 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 object HostJsonCodec {
-    const val CAP_GIMBAL_ASYNC_MOTION = "gimbal_async_motion_v1"
     const val CAP_GIMBAL_ORIGIN = "gimbal_origin_v1"
     const val CAP_GIMBAL_FAULT_CLASS = "gimbal_fault_class_v1"
-    const val CAP_GIMBAL_MANUAL_STEP = "gimbal_manual_step_v1"
     const val CAP_GIMBAL_SESSION_CONTROL = "gimbal_session_control_v3"
+    const val CAP_GIMBAL_MANUAL_LEASE = "gimbal_manual_lease_v1"
     const val CAP_GIMBAL_ASYNC_RESULT = "gimbal_async_result_v1"
 
     val clientCapabilities: Set<String> = setOf(
         "event_ack_v1",
         "event_dedupe_v1",
-        "phone_heartbeat_v1",
-        "gimbal_manual_input_v2"
+        "phone_heartbeat_v1"
     )
 
     fun clientHello(requestId: Int): JSONObject = request(
@@ -100,7 +98,6 @@ object HostJsonCodec {
         sessionId: String,
         sequence: Long,
         direction: String? = null,
-        stepDeg: Double? = null,
         ownerId: String? = null,
         leaseToken: String? = null,
         fineTune: Boolean? = null,
@@ -138,9 +135,7 @@ object HostJsonCodec {
             val normalized = requireNotNull(direction).uppercase()
             require(normalized in setOf("UP", "DOWN", "LEFT", "RIGHT"))
             data.put("direction", normalized)
-            val requestedStep = stepDeg
-            if (requestedStep != null) require(requestedStep.isFinite() && requestedStep > 0.0)
-            data.put("fine_tune", fineTune ?: (requestedStep != null && requestedStep <= 10.0))
+            data.put("fine_tune", fineTune ?: true)
         }
         if (command == "gimbal_force_release") data.put("confirmed", confirmed == true)
         return request(command, requestId, data)

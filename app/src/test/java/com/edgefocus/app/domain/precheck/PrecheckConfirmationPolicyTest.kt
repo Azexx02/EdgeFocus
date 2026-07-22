@@ -80,8 +80,8 @@ class PrecheckConfirmationPolicyTest {
             PrecheckConfirmationPolicy.gimbalReadiness(searching)
         )
         assertFalse(PrecheckConfirmationPolicy.canConfirm(true, false, searching))
-        assertFalse(PrecheckConfirmationPolicy.canUseManualControls(searching))
         assertTrue(PrecheckConfirmationPolicy.canSkipAutoAdjust(searching))
+        assertFalse(PrecheckConfirmationPolicy.canUseManualControls(searching))
     }
 
     @Test
@@ -144,7 +144,7 @@ class PrecheckConfirmationPolicyTest {
     }
 
     @Test
-    fun manualAvailableCanConfirmOrAcquireOnFirstManualCommand() {
+    fun manualAvailableCanConfirmAndAcquireLeaseOnFirstManualCommand() {
         val gimbal = PrecheckGimbal(
             enabled = true,
             online = true,
@@ -154,7 +154,7 @@ class PrecheckConfirmationPolicyTest {
         )
 
         assertEquals(
-            PrecheckGimbalReadiness.POSITION_CONFIRMED,
+            PrecheckGimbalReadiness.MANUAL_READY,
             PrecheckConfirmationPolicy.gimbalReadiness(gimbal)
         )
         assertTrue(PrecheckConfirmationPolicy.canConfirm(true, false, gimbal))

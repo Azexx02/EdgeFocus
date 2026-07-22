@@ -45,7 +45,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
@@ -69,6 +71,7 @@ import com.edgefocus.app.domain.precheck.PrecheckGimbalReadiness
 import com.edgefocus.app.presentation.ui.home.DurationSelectorRing
 import com.edgefocus.app.presentation.ui.home.PomodoroTimer
 import com.edgefocus.app.presentation.shared.GimbalNudgeButton
+import com.edgefocus.app.presentation.shared.GimbalStepModeSelector
 import com.edgefocus.app.presentation.viewmodel.BleViewModel
 import com.edgefocus.app.presentation.viewmodel.ControlPanelViewModel
 import com.edgefocus.app.presentation.shared.rememberCameraPreviewBitmap
@@ -361,7 +364,6 @@ private fun PrecheckPage(
     val gimbalReadiness = PrecheckConfirmationPolicy.gimbalReadiness(gimbal)
     val manualControlsReady = preparationReady &&
         !uiState.isPrecheckConfirming &&
-        uiState.modernGimbalControlAvailable &&
         PrecheckConfirmationPolicy.canUseManualControls(gimbal)
     val confirmationReady = PrecheckConfirmationPolicy.canConfirm(
         preparationReady = preparationReady,
@@ -370,6 +372,7 @@ private fun PrecheckPage(
     )
     val skipAutoAdjustReady = !uiState.isPrecheckConfirming &&
         PrecheckConfirmationPolicy.canSkipAutoAdjust(gimbal)
+    var fineTune by remember { mutableStateOf(true) }
     Row(
         modifier = Modifier
             .fillMaxSize()
@@ -478,17 +481,10 @@ private fun PrecheckPage(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    if (!uiState.modernGimbalControlAvailable) {
-                        Text(
-                            "主机需升级后才能使用新版连续云台微调。",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.error
-                        )
-                    }
                     if (gimbal.hardwareFaultActive || gimbal.state.equals("degraded", ignoreCase = true)) {
                         OutlinedButton(
                             onClick = viewModel::recoverGimbal,
-                            enabled = preparationReady && uiState.modernGimbalControlAvailable
+                            enabled = preparationReady
                         ) {
                             Text("恢复云台")
                         }
@@ -533,15 +529,22 @@ private fun PrecheckPage(
                                 if (gimbal.settled == true) "已到位" else "运动中"
                         )
                     }
+                    GimbalStepModeSelector(
+                        fineTune = fineTune,
+                        enabled = manualControlsReady,
+                        onModeChange = { fineTune = it }
+                    )
                     GimbalNudgeButton(
                         label = "上",
                         enabled = manualControlsReady,
+                        fineTune = fineTune,
                         onNudge = { viewModel.nudgeGimbal("UP", it) }
                     )
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         GimbalNudgeButton(
                             label = "左",
                             enabled = manualControlsReady,
+                            fineTune = fineTune,
                             onNudge = { viewModel.nudgeGimbal("LEFT", it) }
                         )
                         OutlinedButton(
@@ -551,12 +554,14 @@ private fun PrecheckPage(
                         GimbalNudgeButton(
                             label = "右",
                             enabled = manualControlsReady,
+                            fineTune = fineTune,
                             onNudge = { viewModel.nudgeGimbal("RIGHT", it) }
                         )
                     }
                     GimbalNudgeButton(
                         label = "下",
                         enabled = manualControlsReady,
+                        fineTune = fineTune,
                         onNudge = { viewModel.nudgeGimbal("DOWN", it) }
                     )
                     TextButton(onClick = viewModel::stopGimbal, enabled = manualControlsReady) {

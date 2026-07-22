@@ -68,7 +68,7 @@ class PrecheckController @Inject constructor(
 
     private val manualInput = ManualGimbalInputCoordinator(
         scope = controllerScope,
-        send = { sessionId, direction, stepDeg ->
+        send = { sessionId, direction, fineTune ->
             val lease = heldManualLease
                 ?.takeIf { it.sessionId == sessionId }
                 ?: error("云台手动控制租约已失效")
@@ -76,10 +76,9 @@ class PrecheckController @Inject constructor(
                 command = "gimbal_nudge",
                 sessionId = sessionId,
                 direction = direction.wireValue,
-                stepDeg = stepDeg,
                 ownerId = bleManager.gimbalOwnerId,
                 leaseToken = lease.token,
-                fineTune = stepDeg <= FINE_TUNE_MAX_DEG
+                fineTune = fineTune
             )
         }
     )
@@ -126,9 +125,8 @@ class PrecheckController @Inject constructor(
         }
     }
 
-    suspend fun nudge(direction: String, stepDeg: Double = DEFAULT_NUDGE_DEG): Result<Unit> = runCatching {
+    suspend fun nudge(direction: String, fineTune: Boolean): Result<Unit> = runCatching {
         check(!_isConfirming.value) { "正在进入专注会话，请稍候" }
-        requireModernManualControl()
         val current = timerStateHolder.state.value
         val sessionId = currentSessionId()
         check(current.timerState == TimerState.PRECHECK) { "主机已退出 PRECHECK" }
@@ -138,7 +136,7 @@ class PrecheckController @Inject constructor(
             sessionId = sessionId,
             leaseGeneration = heldManualLease?.epoch,
             direction = ManualGimbalDirection.fromWire(direction),
-            stepDeg = stepDeg
+            fineTune = fineTune
         ).getOrThrow()
     }
 
@@ -155,7 +153,6 @@ class PrecheckController @Inject constructor(
 
     suspend fun stop(): Result<Unit> = runCatching {
         check(!_isConfirming.value) { "正在进入专注会话，请稍候" }
-        requireModernManualControl()
         val sessionId = currentSessionId()
         val current = timerStateHolder.state.value
         check(current.timerState == TimerState.PRECHECK) { "主机已退出 PRECHECK" }
@@ -393,22 +390,20 @@ class PrecheckController @Inject constructor(
     private suspend fun sendCommand(
         command: String,
         sessionId: String,
-        direction: String? = null,
-        stepDeg: Double? = null
-    ): Result<Unit> = sendGimbalCommand(command, sessionId, direction, stepDeg).map { Unit }
+        direction: String? = null
+    ): Result<Unit> = sendGimbalCommand(command, sessionId, direction).map { Unit }
 
     private suspend fun sendGimbalCommand(
         command: String,
         sessionId: String,
         direction: String? = null,
-        stepDeg: Double? = null,
         ownerId: String? = null,
         leaseToken: String? = null,
         fineTune: Boolean? = null,
         confirmed: Boolean? = null
     ): Result<GimbalCommandAcceptance> = runCatching {
         val bytes = sendCommandBytes(
-            command, sessionId, direction, stepDeg,
+            command, sessionId, direction,
             ownerId, leaseToken, fineTune, confirmed
         ).getOrThrow()
         val acceptance = HostJsonCodec.parseGimbalAcceptance(String(bytes, Charsets.UTF_8))
@@ -425,7 +420,6 @@ class PrecheckController @Inject constructor(
         command: String,
         sessionId: String,
         direction: String? = null,
-        stepDeg: Double? = null,
         ownerId: String? = null,
         leaseToken: String? = null,
         fineTune: Boolean? = null,
@@ -439,7 +433,6 @@ class PrecheckController @Inject constructor(
             sessionId,
             sequence,
             direction,
-            stepDeg,
             ownerId,
             leaseToken,
             fineTune,
@@ -452,13 +445,6 @@ class PrecheckController @Inject constructor(
             timerStateHolder.refreshBoardState()
         }
         response
-    }
-
-    private fun requireModernManualControl() {
-        val hello = connectionSupervisor.snapshot.value.hello
-        check(hello?.supports(HostJsonCodec.CAP_GIMBAL_ASYNC_MOTION) == true &&
-            hello.supports(HostJsonCodec.CAP_GIMBAL_MANUAL_STEP)
-        ) { "主机版本不支持新版云台微调，请升级主机后重试" }
     }
 
     private suspend fun ensureManualLease(sessionId: String): HeldManualLease =
@@ -475,8 +461,8 @@ class PrecheckController @Inject constructor(
                 it.sessionId == sessionId && gimbal.manualLease
             }?.let { return@withLock it }
 
-            if (gimbal.state.lowercase() in setOf("searching", "centering", "framing")) {
-                sendCommand("precheck_skip_auto_adjust", sessionId).getOrThrow()
+            check(gimbal.state.lowercase() !in setOf("searching", "centering", "framing")) {
+                "云台正在自动调整；请先点击跳过自动调整"
             }
             val takeover = sendGimbalCommand(
                 command = "gimbal_manual_takeover",
@@ -534,8 +520,6 @@ class PrecheckController @Inject constructor(
     }
 
     private companion object {
-        const val DEFAULT_NUDGE_DEG = 3.0
-        const val FINE_TUNE_MAX_DEG = 10.0
         const val LEASE_KEEPALIVE_INTERVAL_MS = 5_000L
         const val SKIP_SETTLE_TIMEOUT_MS = 3_000L
         const val SKIP_SETTLE_POLL_MS = 150L
