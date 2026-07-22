@@ -766,9 +766,11 @@ CommandResult GimbalHardwareService::executeMaintenanceLocked(
             const double start_pitch = *snapshot_.current_pitch10 / 10.0;
             const std::pair<double, double> targets[] = {
                 {offsetAngle(start_yaw, 15.0), start_pitch},
+                {start_yaw, start_pitch},
                 {offsetAngle(start_yaw, -15.0), start_pitch},
                 {start_yaw, start_pitch},
                 {start_yaw, offsetAngle(start_pitch, 15.0)},
+                {start_yaw, start_pitch},
                 {start_yaw, offsetAngle(start_pitch, -15.0)},
                 {start_yaw, start_pitch},
             };

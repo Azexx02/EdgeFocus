@@ -694,6 +694,9 @@ int main(int argc, char** argv) {
 
     auto result = service.enableAndAlign();
     if (result.success && command == "move") {
+        result = service.hold();
+    }
+    if (result.success && command == "move") {
         if (!limits.verified()) {
             result = {false, false, "motion_limits_unverified"};
         } else {
