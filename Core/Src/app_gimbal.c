@@ -16,7 +16,6 @@
 #define POSE_SAMPLE_PERIOD_MS 20U
 #define ORIGIN_STABLE_SAMPLES 10U
 #define ORIGIN_STABLE_RAW_DELTA 4
-#define MAINTENANCE_LIMIT_TENTHS 100
 
 static bool enable_input_was_high;
 static GimbalProtocolState runtime_state;
@@ -148,8 +147,7 @@ static bool target_allowed(uint16_t yaw10, uint16_t pitch10)
       record->safe_max_tenths[GIMBAL_AXIS_Y],
       record->safe_min_tenths[GIMBAL_AXIS_P],
       record->safe_max_tenths[GIMBAL_AXIS_P],
-      runtime_profile == APP_GIMBAL_PROFILE_MAINTENANCE, false,
-      MAINTENANCE_LIMIT_TENTHS);
+      false, false, 0);
 }
 
 static bool hold_position_allowed(uint16_t yaw10, uint16_t pitch10)
@@ -161,8 +159,7 @@ static bool hold_position_allowed(uint16_t yaw10, uint16_t pitch10)
       record->safe_max_tenths[GIMBAL_AXIS_Y],
       record->safe_min_tenths[GIMBAL_AXIS_P],
       record->safe_max_tenths[GIMBAL_AXIS_P],
-      runtime_profile == APP_GIMBAL_PROFILE_MAINTENANCE, true,
-      MAINTENANCE_LIMIT_TENTHS);
+      false, true, 0);
 }
 
 GimbalNvStoreResult app_gimbal_nv_commit(const GimbalNvRecordV3 *record)

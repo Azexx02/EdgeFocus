@@ -118,10 +118,8 @@ static void test_power_profile_isolation_and_reset(void) {
 
     gimbal_power_profile_set_maintenance(true);
     assert(gimbal_power_profile_is_maintenance());
-    assert(gimbal_power_profile_hold_max(GIMBAL_POWER_AXIS_P) == 260U);
-    assert(gimbal_power_profile_hold_max(GIMBAL_POWER_AXIS_Y) == 180U);
-    assert(gimbal_power_profile_hold_max(GIMBAL_POWER_AXIS_P) <= 360U);
-    assert(gimbal_power_profile_hold_max(GIMBAL_POWER_AXIS_Y) <= 520U);
+    assert(gimbal_power_profile_hold_max(GIMBAL_POWER_AXIS_P) == 360U);
+    assert(gimbal_power_profile_hold_max(GIMBAL_POWER_AXIS_Y) == 520U);
 
     /* STOP/output-off uses the same false transition before the next ARM. */
     gimbal_power_profile_set_maintenance(false);
