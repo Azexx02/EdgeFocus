@@ -77,7 +77,8 @@ static void check_current_protection(uint32_t now)
   CurrentSampleSnapshot current;
   const GimbalCurrentProtectionConfig *config;
   unsigned axis;
-  if (runtime_profile != APP_GIMBAL_PROFILE_PRODUCTION ||
+  if (!GIMBAL_CURRENT_PROTECTION_ENABLE ||
+      runtime_profile != APP_GIMBAL_PROFILE_PRODUCTION ||
       (app_gimbal_nv_storage.record.valid_flags &
        GIMBAL_NV_VALID_CURRENT_PROTECTION) == 0U ||
       (!motor_pwm_is_enabled() && !board_get_boost())) {
@@ -218,10 +219,6 @@ AppGimbalResult app_gimbal_arm_profile(AppGimbalArmProfile profile)
   flags = app_gimbal_nv_storage.record.valid_flags;
   if ((flags & GIMBAL_NV_VALID_ELECTRICAL) == 0U) return APP_GIMBAL_CAL_REQUIRED;
   if ((flags & GIMBAL_NV_VALID_ORIGIN) == 0U) return APP_GIMBAL_ORIGIN_REQUIRED;
-  if (profile == APP_GIMBAL_PROFILE_PRODUCTION &&
-      (flags & GIMBAL_NV_VALID_CURRENT_PROTECTION) == 0U) {
-    return APP_GIMBAL_CURRENT_CONFIG_REQUIRED;
-  }
   runtime_state = GIMBAL_STATE_ARMING;
   apply_persistent_record();
   outputs_off();

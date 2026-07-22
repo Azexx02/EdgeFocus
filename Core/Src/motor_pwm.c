@@ -2227,7 +2227,6 @@ void motor_pwm_hold_process(void)
           GIMBAL_X_TRACK_TARGET_SLEW_RAW :
           GIMBAL_Y_TRACK_TARGET_SLEW_RAW;
     }
-    if (gimbal_power_profile_is_maintenance() && step > 0.25f) step = 0.25f;
     step *= (float)dt_ms / (float)GIMBAL_FOC_PERIOD_MS;
     if ((float)target_delta > step) {
       hold_target_raw_filtered[axis] += step;
