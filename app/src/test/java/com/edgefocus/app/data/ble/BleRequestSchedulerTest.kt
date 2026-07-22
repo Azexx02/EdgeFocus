@@ -4,9 +4,11 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -91,5 +93,33 @@ class BleRequestSchedulerTest {
         assertEquals("preview", executed[2])
         assertTrue(preview.await().isSuccess)
         states.forEach { assertTrue(it.await().isSuccess) }
+    }
+
+    @Test
+    fun `active preview can be cancelled before critical control`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val caller = UnconfinedTestDispatcher(testScheduler)
+        val scheduler = BleRequestScheduler(CoroutineScope(dispatcher))
+        val events = mutableListOf<String>()
+        val preview = async(caller) {
+            scheduler.execute(HostRequestPriority.P4_PREVIEW) {
+                events += "preview_started"
+                awaitCancellation()
+            }
+        }
+        runCurrent()
+
+        scheduler.cancelQueuedAndActive(HostRequestPriority.P4_PREVIEW, "control requested")
+        val stop = async(caller) {
+            scheduler.execute(HostRequestPriority.P0_CRITICAL) {
+                events += "stop"
+                Result.success(byteArrayOf(0))
+            }
+        }
+        advanceUntilIdle()
+
+        assertTrue(preview.await().isFailure)
+        assertTrue(stop.await().isSuccess)
+        assertEquals(listOf("preview_started", "stop"), events)
     }
 }

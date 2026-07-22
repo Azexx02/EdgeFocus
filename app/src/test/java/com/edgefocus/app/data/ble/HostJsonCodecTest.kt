@@ -12,6 +12,68 @@ import org.junit.Test
 
 class HostJsonCodecTest {
     @Test
+    fun `client hello advertises gimbal manual input v2`() {
+        val request = HostJsonCodec.clientHello(1)
+        val capabilities = request.getJSONObject("data").getJSONArray("capabilities")
+
+        assertTrue((0 until capabilities.length()).any {
+            capabilities.getString(it) == "gimbal_manual_input_v2"
+        })
+    }
+
+    @Test
+    fun `precheck nudge carries lease identity and host resolved fine tune intent`() {
+        val request = HostJsonCodec.gimbalCommand(
+            requestId = 2,
+            command = "gimbal_nudge",
+            sessionId = "session_1",
+            sequence = 18,
+            direction = "left",
+            stepDeg = 3.0,
+            ownerId = "app-test",
+            leaseToken = "lease-test"
+        )
+        val data = request.getJSONObject("data")
+
+        assertEquals("LEFT", data.getString("direction"))
+        assertEquals("app-test", data.getString("owner_id"))
+        assertEquals("lease-test", data.getString("lease_token"))
+        assertTrue(data.getBoolean("fine_tune"))
+        assertFalse(data.has("step_deg"))
+    }
+
+    @Test
+    fun `gimbal acceptance parses authoritative target and generation`() {
+        val result = HostJsonCodec.parseGimbalAcceptance(
+            """{"status":"success","data":{"accepted":true,"operation":"gimbal_nudge","session_id":"s1","sequence":18,"motion_generation":53,"state":"moving","settled":false,"manual_lease":true,"target_yaw_deg":359.4,"target_pitch_deg":358.7}}"""
+        )
+
+        assertTrue(result.accepted)
+        assertEquals(53L, result.motionGeneration)
+        assertEquals(359.4, result.targetYawDeg!!, 0.001)
+        assertFalse(result.settled!!)
+    }
+
+    @Test
+    fun `gimbal maintenance success is accepted without legacy accepted field`() {
+        val result = HostJsonCodec.parseGimbalAcceptance(
+            """{"status":"success","data":{"operation":"gimbal_capture_forward","origin_epoch":4}}"""
+        )
+
+        assertTrue(result.accepted)
+        assertEquals(4L, result.originEpoch)
+    }
+
+    @Test
+    fun `generic business response still requires explicit acceptance`() {
+        val result = HostJsonCodec.parseBusinessAcceptance(
+            """{"status":"success","data":{"message":"informational"}}"""
+        )
+
+        assertFalse(result.accepted)
+    }
+
+    @Test
     fun `start always uses live camera`() {
         val request = HostJsonCodec.sessionControl(7, "start", 25)
 

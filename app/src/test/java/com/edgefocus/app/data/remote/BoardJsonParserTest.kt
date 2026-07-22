@@ -773,4 +773,34 @@ class BoardJsonParserTest {
         assertTrue(gimbal.manualLease)
         assertEquals("automatic_search_skipped", gimbal.detail)
     }
+
+    @Test
+    fun `new gimbal fields win while legacy angles remain available`() {
+        val response = """
+            {"status":"success","data":{
+              "runtime_snapshot":{
+                "session":{"id":"session_v2","phase":"PRECHECK","preparation_state":"READY"},
+                "gimbal":{
+                  "available":true,"state":"moving","control_mode":"manual",
+                  "communication_health":"healthy","hardware_fault_active":false,
+                  "current_yaw_deg":359.4,"current_pitch_deg":2.5,
+                  "target_yaw_deg":1.4,"target_pitch_deg":2.5,
+                  "motion_generation":53,"settled":false,"manual_lease":true,
+                  "calibration_valid":true,"origin_valid":true,
+                  "calibration_epoch":7,"origin_epoch":3
+                }
+              }
+            }}
+        """.trimIndent()
+
+        val gimbal = BoardJsonParser.parseSessionState(response).precheck?.gimbal!!
+
+        assertEquals("manual", gimbal.controlMode)
+        assertEquals("healthy", gimbal.communicationHealth)
+        assertEquals(359.4, gimbal.currentYawDeg!!, 0.001)
+        assertEquals(2.5, gimbal.angleX!!, 0.001)
+        assertEquals(53L, gimbal.motionGeneration)
+        assertFalse(gimbal.settled!!)
+        assertTrue(gimbal.originValid!!)
+    }
 }

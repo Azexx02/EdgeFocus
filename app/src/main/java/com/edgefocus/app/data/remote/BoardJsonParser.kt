@@ -140,7 +140,26 @@ data class PrecheckGimbal(
     val angleX: Double? = null,
     val angleY: Double? = null,
     val state: String = "idle",
+    val controlMode: String? = null,
     val manualLease: Boolean = false,
+    val manualControlAvailable: Boolean = manualLease,
+    val communicationHealth: String? = null,
+    val hardwareFaultActive: Boolean = false,
+    val hardwareFaultCode: String? = null,
+    val lastCommandErrorCode: String? = null,
+    val lastCommandErrorRetryable: Boolean = false,
+    val currentYawDeg: Double? = null,
+    val currentPitchDeg: Double? = null,
+    val targetYawDeg: Double? = null,
+    val targetPitchDeg: Double? = null,
+    val motionGeneration: Long? = null,
+    val settled: Boolean? = null,
+    val calibrationValid: Boolean? = null,
+    val originValid: Boolean? = null,
+    val calibrationEpoch: Long? = null,
+    val originEpoch: Long? = null,
+    val searchGeneration: Long? = null,
+    val waypointIndex: Int? = null,
     val detail: String? = null
 )
 
@@ -176,6 +195,24 @@ data class GimbalStatus(
     val calibrated: Boolean = false,
     val angleX: Double? = null,
     val angleY: Double? = null,
+    val state: String? = null,
+    val controlMode: String? = null,
+    val communicationHealth: String? = null,
+    val hardwareFaultActive: Boolean = false,
+    val hardwareFaultCode: String? = null,
+    val lastCommandErrorCode: String? = null,
+    val lastCommandErrorRetryable: Boolean = false,
+    val currentYawDeg: Double? = null,
+    val currentPitchDeg: Double? = null,
+    val targetYawDeg: Double? = null,
+    val targetPitchDeg: Double? = null,
+    val motionGeneration: Long? = null,
+    val settled: Boolean? = null,
+    val calibrationValid: Boolean? = null,
+    val originValid: Boolean? = null,
+    val calibrationEpoch: Long? = null,
+    val originEpoch: Long? = null,
+    val manualLease: Boolean = false,
     val lastError: String? = null,
     val enabled: Boolean = false
 )
@@ -412,6 +449,10 @@ object BoardJsonParser {
 
     fun parseGimbalStatus(jsonString: String): GimbalStatus {
         val data = JSONObject(jsonString).optJSONObject("data") ?: JSONObject()
+        val currentYaw = data.optDoubleOrNull("current_yaw_deg")
+            ?: data.optDoubleOrNull("angle_y")
+        val currentPitch = data.optDoubleOrNull("current_pitch_deg")
+            ?: data.optDoubleOrNull("angle_x")
         return GimbalStatus(
             connected = data.optBoolean("connected", false),
             online = data.optBoolean("online", false),
@@ -421,6 +462,25 @@ object BoardJsonParser {
             calibrated = data.optBoolean("calibrated", false),
             angleX = data.optDoubleOrNull("angle_x"),
             angleY = data.optDoubleOrNull("angle_y"),
+            state = data.optJsonString("state"),
+            controlMode = data.optJsonString("control_mode"),
+            communicationHealth = data.optJsonString("communication_health")
+                ?: data.optJsonString("health_status"),
+            hardwareFaultActive = data.optBoolean("hardware_fault_active", false),
+            hardwareFaultCode = data.optJsonString("hardware_fault_code"),
+            lastCommandErrorCode = data.optJsonString("last_command_error_code"),
+            lastCommandErrorRetryable = data.optBoolean("last_command_error_retryable", false),
+            currentYawDeg = currentYaw,
+            currentPitchDeg = currentPitch,
+            targetYawDeg = data.optDoubleOrNull("target_yaw_deg"),
+            targetPitchDeg = data.optDoubleOrNull("target_pitch_deg"),
+            motionGeneration = data.optLongOrNull("motion_generation"),
+            settled = data.optBooleanOrNull("settled"),
+            calibrationValid = data.optBooleanOrNull("calibration_valid"),
+            originValid = data.optBooleanOrNull("origin_valid"),
+            calibrationEpoch = data.optLongOrNull("calibration_epoch"),
+            originEpoch = data.optLongOrNull("origin_epoch"),
+            manualLease = data.optBoolean("manual_lease", false),
             lastError = data.optString("last_error").takeIf { it.isNotBlank() },
             enabled = data.optBoolean("enabled", false)
         )
@@ -512,38 +572,91 @@ object BoardJsonParser {
                     guidance = it.optJSONObject("guidance")?.toString()
                 )
             },
-            gimbal = json?.optJSONObject("gimbal")?.let {
-                PrecheckGimbal(
-                    enabled = it.optBoolean("enabled", false),
-                    online = it.optBoolean("online", false),
-                    safe = it.optBoolean("safe", false),
-                    angleX = runtimeGimbal?.optDoubleOrNull("angle_x")
-                        ?: it.optDoubleOrNull("angle_x"),
-                    angleY = runtimeGimbal?.optDoubleOrNull("angle_y")
-                        ?: it.optDoubleOrNull("angle_y"),
-                    state = runtimeGimbal?.optString("state")?.takeIf { value -> value.isNotBlank() }
-                        ?: it.optString("state", "idle"),
-                    manualLease = runtimeGimbal?.optBoolean(
-                        "manual_lease",
-                        it.optBoolean("manual_lease", false)
-                    ) ?: it.optBoolean("manual_lease", false),
-                    detail = runtimeGimbal?.optJsonString("detail")
-                        ?: it.optJsonString("detail")
-                )
-            } ?: runtimeGimbal?.let { gimbal ->
-                val available = gimbal.optBoolean("available", false)
-                val healthStatus = gimbal.optString("health_status").trim().lowercase()
-                PrecheckGimbal(
-                    enabled = available,
-                    online = available && healthStatus !in setOf("not_started", "offline", "failed"),
-                    safe = available && !gimbal.optBoolean("degraded", false) && healthStatus == "ready",
-                    angleX = gimbal.optDoubleOrNull("angle_x"),
-                    angleY = gimbal.optDoubleOrNull("angle_y"),
-                    state = gimbal.optString("state", "idle"),
-                    manualLease = gimbal.optBoolean("manual_lease", false),
-                    detail = gimbal.optJsonString("detail")
-                )
-            }
+            gimbal = parsePrecheckGimbal(json?.optJSONObject("gimbal"), runtimeGimbal)
+        )
+    }
+
+    private fun parsePrecheckGimbal(
+        legacy: JSONObject?,
+        runtime: JSONObject?
+    ): PrecheckGimbal? {
+        if (legacy == null && runtime == null) return null
+        val available = runtime?.optBooleanOrNull("available")
+            ?: legacy?.optBooleanOrNull("enabled")
+            ?: false
+        val communicationHealth = runtime?.optJsonString("communication_health")
+            ?: runtime?.optJsonString("health_status")
+            ?: legacy?.optJsonString("communication_health")
+        val normalizedHealth = communicationHealth?.trim()?.lowercase()
+        val online = runtime?.optBooleanOrNull("online")
+            ?: legacy?.optBooleanOrNull("online")
+            ?: (available && normalizedHealth !in setOf("not_started", "offline", "failed"))
+        val hardwareFault = runtime?.optBooleanOrNull("hardware_fault_active")
+            ?: legacy?.optBooleanOrNull("hardware_fault_active")
+            ?: false
+        val currentYaw = runtime?.optDoubleOrNull("current_yaw_deg")
+            ?: legacy?.optDoubleOrNull("current_yaw_deg")
+            ?: runtime?.optDoubleOrNull("angle_y")
+            ?: legacy?.optDoubleOrNull("angle_y")
+        val currentPitch = runtime?.optDoubleOrNull("current_pitch_deg")
+            ?: legacy?.optDoubleOrNull("current_pitch_deg")
+            ?: runtime?.optDoubleOrNull("angle_x")
+            ?: legacy?.optDoubleOrNull("angle_x")
+        val manualLease = runtime?.optBooleanOrNull("manual_lease")
+            ?: legacy?.optBooleanOrNull("manual_lease")
+            ?: false
+        return PrecheckGimbal(
+            enabled = available,
+            online = online,
+            safe = legacy?.optBooleanOrNull("safe")
+                ?: (available && online && !hardwareFault && normalizedHealth in setOf("healthy", "ready")),
+            angleX = runtime?.optDoubleOrNull("angle_x")
+                ?: legacy?.optDoubleOrNull("angle_x")
+                ?: currentPitch,
+            angleY = runtime?.optDoubleOrNull("angle_y")
+                ?: legacy?.optDoubleOrNull("angle_y")
+                ?: currentYaw,
+            state = runtime?.optJsonString("state")
+                ?: legacy?.optJsonString("state")
+                ?: "idle",
+            controlMode = runtime?.optJsonString("control_mode")
+                ?: legacy?.optJsonString("control_mode"),
+            manualLease = manualLease,
+            manualControlAvailable = runtime?.optBooleanOrNull("manual_control_available")
+                ?: legacy?.optBooleanOrNull("manual_control_available")
+                ?: manualLease,
+            communicationHealth = communicationHealth,
+            hardwareFaultActive = hardwareFault,
+            hardwareFaultCode = runtime?.optJsonString("hardware_fault_code")
+                ?: legacy?.optJsonString("hardware_fault_code"),
+            lastCommandErrorCode = runtime?.optJsonString("last_command_error_code")
+                ?: legacy?.optJsonString("last_command_error_code"),
+            lastCommandErrorRetryable = runtime?.optBooleanOrNull("last_command_error_retryable")
+                ?: legacy?.optBooleanOrNull("last_command_error_retryable")
+                ?: false,
+            currentYawDeg = currentYaw,
+            currentPitchDeg = currentPitch,
+            targetYawDeg = runtime?.optDoubleOrNull("target_yaw_deg")
+                ?: legacy?.optDoubleOrNull("target_yaw_deg"),
+            targetPitchDeg = runtime?.optDoubleOrNull("target_pitch_deg")
+                ?: legacy?.optDoubleOrNull("target_pitch_deg"),
+            motionGeneration = runtime?.optLongOrNull("motion_generation")
+                ?: legacy?.optLongOrNull("motion_generation"),
+            settled = runtime?.optBooleanOrNull("settled")
+                ?: legacy?.optBooleanOrNull("settled"),
+            calibrationValid = runtime?.optBooleanOrNull("calibration_valid")
+                ?: legacy?.optBooleanOrNull("calibration_valid"),
+            originValid = runtime?.optBooleanOrNull("origin_valid")
+                ?: legacy?.optBooleanOrNull("origin_valid"),
+            calibrationEpoch = runtime?.optLongOrNull("calibration_epoch")
+                ?: legacy?.optLongOrNull("calibration_epoch"),
+            originEpoch = runtime?.optLongOrNull("origin_epoch")
+                ?: legacy?.optLongOrNull("origin_epoch"),
+            searchGeneration = runtime?.optLongOrNull("search_generation")
+                ?: legacy?.optLongOrNull("search_generation"),
+            waypointIndex = runtime?.optIntOrNull("waypoint_index")
+                ?: legacy?.optIntOrNull("waypoint_index"),
+            detail = runtime?.optJsonString("detail") ?: legacy?.optJsonString("detail")
         )
     }
 
@@ -628,6 +741,14 @@ object BoardJsonParser {
 
     private fun JSONObject.optIntOrNull(name: String): Int? {
         return if (has(name) && !isNull(name)) optInt(name) else null
+    }
+
+    private fun JSONObject.optLongOrNull(name: String): Long? {
+        return if (has(name) && !isNull(name)) optLong(name) else null
+    }
+
+    private fun JSONObject.optBooleanOrNull(name: String): Boolean? {
+        return if (has(name) && !isNull(name)) optBoolean(name) else null
     }
 
     private fun JSONObject.optBatteryPercent(name: String): Int {

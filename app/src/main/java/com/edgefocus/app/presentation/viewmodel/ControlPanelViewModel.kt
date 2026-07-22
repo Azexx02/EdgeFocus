@@ -35,6 +35,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.util.concurrent.CancellationException
 import kotlinx.coroutines.delay
 import javax.inject.Inject
 
@@ -96,7 +97,9 @@ data class ControlPanelUiState(
     val braceletConnected: Boolean? = null,
     val bandControlAvailable: Boolean = false,
     val bandControlInProgress: Boolean = false,
-    val bandControlMessage: String? = null
+    val bandControlMessage: String? = null,
+    val isPrecheckConfirming: Boolean = false,
+    val modernGimbalControlAvailable: Boolean = false
 )
 
 @HiltViewModel
@@ -130,6 +133,9 @@ class ControlPanelViewModel @Inject constructor(
                         externalPowerState = snapshot.hostState?.power?.state ?: ExternalPowerState.UNKNOWN,
                         braceletConnected = snapshot.hostState?.braceletConnected,
                         bandControlAvailable = snapshot.hello?.supports("band_proxy_control_v1") == true,
+                        modernGimbalControlAvailable =
+                            snapshot.hello?.supports("gimbal_async_motion_v1") == true &&
+                                snapshot.hello.supports("gimbal_manual_step_v1"),
                         boardPowerProfile = when (snapshot.hostState?.power?.profile) {
                             "home" -> PowerProfile.HOME
                             "go" -> PowerProfile.GO
@@ -211,6 +217,12 @@ class ControlPanelViewModel @Inject constructor(
                     _uiState.update { it.copy(arePreferencesLoaded = false) }
                 }
                 wasBoardConnected = sharedState.isBoardConnected
+            }
+        }
+
+        viewModelScope.launch {
+            precheckController.isConfirming.collect { confirming ->
+                _uiState.update { it.copy(isPrecheckConfirming = confirming) }
             }
         }
 
@@ -428,8 +440,16 @@ class ControlPanelViewModel @Inject constructor(
         runPrecheckCommand { precheckController.nudge(direction) }
     }
 
+    fun nudgeGimbal(direction: String, stepDeg: Double = 3.0) {
+        runPrecheckCommand { precheckController.nudge(direction, stepDeg) }
+    }
+
     fun stopGimbal() {
         runPrecheckCommand { precheckController.stop() }
+    }
+
+    fun recoverGimbal() {
+        runPrecheckCommand { precheckController.recover() }
     }
 
     fun centerGimbal() {
@@ -438,9 +458,15 @@ class ControlPanelViewModel @Inject constructor(
 
     private fun runPrecheckCommand(block: suspend () -> Result<Unit>) {
         viewModelScope.launch {
-            block().onFailure { error ->
-                _uiState.update { it.copy(boardErrorMessage = error.message ?: "主机预检操作失败") }
-            }
+            block()
+                .onSuccess { _uiState.update { it.copy(boardErrorMessage = null) } }
+                .onFailure { error ->
+                    if (error !is CancellationException) {
+                        _uiState.update {
+                            it.copy(boardErrorMessage = error.message ?: "主机预检操作失败")
+                        }
+                    }
+                }
         }
     }
 

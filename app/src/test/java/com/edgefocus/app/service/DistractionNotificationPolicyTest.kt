@@ -8,16 +8,31 @@ import org.junit.Test
 class DistractionNotificationPolicyTest {
 
     @Test
-    fun highDistractionNotificationsAreThrottledAndUseStableId() {
-        assertTrue(DistractionNotificationPolicy.HIGH_DISTRACTION_INTERVAL_MS >= 30_000L)
-        assertEquals(DistractionNotificationPolicy.HIGH_DISTRACTION_ALERT_ID, DistractionNotificationPolicy.notificationIdForLevel(2))
+    fun notificationIntervalsMatchProductPolicy() {
+        assertEquals(1_000L, DistractionNotificationPolicy.intervalForLevel(2))
+        assertEquals(30_000L, DistractionNotificationPolicy.intervalForLevel(1))
+        assertEquals(10_000L, DistractionNotificationPolicy.intervalForLevel(3))
         assertFalse(
             DistractionNotificationPolicy.canShowHighDistraction(
-                nowMs = 10_000L,
+                nowMs = 1_999L,
                 lastShownMs = 1_000L,
                 hasShownInitial = true
             )
         )
+        assertTrue(
+            DistractionNotificationPolicy.canShowHighDistraction(
+                nowMs = 2_000L,
+                lastShownMs = 1_000L,
+                hasShownInitial = true
+            )
+        )
+    }
+
+    @Test
+    fun repeatedNotificationsUseDifferentIdsWithinTheSameCategory() {
+        val first = DistractionNotificationPolicy.notificationIdForLevel(2, 1)
+        val second = DistractionNotificationPolicy.notificationIdForLevel(2, 2)
+        assertFalse(first == second)
     }
 
     @Test

@@ -8,6 +8,25 @@ import org.junit.Test
 import java.util.Base64
 
 class BleChunkAssemblerTest {
+    @Test
+    fun `discarded response drops late chunks without clearing other responses`() {
+        val assembler = BleChunkAssembler()
+        assembler.discardResponse(7, nowMs = 1_000L)
+
+        val discarded = assembler.accept(
+            JSONObject("""{"status":"chunk","id":7,"chunk_id":"old","seq":0,"total":1,"encoding":"base64_utf8","data":"e30="}"""),
+            nowMs = 1_001L
+        )
+        val kept = assembler.accept(
+            JSONObject("""{"status":"chunk","id":8,"chunk_id":"new","seq":0,"total":1,"encoding":"base64_utf8","data":"e30="}"""),
+            nowMs = 1_001L
+        )
+
+        assertNull(discarded)
+        assertEquals(8, kept?.responseId)
+        assertEquals("{}", kept?.payload)
+    }
+
 
     @Test
     fun assemblesResponseChunksIntoOriginalJson() {

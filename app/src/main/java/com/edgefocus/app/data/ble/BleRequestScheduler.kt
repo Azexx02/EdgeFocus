@@ -2,8 +2,11 @@ package com.edgefocus.app.data.ble
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -14,10 +17,11 @@ import java.util.concurrent.atomic.AtomicLong
 
 enum class HostRequestPriority(val rank: Int) {
     P0_CRITICAL(0),
-    P1_PHONE_HEARTBEAT(1),
-    P2_STATE(2),
-    P3_BACKGROUND(3),
-    P4_PREVIEW(4)
+    P1_GIMBAL_CONTROL(1),
+    P1_PHONE_HEARTBEAT(2),
+    P2_STATE(3),
+    P3_BACKGROUND(4),
+    P4_PREVIEW(5)
 }
 
 class BleRequestScheduler(
@@ -37,6 +41,8 @@ class BleRequestScheduler(
     private val sequence = AtomicLong(0)
     private val wake = Channel<Unit>(Channel.CONFLATED)
     private var consecutiveNonPreviewRequests = 0
+    private var activeRequest: QueuedRequest? = null
+    private var activeJob: Deferred<Result<ByteArray>>? = null
 
     init {
         scope.launch {
@@ -75,12 +81,43 @@ class BleRequestScheduler(
         }
     }
 
+    suspend fun cancelQueuedAndActive(priority: HostRequestPriority, reason: String) {
+        val cancelled = mutableListOf<QueuedRequest>()
+        val active = queueMutex.withLock {
+            val iterator = queue.iterator()
+            while (iterator.hasNext()) {
+                val request = iterator.next()
+                if (request.priority == priority) {
+                    iterator.remove()
+                    cancelled += request
+                }
+            }
+            activeJob?.takeIf { activeRequest?.priority == priority }
+        }
+        cancelled.forEach {
+            it.result.complete(Result.failure(CancellationException(reason)))
+        }
+        active?.cancel(CancellationException(reason))
+    }
+
     private suspend fun drain() {
         while (true) {
             val request = queueMutex.withLock { pollNextLocked() } ?: return
             if (request.result.isCancelled) continue
-            val result = runCatching { request.operation() }
+            val operation = scope.async(start = CoroutineStart.LAZY) { request.operation() }
+            queueMutex.withLock {
+                activeRequest = request
+                activeJob = operation
+            }
+            operation.start()
+            val result = runCatching { operation.await() }
                 .getOrElse { Result.failure(it) }
+            queueMutex.withLock {
+                if (activeRequest === request) {
+                    activeRequest = null
+                    activeJob = null
+                }
+            }
             request.result.complete(result)
         }
     }
@@ -89,6 +126,7 @@ class BleRequestScheduler(
         if (queue.isEmpty()) return null
         val hasCriticalWork = queue.any {
             it.priority == HostRequestPriority.P0_CRITICAL ||
+                it.priority == HostRequestPriority.P1_GIMBAL_CONTROL ||
                 it.priority == HostRequestPriority.P1_PHONE_HEARTBEAT
         }
         val agedPreview = if (consecutiveNonPreviewRequests >= MAX_NON_PREVIEW_BURST && !hasCriticalWork) {

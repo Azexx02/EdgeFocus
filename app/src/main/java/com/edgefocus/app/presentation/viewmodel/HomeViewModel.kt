@@ -28,6 +28,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.util.concurrent.CancellationException
 import javax.inject.Inject
 
 data class TimerUiState(
@@ -52,7 +53,9 @@ data class TimerUiState(
     val cameraPreview: CameraPreviewImage? = null,
     val gimbalStatus: GimbalStatus? = null,
     val precheckGuidance: String? = null,
-    val boardErrorMessage: String? = null
+    val boardErrorMessage: String? = null,
+    val isPrecheckConfirming: Boolean = false,
+    val modernGimbalControlAvailable: Boolean = false
 )
 
 @HiltViewModel
@@ -89,6 +92,9 @@ class HomeViewModel @Inject constructor(
                 _uiState.update { state ->
                     state.copy(
                         externalPowerState = snapshot.hostState?.power?.state ?: ExternalPowerState.UNKNOWN,
+                        modernGimbalControlAvailable =
+                            snapshot.hello?.supports("gimbal_async_motion_v1") == true &&
+                                snapshot.hello.supports("gimbal_manual_step_v1"),
                         boardPowerProfile = when (snapshot.hostState?.power?.profile) {
                             "home" -> PowerProfile.HOME
                             "go" -> PowerProfile.GO
@@ -151,6 +157,11 @@ class HomeViewModel @Inject constructor(
                 }
 
                 // 板端同步启动会话时，自动启动 AppMonitorService
+            }
+        }
+        viewModelScope.launch {
+            precheckController.isConfirming.collect { confirming ->
+                _uiState.update { it.copy(isPrecheckConfirming = confirming) }
             }
         }
     }
@@ -224,8 +235,8 @@ class HomeViewModel @Inject constructor(
         runPrecheckCommand { precheckController.skipAutoAdjust() }
     }
 
-    fun nudgeGimbal(direction: String) {
-        runPrecheckCommand { precheckController.nudge(direction) }
+    fun nudgeGimbal(direction: String, stepDeg: Double = 3.0) {
+        runPrecheckCommand { precheckController.nudge(direction, stepDeg) }
     }
 
     fun centerGimbal() {
@@ -236,13 +247,21 @@ class HomeViewModel @Inject constructor(
         runPrecheckCommand { precheckController.stop() }
     }
 
+    fun recoverGimbal() {
+        runPrecheckCommand { precheckController.recover() }
+    }
+
     private fun runPrecheckCommand(block: suspend () -> Result<Unit>) {
         viewModelScope.launch {
-            block().onFailure { error ->
-                _uiState.update {
-                    it.copy(boardErrorMessage = error.message ?: "主机预检操作失败")
+            block()
+                .onSuccess { _uiState.update { it.copy(boardErrorMessage = null) } }
+                .onFailure { error ->
+                    if (error !is CancellationException) {
+                        _uiState.update {
+                            it.copy(boardErrorMessage = error.message ?: "主机预检操作失败")
+                        }
+                    }
                 }
-            }
         }
     }
 

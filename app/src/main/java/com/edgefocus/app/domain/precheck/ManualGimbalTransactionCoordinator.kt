@@ -1,8 +1,9 @@
 package com.edgefocus.app.domain.precheck
 
 import com.edgefocus.app.data.remote.BoardSessionPhase
-import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 internal data class ManualLeaseObservation(
     val sessionId: String?,
@@ -12,8 +13,8 @@ internal data class ManualLeaseObservation(
 
 /**
  * Serializes user PRECHECK commands and acquires the board-owned manual lease.
- * Inputs received while a transaction is active are intentionally dropped,
- * rather than queued, so rapid taps cannot become a delayed command burst.
+ * Serializes lease transitions and terminal PRECHECK commands. Ordinary nudge
+ * input is handled by [ManualGimbalInputCoordinator] and never enters this lock.
  */
 internal class ManualGimbalTransactionCoordinator(
     private val observe: suspend () -> Result<ManualLeaseObservation>,
@@ -23,12 +24,12 @@ internal class ManualGimbalTransactionCoordinator(
     private val confirmationTimeoutMs: Long = 6_000L,
     private val pollIntervalMs: Long = 250L
 ) {
-    private val transactionInFlight = AtomicBoolean(false)
+    private val transactionMutex = Mutex()
 
     suspend fun runManual(
         expectedSessionId: String,
         command: suspend (String) -> Result<Unit>
-    ): Result<Unit> = runExclusive {
+    ): Result<Unit> = runOrdinary {
         val observation = observe().getOrThrow()
         validateObservation(observation, expectedSessionId)
         check(observation.manualLease) {
@@ -37,23 +38,18 @@ internal class ManualGimbalTransactionCoordinator(
         command(expectedSessionId).getOrThrow()
     }
 
-    suspend fun takeOver(expectedSessionId: String): Result<Unit> = runExclusive {
+    suspend fun takeOver(expectedSessionId: String): Result<Unit> = runOrdinary {
         acquireManualLease(expectedSessionId)
     }
 
-    suspend fun runCommand(command: suspend () -> Result<Unit>): Result<Unit> = runExclusive {
-        command().getOrThrow()
-    }
+    suspend fun runCommand(command: suspend () -> Result<Unit>): Result<Unit> =
+        transactionMutex.withLock { runCatching { command().getOrThrow() } }
 
-    private suspend fun runExclusive(block: suspend () -> Unit): Result<Unit> {
-        if (!transactionInFlight.compareAndSet(false, true)) {
-            return Result.success(Unit)
-        }
-        return try {
-            runCatching { block() }
-        } finally {
-            transactionInFlight.set(false)
-        }
+    suspend fun runOrdinaryCommand(command: suspend () -> Result<Unit>): Result<Unit> =
+        runOrdinary { command().getOrThrow() }
+
+    private suspend fun runOrdinary(block: suspend () -> Unit): Result<Unit> {
+        return transactionMutex.withLock { runCatching { block() } }
     }
 
     private suspend fun acquireManualLease(expectedSessionId: String) {

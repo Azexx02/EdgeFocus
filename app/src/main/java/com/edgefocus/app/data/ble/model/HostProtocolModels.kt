@@ -110,8 +110,44 @@ data class ReliableEventEnvelope(
 data class BusinessAcceptance(
     val accepted: Boolean,
     val operation: String? = null,
+    val error: String? = null,
+    val errorCode: String? = null,
+    val retryable: Boolean = false
+)
+
+data class GimbalCommandAcceptance(
+    val accepted: Boolean,
+    val operation: String? = null,
+    val sessionId: String? = null,
+    val sequence: Long? = null,
+    val motionGeneration: Long? = null,
+    val state: String? = null,
+    val settled: Boolean? = null,
+    val manualLease: Boolean? = null,
+    val ownerId: String? = null,
+    val leaseToken: String? = null,
+    val leaseEpoch: Long? = null,
+    val leaseExpiresAtMs: Long? = null,
+    val firmwareAccepted: Boolean? = null,
+    val ackedThroughSequence: Long? = null,
+    val currentYawDeg: Double? = null,
+    val currentPitchDeg: Double? = null,
+    val targetYawDeg: Double? = null,
+    val targetPitchDeg: Double? = null,
+    val positionConfirmed: Boolean? = null,
+    val originChanged: Boolean? = null,
+    val originEpoch: Long? = null,
+    val errorCode: String? = null,
+    val retryable: Boolean = false,
     val error: String? = null
 )
+
+class HostCommandException(
+    message: String,
+    val errorCode: String? = null,
+    val retryable: Boolean = false,
+    val responseData: String? = null
+) : Exception(message)
 
 data class HostConnectionSnapshot(
     val phase: HostConnectionPhase = HostConnectionPhase.DISCONNECTED,

@@ -56,10 +56,16 @@ interface BleCommand {
         command: String,
         sessionId: String,
         sequence: Long,
-        direction: String? = null
+        direction: String? = null,
+        stepDeg: Double? = null,
+        ownerId: String? = null,
+        leaseToken: String? = null,
+        fineTune: Boolean? = null,
+        confirmed: Boolean? = null
     ): Result<ByteArray>
     suspend fun bandControl(action: String): Result<ByteArray>
     suspend fun setPowerProfile(profile: String): Result<ByteArray>
+    suspend fun captureForwardOrigin(sequence: Long): Result<ByteArray>
     suspend fun eventAck(eventId: String, sessionId: String, stage: String): Result<ByteArray>
     suspend fun sessionFeedback(sessionId: String, feedback: String): Result<ByteArray>
     suspend fun reminderAck(alertId: String): Result<ByteArray>
@@ -67,4 +73,5 @@ interface BleCommand {
     suspend fun uploadLocalSession(session: LocalSessionUpload): Result<ByteArray>
     suspend fun getConsoleData(): Result<ByteArray>
     suspend fun cancelPreviewRequests()
+    suspend fun cancelGimbalControlRequests()
 }

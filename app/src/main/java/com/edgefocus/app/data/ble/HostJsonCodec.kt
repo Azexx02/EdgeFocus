@@ -5,6 +5,7 @@ import com.edgefocus.app.data.ble.model.ClientHelloResult
 import com.edgefocus.app.data.ble.model.EventAckResult
 import com.edgefocus.app.data.ble.model.EventAckStage
 import com.edgefocus.app.data.ble.model.ExternalPowerState
+import com.edgefocus.app.data.ble.model.GimbalCommandAcceptance
 import com.edgefocus.app.data.ble.model.HostPowerSnapshot
 import com.edgefocus.app.data.ble.model.HostSessionPhase
 import com.edgefocus.app.data.ble.model.HostSessionSnapshot
@@ -17,10 +18,18 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 object HostJsonCodec {
+    const val CAP_GIMBAL_ASYNC_MOTION = "gimbal_async_motion_v1"
+    const val CAP_GIMBAL_ORIGIN = "gimbal_origin_v1"
+    const val CAP_GIMBAL_FAULT_CLASS = "gimbal_fault_class_v1"
+    const val CAP_GIMBAL_MANUAL_STEP = "gimbal_manual_step_v1"
+    const val CAP_GIMBAL_SESSION_CONTROL = "gimbal_session_control_v3"
+    const val CAP_GIMBAL_ASYNC_RESULT = "gimbal_async_result_v1"
+
     val clientCapabilities: Set<String> = setOf(
         "event_ack_v1",
         "event_dedupe_v1",
-        "phone_heartbeat_v1"
+        "phone_heartbeat_v1",
+        "gimbal_manual_input_v2"
     )
 
     fun clientHello(requestId: Int): JSONObject = request(
@@ -90,14 +99,23 @@ object HostJsonCodec {
         command: String,
         sessionId: String,
         sequence: Long,
-        direction: String? = null
+        direction: String? = null,
+        stepDeg: Double? = null,
+        ownerId: String? = null,
+        leaseToken: String? = null,
+        fineTune: Boolean? = null,
+        confirmed: Boolean? = null
     ): JSONObject {
         require(command in setOf(
             "precheck_skip_auto_adjust",
+            "gimbal_manual_takeover",
+            "gimbal_lease_keepalive",
             "gimbal_nudge",
             "gimbal_center",
             "gimbal_stop",
-            "gimbal_realign",
+            "gimbal_release",
+            "gimbal_force_release",
+            "gimbal_recover",
             "precheck_confirm_position"
         ))
         require(sessionId.isNotBlank())
@@ -105,12 +123,38 @@ object HostJsonCodec {
         val data = JSONObject()
             .put("session_id", sessionId)
             .put("sequence", sequence)
+        if (command !in setOf("precheck_skip_auto_adjust", "gimbal_recover")) {
+            data.put("owner_id", requireNotNull(ownerId).also { require(it.isNotBlank()) })
+        }
+        if (command !in setOf(
+                "precheck_skip_auto_adjust",
+                "gimbal_recover",
+                "gimbal_manual_takeover"
+            )
+        ) {
+            data.put("lease_token", requireNotNull(leaseToken).also { require(it.isNotBlank()) })
+        }
         if (command == "gimbal_nudge") {
             val normalized = requireNotNull(direction).uppercase()
             require(normalized in setOf("UP", "DOWN", "LEFT", "RIGHT"))
             data.put("direction", normalized)
+            val requestedStep = stepDeg
+            if (requestedStep != null) require(requestedStep.isFinite() && requestedStep > 0.0)
+            data.put("fine_tune", fineTune ?: (requestedStep != null && requestedStep <= 10.0))
         }
+        if (command == "gimbal_force_release") data.put("confirmed", confirmed == true)
         return request(command, requestId, data)
+    }
+
+    fun captureForwardOrigin(requestId: Int, sequence: Long): JSONObject {
+        require(sequence > 0)
+        return request(
+            command = "gimbal_capture_forward",
+            requestId = requestId,
+            data = JSONObject()
+                .put("sequence", sequence)
+                .put("confirm", true)
+        )
     }
 
     fun setPowerProfile(requestId: Int, profile: String): JSONObject {
@@ -216,12 +260,58 @@ object HostJsonCodec {
     fun parseBusinessAcceptance(json: String): BusinessAcceptance {
         val root = JSONObject(json)
         if (root.optString("status") == "error") {
-            return BusinessAcceptance(false, error = root.optString("error", "host_error"))
+            return BusinessAcceptance(
+                accepted = false,
+                error = root.optString("error", "host_error"),
+                errorCode = root.nullableString("error_code"),
+                retryable = root.optBoolean("retryable", false)
+            )
         }
         val data = root.optJSONObject("data") ?: JSONObject()
         return BusinessAcceptance(
             accepted = data.optBoolean("accepted", data.optBoolean("success", false)),
             operation = data.nullableString("operation"),
+            error = data.nullableString("message"),
+            errorCode = data.nullableString("error_code"),
+            retryable = data.optBoolean("retryable", false)
+        )
+    }
+
+    fun parseGimbalAcceptance(json: String): GimbalCommandAcceptance {
+        val root = JSONObject(json)
+        if (root.optString("status").equals("error", ignoreCase = true)) {
+            return GimbalCommandAcceptance(
+                accepted = false,
+                errorCode = root.nullableString("error_code"),
+                retryable = root.optBoolean("retryable", false),
+                error = root.nullableString("error") ?: root.nullableString("message")
+            )
+        }
+        val data = root.optJSONObject("data") ?: JSONObject()
+        return GimbalCommandAcceptance(
+            accepted = data.optBoolean("accepted", data.optBoolean("success", true)),
+            operation = data.nullableString("operation"),
+            sessionId = data.nullableString("session_id"),
+            sequence = data.nullableLong("sequence"),
+            motionGeneration = data.nullableLong("motion_generation"),
+            state = data.nullableString("state"),
+            settled = data.nullableBoolean("settled"),
+            manualLease = data.nullableBoolean("manual_lease"),
+            ownerId = data.nullableString("owner_id") ?: data.nullableString("lease_owner_id"),
+            leaseToken = data.nullableString("lease_token"),
+            leaseEpoch = data.nullableLong("lease_epoch"),
+            leaseExpiresAtMs = data.nullableLong("lease_expires_at"),
+            firmwareAccepted = data.nullableBoolean("firmware_accepted"),
+            ackedThroughSequence = data.nullableLong("acked_through_sequence"),
+            currentYawDeg = data.nullableDouble("current_yaw_deg"),
+            currentPitchDeg = data.nullableDouble("current_pitch_deg"),
+            targetYawDeg = data.nullableDouble("target_yaw_deg"),
+            targetPitchDeg = data.nullableDouble("target_pitch_deg"),
+            positionConfirmed = data.nullableBoolean("position_confirmed"),
+            originChanged = data.nullableBoolean("origin_changed"),
+            originEpoch = data.nullableLong("origin_epoch"),
+            errorCode = data.nullableString("error_code"),
+            retryable = data.optBoolean("retryable", false),
             error = data.nullableString("message")
         )
     }
@@ -287,6 +377,11 @@ object HostJsonCodec {
     private fun JSONObject.nullableBoolean(key: String): Boolean? {
         if (!has(key) || isNull(key)) return null
         return optBoolean(key)
+    }
+
+    private fun JSONObject.nullableDouble(key: String): Double? {
+        if (!has(key) || isNull(key)) return null
+        return optDouble(key).takeIf { it.isFinite() && !it.isNaN() }
     }
 
     private fun JSONObject.requiredString(key: String): String =

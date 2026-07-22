@@ -60,8 +60,11 @@ import com.edgefocus.app.data.remote.PowerProfile
 import com.edgefocus.app.data.remote.BoardPreparationState
 import com.edgefocus.app.data.ble.model.ExternalPowerState
 import com.edgefocus.app.presentation.shared.rememberCameraPreviewBitmap
+import com.edgefocus.app.presentation.shared.GimbalNudgeButton
 import com.edgefocus.app.domain.model.SessionType
 import com.edgefocus.app.domain.model.TimerState
+import com.edgefocus.app.domain.precheck.PrecheckConfirmationPolicy
+import com.edgefocus.app.domain.precheck.PrecheckGimbalReadiness
 import com.edgefocus.app.presentation.viewmodel.BleViewModel
 import com.edgefocus.app.presentation.viewmodel.HomeViewModel
 import com.edgefocus.app.presentation.viewmodel.SettingsViewModel
@@ -324,7 +327,18 @@ private fun HomePrecheckPage(
     val preparationReady = uiState.preparationState == BoardPreparationState.READY ||
         uiState.preparationState == BoardPreparationState.DEGRADED
     val gimbal = uiState.precheck?.gimbal
-    val manualControlsReady = preparationReady && (gimbal == null || gimbal.manualLease)
+    val gimbalReadiness = PrecheckConfirmationPolicy.gimbalReadiness(gimbal)
+    val manualControlsReady = preparationReady &&
+        !uiState.isPrecheckConfirming &&
+        uiState.modernGimbalControlAvailable &&
+        PrecheckConfirmationPolicy.canUseManualControls(gimbal)
+    val confirmationReady = PrecheckConfirmationPolicy.canConfirm(
+        preparationReady = preparationReady,
+        isConfirming = uiState.isPrecheckConfirming,
+        gimbal = gimbal
+    )
+    val skipAutoAdjustReady = !uiState.isPrecheckConfirming &&
+        PrecheckConfirmationPolicy.canSkipAutoAdjust(gimbal)
     Box(modifier = modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier
@@ -373,7 +387,10 @@ private fun HomePrecheckPage(
                         Text("暂无预览，点击刷新获取最近一帧。")
                     }
                 }
-                OutlinedButton(onClick = viewModel::refreshCameraPreview, enabled = preparationReady) {
+                OutlinedButton(
+                    onClick = viewModel::refreshCameraPreview,
+                    enabled = preparationReady && !uiState.isPrecheckConfirming
+                ) {
                     Text("刷新画面")
                 }
             }
@@ -382,21 +399,70 @@ private fun HomePrecheckPage(
         if (gimbal != null) {
             Text("云台微调", style = MaterialTheme.typography.titleMedium)
             Text(
-                if (gimbal.manualLease) {
-                    "自动调整已结束，可以手动微调。"
-                } else {
-                    "自动调整中；完成后可微调，也可点击跳过。"
+                when (gimbalReadiness) {
+                    PrecheckGimbalReadiness.DEGRADED -> "云台已降级，将以固定机位继续。"
+                    PrecheckGimbalReadiness.POSITION_CONFIRMED -> "云台位置已确认，可以开始专注。"
+                    PrecheckGimbalReadiness.MANUAL_READY -> "自动调整已结束，可以手动微调。"
+                    else -> "自动调整中；完成后可微调，也可点击跳过。"
                 },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            OutlinedButton(onClick = { viewModel.nudgeGimbal("UP") }, enabled = manualControlsReady) { Text("上") }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { viewModel.nudgeGimbal("LEFT") }, enabled = manualControlsReady) { Text("左") }
-                OutlinedButton(onClick = viewModel::centerGimbal, enabled = manualControlsReady) { Text("归中") }
-                OutlinedButton(onClick = { viewModel.nudgeGimbal("RIGHT") }, enabled = manualControlsReady) { Text("右") }
+            if (!uiState.modernGimbalControlAvailable) {
+                Text(
+                    "主机需升级后才能使用新版连续云台微调。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error
+                )
             }
-            OutlinedButton(onClick = { viewModel.nudgeGimbal("DOWN") }, enabled = manualControlsReady) { Text("下") }
+            if (gimbal.hardwareFaultActive || gimbal.state.equals("degraded", ignoreCase = true)) {
+                OutlinedButton(
+                    onClick = viewModel::recoverGimbal,
+                    enabled = preparationReady && uiState.modernGimbalControlAvailable
+                ) {
+                    Text("恢复云台")
+                }
+            }
+            if (gimbal.currentYawDeg != null || gimbal.currentPitchDeg != null) {
+                Text(
+                    "当前位置 偏航 ${gimbal.currentYawDeg?.toInt() ?: "-"}° · " +
+                        "俯仰 ${gimbal.currentPitchDeg?.toInt() ?: "-"}°",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            if (gimbal.targetYawDeg != null || gimbal.targetPitchDeg != null) {
+                Text(
+                    "目标 偏航 ${gimbal.targetYawDeg?.toInt() ?: "-"}° · " +
+                        "俯仰 ${gimbal.targetPitchDeg?.toInt() ?: "-"}° · " +
+                        if (gimbal.settled == true) "已到位" else "运动中",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            GimbalNudgeButton(
+                label = "上",
+                enabled = manualControlsReady,
+                onNudge = { viewModel.nudgeGimbal("UP", it) }
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                GimbalNudgeButton(
+                    label = "左",
+                    enabled = manualControlsReady,
+                    onNudge = { viewModel.nudgeGimbal("LEFT", it) }
+                )
+                OutlinedButton(onClick = viewModel::centerGimbal, enabled = manualControlsReady) { Text("归中") }
+                GimbalNudgeButton(
+                    label = "右",
+                    enabled = manualControlsReady,
+                    onNudge = { viewModel.nudgeGimbal("RIGHT", it) }
+                )
+            }
+            GimbalNudgeButton(
+                label = "下",
+                enabled = manualControlsReady,
+                onNudge = { viewModel.nudgeGimbal("DOWN", it) }
+            )
             TextButton(onClick = viewModel::stopGimbal, enabled = manualControlsReady) { Text("停止云台") }
         }
 
@@ -416,7 +482,7 @@ private fun HomePrecheckPage(
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 OutlinedButton(
                     onClick = viewModel::skipPrecheckAutoAdjust,
-                    enabled = preparationReady && gimbal != null && !gimbal.manualLease
+                    enabled = skipAutoAdjustReady
                 ) {
                     Text("跳过自动调整")
                 }
@@ -424,11 +490,11 @@ private fun HomePrecheckPage(
                     onClick = viewModel::confirmPrecheck,
                     containerColor = MaterialTheme.colorScheme.primary,
                     contentColor = Color.White,
-                    enabled = manualControlsReady
+                    enabled = confirmationReady
                 ) {
                     Icon(Icons.Default.PlayArrow, contentDescription = null)
                     Spacer(modifier = Modifier.width(6.dp))
-                    Text("确认并开始")
+                    Text(if (uiState.isPrecheckConfirming) "正在进入专注…" else "确认并开始")
                 }
             }
             TextButton(onClick = viewModel::stopTimer) { Text("取消本次专注") }

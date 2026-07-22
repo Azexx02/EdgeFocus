@@ -37,7 +37,11 @@ class ProtocolCheckpointStore @Inject constructor(
     ): Long = database.withTransaction {
         val dao = database.protocolCheckpointDao()
         val current = dao.get(sessionId)
-        val next = SequencePolicy.next(current?.gimbalSequence, hostSequence, null)
+        // The board keeps the last gimbal sequence for the lifetime of a
+        // PRECHECK session.  A restored/reinstalled app may have lost that
+        // checkpoint, so use wall-clock milliseconds as a high monotonic
+        // baseline instead of walking up again from 1.
+        val next = GimbalSequencePolicy.next(current?.gimbalSequence, hostSequence, nowMs)
         dao.put(
             ProtocolCheckpointEntity(
                 sessionId = sessionId,

@@ -25,10 +25,20 @@ class BleChunkAssembler {
     )
 
     private val pending = linkedMapOf<String, PendingChunks>()
+    private val discardedResponses = linkedMapOf<Int, Long>()
 
     @Synchronized
     fun accept(json: JSONObject, nowMs: Long = System.currentTimeMillis()): AssembledMessage? {
         expire(nowMs)
+        val responseId = if (json.optString("status") == "chunk") {
+            json.optInt("id", -1).takeIf { it >= 0 }
+        } else {
+            null
+        }
+        if (responseId != null && responseId in discardedResponses) {
+            rawChunkId(json)?.let { pending.remove(it) }
+            return null
+        }
         val chunkId = rawChunkId(json)
         val chunk = try {
             extractChunk(json)
@@ -94,11 +104,25 @@ class BleChunkAssembler {
     @Synchronized
     fun clear() {
         pending.clear()
+        discardedResponses.clear()
+    }
+
+    @Synchronized
+    fun discardResponse(responseId: Int, nowMs: Long = System.currentTimeMillis()) {
+        pending.entries.removeAll { it.value.responseId == responseId }
+        if (discardedResponses.size >= MAX_DISCARDED_RESPONSES) {
+            discardedResponses.entries.firstOrNull()?.key?.let { discardedResponses.remove(it) }
+        }
+        discardedResponses[responseId] = nowMs
     }
 
     private fun expire(nowMs: Long) {
         val expired = pending.filterValues { nowMs - it.createdAtMs > CHUNK_TIMEOUT_MS }.keys
         expired.forEach { pending.remove(it) }
+        val expiredResponses = discardedResponses
+            .filterValues { nowMs - it > CHUNK_TIMEOUT_MS }
+            .keys
+        expiredResponses.forEach { discardedResponses.remove(it) }
     }
 
     private fun extractChunk(json: JSONObject): Chunk? {
@@ -153,6 +177,7 @@ class BleChunkAssembler {
         const val MAX_CHUNKS = 8_192
         const val MAX_MESSAGE_BYTES = 768 * 1024
         const val MAX_PENDING_MESSAGES = 4
+        const val MAX_DISCARDED_RESPONSES = 32
         const val MAX_CHUNK_BYTES = 128
         const val MAX_ENCODED_CHUNK_CHARS = 192
         const val MAX_CHUNK_ID_LENGTH = 128

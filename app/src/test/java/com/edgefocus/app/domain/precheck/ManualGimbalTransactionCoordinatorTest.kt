@@ -125,7 +125,7 @@ class ManualGimbalTransactionCoordinatorTest {
     }
 
     @Test
-    fun rapidInputIsDroppedInsteadOfQueued() = runTest {
+    fun rapidManualInputWaitsInsteadOfFailing() = runTest {
         val gate = CompletableDeferred<Unit>()
         var commands = 0
         val coordinator = coordinator(
@@ -141,15 +141,51 @@ class ManualGimbalTransactionCoordinatorTest {
             }
         }
         runCurrent()
-        val second = coordinator.runManual("session_1") {
-            commands += 1
-            Result.success(Unit)
+        val second = async {
+            coordinator.runManual("session_1") {
+                commands += 1
+                Result.success(Unit)
+            }
         }
+        runCurrent()
 
-        assertTrue(second.isSuccess)
         assertEquals(1, commands)
         gate.complete(Unit)
         assertTrue(first.await().isSuccess)
+        assertTrue(second.await().isSuccess)
+        assertEquals(2, commands)
+    }
+
+    @Test
+    fun terminalCommandWaitsForActiveManualCommand() = runTest {
+        val gate = CompletableDeferred<Unit>()
+        val events = mutableListOf<String>()
+        val coordinator = coordinator(
+            observe = { observation(manualLease = true) },
+            skip = {}
+        )
+
+        val manual = async {
+            coordinator.runManual("session_1") {
+                events += "manual"
+                gate.await()
+                Result.success(Unit)
+            }
+        }
+        runCurrent()
+        val terminal = async {
+            coordinator.runCommand {
+                events += "terminal"
+                Result.success(Unit)
+            }
+        }
+        runCurrent()
+
+        assertEquals(listOf("manual"), events)
+        gate.complete(Unit)
+        assertTrue(manual.await().isSuccess)
+        assertTrue(terminal.await().isSuccess)
+        assertEquals(listOf("manual", "terminal"), events)
     }
 
     private fun coordinator(

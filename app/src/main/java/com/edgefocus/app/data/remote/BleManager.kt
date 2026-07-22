@@ -21,17 +21,20 @@ import com.edgefocus.app.data.ble.BleRequestScheduler
 import com.edgefocus.app.data.ble.HostJsonCodec
 import com.edgefocus.app.data.ble.HostRequestPriority
 import com.edgefocus.app.data.ble.model.EventAckStage
+import com.edgefocus.app.data.ble.model.HostCommandException
 import com.edgefocus.app.domain.model.DeviceStatus
 import com.edgefocus.app.domain.model.FocusState
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
 import androidx.annotation.RequiresApi
@@ -54,6 +57,8 @@ class BleManager @Inject constructor(
         private const val TAG = "BleManager"
         private const val WRITE_TIMEOUT_MS = 5000L
         private const val CONTROL_RESPONSE_TIMEOUT_MS = 12_000L
+        private const val GIMBAL_RESPONSE_TIMEOUT_MS = 3_000L
+        private const val GIMBAL_RESULT_TIMEOUT_MS = 12_000L
         private const val PREVIEW_RESPONSE_TIMEOUT_MS = 20_000L
         private const val SESSION_CONTROL_RESPONSE_TIMEOUT_MS = 30_000L
         private const val MAX_LOG_CONTENT_CHARS = 1024
@@ -86,7 +91,22 @@ class BleManager @Inject constructor(
     private var pendingWriteCallback: ((Boolean) -> Unit)? = null
     private val nextRequestId = AtomicInteger(1)
     private val pendingResponseCallbacks = mutableMapOf<Int, (Result<ByteArray>) -> Unit>()
+    private data class GimbalResultKey(
+        val sessionId: String,
+        val sequence: Long,
+        val command: String
+    )
+    private val pendingGimbalResults = ConcurrentHashMap<GimbalResultKey, CompletableDeferred<ByteArray>>()
     private val chunkAssembler = BleChunkAssembler()
+
+    val gimbalOwnerId: String by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+        val preferences = context.getSharedPreferences("edgefocus_protocol", Context.MODE_PRIVATE)
+        preferences.getString("gimbal_owner_id", null)?.takeIf { it.isNotBlank() } ?: run {
+            val generated = "app-${UUID.randomUUID()}"
+            preferences.edit().putString("gimbal_owner_id", generated).apply()
+            generated
+        }
+    }
 
     private val _connectionState = MutableStateFlow(ConnectionState.DISCONNECTED)
     val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
@@ -702,7 +722,7 @@ class BleManager @Inject constructor(
             command == "session_control" -> SESSION_CONTROL_RESPONSE_TIMEOUT_MS
             command == "get_camera_preview_image" -> PREVIEW_RESPONSE_TIMEOUT_MS
             command.startsWith("precheck_") || command.startsWith("gimbal_") ->
-                CONTROL_RESPONSE_TIMEOUT_MS
+                GIMBAL_RESPONSE_TIMEOUT_MS
             isStaleConnectionProbe -> WRITE_TIMEOUT_MS
             else -> CONTROL_RESPONSE_TIMEOUT_MS
         }
@@ -741,6 +761,7 @@ class BleManager @Inject constructor(
                         synchronized(writeLock) {
                             pendingWriteCallback = null
                             pendingResponseCallbacks.remove(requestId)
+                            chunkAssembler.discardResponse(requestId)
                         }
                     }
                     characteristic.value = requestBytes
@@ -1181,19 +1202,59 @@ class BleManager @Inject constructor(
         command: String,
         sessionId: String,
         sequence: Long,
-        direction: String?
+        direction: String?,
+        stepDeg: Double?,
+        ownerId: String?,
+        leaseToken: String?,
+        fineTune: Boolean?,
+        confirmed: Boolean?
     ): Result<ByteArray> {
+        if (simulatedConnected) {
+            val simulated = org.json.JSONObject()
+                .put("status", "success")
+                .put("data", org.json.JSONObject()
+                    .put("accepted", true)
+                    .put("command", command)
+                    .put("session_id", sessionId)
+                    .put("request_sequence", sequence)
+                    .put("manual_lease", command == "gimbal_manual_takeover")
+                    .put("lease_token", if (command == "gimbal_manual_takeover") "simulated-lease" else leaseToken))
+            return Result.success(simulated.toString().toByteArray(Charsets.UTF_8))
+        }
+        val key = GimbalResultKey(sessionId, sequence, command)
+        val completion = CompletableDeferred<ByteArray>()
+        check(pendingGimbalResults.putIfAbsent(key, completion) == null) {
+            "Duplicate gimbal command sequence"
+        }
         val root = HostJsonCodec.gimbalCommand(
             requestId = nextRequestId.getAndIncrement(),
             command = command,
             sessionId = sessionId,
             sequence = sequence,
-            direction = direction
+            direction = direction,
+            stepDeg = stepDeg,
+            ownerId = ownerId,
+            leaseToken = leaseToken,
+            fineTune = fineTune,
+            confirmed = confirmed
         )
-        return sendDataAndAwait(
+        val priority = when (command) {
+            "gimbal_stop", "precheck_skip_auto_adjust", "gimbal_recover" ->
+                HostRequestPriority.P0_CRITICAL
+            else -> HostRequestPriority.P1_GIMBAL_CONTROL
+        }
+        val queued = sendDataAndAwait(
             root.toString().toByteArray(Charsets.UTF_8),
-            HostRequestPriority.P0_CRITICAL
+            priority
         )
+        if (queued.isFailure) {
+            pendingGimbalResults.remove(key, completion)
+            return queued
+        }
+        val finalResult = withTimeoutOrNull(GIMBAL_RESULT_TIMEOUT_MS) { completion.await() }
+        pendingGimbalResults.remove(key, completion)
+        return finalResult?.let(Result.Companion::success)
+            ?: Result.failure(Exception("Gimbal execution result timed out"))
     }
 
     override suspend fun getBandStatus(): Result<ByteArray> {
@@ -1227,8 +1288,29 @@ class BleManager @Inject constructor(
         )
     }
 
+    override suspend fun captureForwardOrigin(sequence: Long): Result<ByteArray> {
+        val root = HostJsonCodec.captureForwardOrigin(
+            requestId = nextRequestId.getAndIncrement(),
+            sequence = sequence
+        )
+        return sendDataAndAwait(
+            root.toString().toByteArray(Charsets.UTF_8),
+            HostRequestPriority.P0_CRITICAL
+        )
+    }
+
     override suspend fun cancelPreviewRequests() {
-        requestScheduler.cancelQueued(HostRequestPriority.P4_PREVIEW, "PRECHECK preview stopped")
+        requestScheduler.cancelQueuedAndActive(
+            HostRequestPriority.P4_PREVIEW,
+            "PRECHECK preview stopped"
+        )
+    }
+
+    override suspend fun cancelGimbalControlRequests() {
+        requestScheduler.cancelQueuedAndActive(
+            HostRequestPriority.P1_GIMBAL_CONTROL,
+            "Gimbal control superseded"
+        )
     }
 
     private fun handleNotification(data: ByteArray) {
@@ -1256,7 +1338,14 @@ class BleManager @Inject constructor(
                         pendingResponseCallbacks.remove(responseId)
                     }
                     val result = if (json.optString("status") == "error") {
-                        Result.failure(Exception(json.optString("error", "Board returned error")))
+                        Result.failure(
+                            HostCommandException(
+                                message = json.optString("error", "Board returned error"),
+                                errorCode = json.optString("error_code").takeIf { it.isNotBlank() },
+                                retryable = json.optBoolean("retryable", false),
+                                responseData = json.optJSONObject("data")?.toString()
+                            )
+                        )
                     } else {
                         Result.success(data)
                     }
@@ -1269,6 +1358,26 @@ class BleManager @Inject constructor(
 
             val cmd = json.optString("cmd", "")
             val eventData = json.optJSONObject("data")
+            if (cmd == "push_gimbal_command_result" && eventData != null) {
+                val key = GimbalResultKey(
+                    sessionId = eventData.optString("session_id"),
+                    sequence = eventData.optLong("request_sequence"),
+                    command = eventData.optString("command")
+                )
+                val normalized = org.json.JSONObject()
+                    .put("status", if (eventData.optBoolean("accepted", false)) "success" else "error")
+                    .put("data", eventData)
+                if (!eventData.optBoolean("accepted", false)) {
+                    normalized.put("error", eventData.optString("error", "gimbal_command_failed"))
+                    eventData.optString("error_code").takeIf { it.isNotBlank() }?.let {
+                        normalized.put("error_code", it)
+                    }
+                }
+                pendingGimbalResults.remove(key)?.complete(
+                    normalized.toString().toByteArray(Charsets.UTF_8)
+                )
+                return
+            }
             val reliableEvent = HostJsonCodec.parseReliableEvent(jsonStr)
             if (reliableEvent != null) {
                 reliablePushEventHandlers.forEach { it.onReliableEvent(reliableEvent) }

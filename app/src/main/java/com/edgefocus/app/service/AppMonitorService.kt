@@ -14,6 +14,7 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.edgefocus.app.MainActivity
 import com.edgefocus.app.data.local.dao.AppUsageDao
+import com.edgefocus.app.data.local.dao.SessionDao
 import com.edgefocus.app.data.TimerStateHolder
 import com.edgefocus.app.data.local.dao.SettingsDao
 import com.edgefocus.app.data.local.entity.AppUsage
@@ -80,6 +81,9 @@ class AppMonitorService : Service() {
     lateinit var appUsageDao: AppUsageDao
 
     @Inject
+    lateinit var sessionDao: SessionDao
+
+    @Inject
     lateinit var bleManager: BleManager
 
     @Inject
@@ -100,8 +104,11 @@ class AppMonitorService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val monitoringMutex = Mutex()
     private var monitoringJob: Job? = null
+    private var bleReportJob: Job? = null
     private var currentPackageName: String? = null
     private var currentStartTime: Long = 0L
+    private var currentAlertStartElapsed: Long = 0L
+    private var backgroundStartElapsed: Long = 0L
     private var sessionId: String? = null
     private var distractionLevels: Map<String, Int> = emptyMap()
     private var lastBleReportedKey: String? = null
@@ -121,12 +128,13 @@ class AppMonitorService : Service() {
     // Android 对相同 ID 的通知只更新内容不重新提醒（不震动/不响铃），
     // 使用递增 ID 让每次通知都是新通知，触发新的提醒行为
     private var notificationCounter = 0
+    private val lastAlertNotificationIds = mutableMapOf<Int, Int>()
 
     // 通知间隔（毫秒）
     private val HIGH_DISTRACTION_INTERVAL = DistractionNotificationPolicy.HIGH_DISTRACTION_INTERVAL_MS
-    private val LOW_DISTRACTION_INTERVAL = 60000L // 弱干扰：每分钟
-    private val LOW_DISTRACTION_INITIAL_DELAY = 3000L // 弱干扰：启动后3秒首次提醒
-    private val BACKGROUND_INTERVAL = 10000L // 后台：每10秒
+    private val LOW_DISTRACTION_INTERVAL = DistractionNotificationPolicy.LOW_DISTRACTION_INTERVAL_MS
+    private val LOW_DISTRACTION_INITIAL_DELAY = DistractionNotificationPolicy.LOW_DISTRACTION_INITIAL_DELAY_MS
+    private val BACKGROUND_INTERVAL = DistractionNotificationPolicy.BACKGROUND_OR_UNCLASSIFIED_INTERVAL_MS
     private val DISTRACTION_RELOAD_INTERVAL = 5000L
     private var lastDistractionReload = 0L
 
@@ -206,6 +214,8 @@ class AppMonitorService : Service() {
     private suspend fun stopMonitoringAndPersist() {
         monitoringJob?.cancelAndJoin()
         monitoringJob = null
+        bleReportJob?.cancel()
+        bleReportJob = null
         closeCurrentAppUsage()
         lastBleReportedKey = null
         lastBleReportedAtElapsed = 0L
@@ -214,6 +224,7 @@ class AppMonitorService : Service() {
 
     private suspend fun checkDistractionNotifications() {
         val now = System.currentTimeMillis()
+        val nowElapsed = SystemClock.elapsedRealtime()
 
         if (now - lastDistractionReload >= DISTRACTION_RELOAD_INTERVAL) {
             loadDistractionLevels()
@@ -240,7 +251,8 @@ class AppMonitorService : Service() {
         val powerManager = getSystemService(PowerManager::class.java)
         if (!powerManager.isInteractive) {
             closeCurrentAppUsage()
-            reportBleIfChanged("system_noninteractive", "using", 0, isInUse = false)
+            backgroundStartElapsed = 0L
+            launchBleReport("system_noninteractive", "using", 0, isInUse = false)
             return
         }
 
@@ -250,8 +262,9 @@ class AppMonitorService : Service() {
         // 1. EdgeFocus 自己在前台：BLE 上报 learning，不通知
         if (foregroundPackage == packageName) {
             closeCurrentAppUsage()
+            backgroundStartElapsed = 0L
             val report = AppMonitorBleUsagePolicy.selfForeground(packageName)
-            reportBleIfChanged(
+            launchBleReport(
                 packageName = report.packageName,
                 category = report.category,
                 level = report.level,
@@ -263,13 +276,16 @@ class AppMonitorService : Service() {
         // 2. null：复用原通知逻辑，按后台/桌面/other 处理
         if (foregroundPackage == null) {
             closeCurrentAppUsage()
+            handleBackgroundNotification(nowElapsed)
+            launchBleReport(DESKTOP_OR_BACKGROUND, "using", 3, isInUse = true)
             return
         }
 
         if (AppMonitorBleUsagePolicy.isSystemSurface(foregroundPackage)) {
             closeCurrentAppUsage()
+            handleBackgroundNotification(nowElapsed)
             val report = AppMonitorBleUsagePolicy.systemSurface(foregroundPackage)
-            reportBleIfChanged(
+            launchBleReport(
                 packageName = report.packageName,
                 category = report.category,
                 level = report.level,
@@ -279,17 +295,20 @@ class AppMonitorService : Service() {
             return
         }
 
+        backgroundStartElapsed = 0L
+
         // 3. 有明确前台 App：保持原有应用切换记录逻辑
         if (foregroundPackage != currentPackageName) {
-            recordCurrentAppUsage()
+            enqueueCurrentAppUsage()
             currentPackageName = foregroundPackage
             currentStartTime = now
+            currentAlertStartElapsed = nowElapsed
             lowDistractionInitialAlertSent = false
             highDistractionInitialAlertSent = false
             lastHighDistractionAlert = 0L
             lastLowDistractionAlert = 0L
             lastBackgroundAlert = 0L
-            lastUnclassifiedAlert = 0L
+            lastUnclassifiedAlert = nowElapsed
         }
 
         val level = distractionLevels[foregroundPackage] ?: 3
@@ -298,12 +317,12 @@ class AppMonitorService : Service() {
         Log.d(TAG, "App: $foregroundPackage, Level: $level")
 
         // BLE 只跟随最终分类结果上报一次，不跟随通知频率重复发送
-        reportBleIfChanged(
+        handleDistractionNotificationForLevel(level, foregroundPackage, nowElapsed)
+        launchBleReport(
             packageName = foregroundPackage,
             category = category,
             level = level
         )
-        handleDistractionNotificationForLevel(level, foregroundPackage, now)
         return
     }
 
@@ -327,7 +346,7 @@ class AppMonitorService : Service() {
                 } else if (now - lastLowDistractionAlert >= LOW_DISTRACTION_INTERVAL) {
                     lastLowDistractionAlert = now
                     val appName = getAppName(foregroundPackage)
-                    showDistractionNotification("弱干扰应用", "您已使用 $appName 超过一分钟")
+                    showDistractionNotification("弱干扰应用", "您已使用 $appName 超过 30 秒")
                 }
             }
             2 -> {
@@ -355,21 +374,21 @@ class AppMonitorService : Service() {
             0 -> Unit
             1 -> {
                 if (!lowDistractionInitialAlertSent) {
-                    val elapsed = now - currentStartTime
-                    if (elapsed >= LOW_DISTRACTION_INITIAL_DELAY) {
+                    val elapsed = now - currentAlertStartElapsed
+                    if (elapsed >= DistractionNotificationPolicy.LOW_DISTRACTION_INITIAL_DELAY_MS) {
                         lowDistractionInitialAlertSent = true
                         lastLowDistractionAlert = now
                         val appName = getAppName(foregroundPackage)
                         showDistractionNotification("弱干扰应用", "您正在使用 $appName", level)
                     }
-                } else if (now - lastLowDistractionAlert >= LOW_DISTRACTION_INTERVAL) {
+                } else if (now - lastLowDistractionAlert >= DistractionNotificationPolicy.LOW_DISTRACTION_INTERVAL_MS) {
                     lastLowDistractionAlert = now
                     val appName = getAppName(foregroundPackage)
-                    showDistractionNotification("弱干扰应用", "您已使用 $appName 超过一分钟", level)
+                    showDistractionNotification("弱干扰应用", "您已使用 $appName 超过 30 秒", level)
                 }
             }
             2 -> {
-                val elapsed = now - currentStartTime
+                val elapsed = now - currentAlertStartElapsed
                 if ((!highDistractionInitialAlertSent &&
                         DistractionNotificationPolicy.canShowHighDistraction(elapsed, 0L, false)) ||
                     (highDistractionInitialAlertSent &&
@@ -382,11 +401,31 @@ class AppMonitorService : Service() {
                 }
             }
             else -> {
-                if (now - lastUnclassifiedAlert >= BACKGROUND_INTERVAL) {
+                if (now - lastUnclassifiedAlert >= DistractionNotificationPolicy.BACKGROUND_OR_UNCLASSIFIED_INTERVAL_MS) {
                     lastUnclassifiedAlert = now
                     showDistractionNotification("专注中", "请返回 EdgeFocus 继续专注", level)
                 }
             }
+        }
+    }
+
+    private fun handleBackgroundNotification(nowElapsed: Long) {
+        if (backgroundStartElapsed == 0L) {
+            backgroundStartElapsed = nowElapsed
+            lastBackgroundAlert = 0L
+            return
+        }
+        val interval = DistractionNotificationPolicy.BACKGROUND_OR_UNCLASSIFIED_INTERVAL_MS
+        val sinceStart = nowElapsed - backgroundStartElapsed
+        val sinceLast = if (lastBackgroundAlert == 0L) Long.MAX_VALUE
+            else nowElapsed - lastBackgroundAlert
+        if (sinceStart >= interval && sinceLast >= interval) {
+            lastBackgroundAlert = nowElapsed
+            showDistractionNotification(
+                title = "EdgeFocus 专注中",
+                message = "请返回 EdgeFocus 继续专注",
+                level = 3
+            )
         }
     }
 
@@ -411,10 +450,25 @@ class AppMonitorService : Service() {
     }
 
     private fun showDistractionNotification(title: String, message: String, level: Int) {
+        val notificationManager = getSystemService(NotificationManager::class.java)
+        val bucket = when {
+            level == 2 -> 2
+            level == 1 -> 1
+            else -> 0
+        }
+        lastAlertNotificationIds[bucket]?.let { previousId ->
+            notificationManager.cancel(previousId)
+        }
+        notificationCounter = (notificationCounter + 1) % 100_000
+        val notificationId = DistractionNotificationPolicy.notificationIdForLevel(
+            level = level,
+            sequence = notificationCounter
+        )
+        lastAlertNotificationIds[bucket] = notificationId
         showAlertNotification(
             title = title,
             message = message,
-            notificationId = DistractionNotificationPolicy.notificationIdForLevel(level)
+            notificationId = notificationId
         )
     }
 
@@ -457,6 +511,22 @@ class AppMonitorService : Service() {
             packageManager.getApplicationLabel(appInfo).toString()
         } catch (e: Exception) {
             packageName
+        }
+    }
+
+    private fun launchBleReport(
+        packageName: String,
+        category: String,
+        level: Int,
+        isInUse: Boolean = true
+    ) {
+        if (bleReportJob?.isActive == true) return
+        bleReportJob = serviceScope.launch {
+            runCatching {
+                reportBleIfChanged(packageName, category, level, isInUse)
+            }.onFailure { error ->
+                Log.w(TAG, "BLE app usage report failed: ${error.message}")
+            }
         }
     }
 
@@ -533,11 +603,28 @@ class AppMonitorService : Service() {
         }
     }
 
-    private suspend fun recordCurrentAppUsage() {
-        val packageName = currentPackageName ?: return
-        val duration = ((System.currentTimeMillis() - currentStartTime) / 1000).toInt()
+    private fun enqueueCurrentAppUsage() {
+        val previousPackage = currentPackageName ?: return
+        val previousStartTime = currentStartTime
+        val previousSessionId = sessionId
+        serviceScope.launch {
+            recordAppUsage(previousPackage, previousStartTime, previousSessionId)
+        }
+    }
+
+    private suspend fun recordAppUsage(
+        packageName: String,
+        startTime: Long,
+        usageSessionId: String?
+    ) {
+        val duration = ((System.currentTimeMillis() - startTime) / 1000).toInt()
 
         if (duration <= 0) return
+
+        if (usageSessionId != null && sessionDao.getSessionByIdOnce(usageSessionId) == null) {
+            Log.w(TAG, "Skipping app usage without local session row: $usageSessionId")
+            return
+        }
 
         val level = distractionLevels[packageName] ?: 3
         val category = categoryForLevel(level)
@@ -546,7 +633,7 @@ class AppMonitorService : Service() {
             packageName = packageName,
             category = category,
             usageDuration = duration,
-            sessionId = sessionId
+            sessionId = usageSessionId
         )
 
         try {
@@ -557,11 +644,13 @@ class AppMonitorService : Service() {
         }
     }
 
-    private suspend fun closeCurrentAppUsage() {
-        recordCurrentAppUsage()
+    private fun closeCurrentAppUsage() {
+        enqueueCurrentAppUsage()
         currentPackageName = null
         currentStartTime = 0L
+        currentAlertStartElapsed = 0L
         lowDistractionInitialAlertSent = false
+        highDistractionInitialAlertSent = false
     }
 
     private fun categoryForLevel(level: Int): String {

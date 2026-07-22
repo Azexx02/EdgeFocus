@@ -24,9 +24,11 @@ import com.edgefocus.app.data.remote.PushAlert
 import com.edgefocus.app.data.remote.PushEventHandler
 import com.edgefocus.app.data.session.StartTransactionPolicy
 import com.edgefocus.app.data.session.BoardSyncLaunchPolicy
+import com.edgefocus.app.data.session.BoardRemainingTimePolicy
 import com.edgefocus.app.domain.model.FocusState
 import com.edgefocus.app.domain.model.SessionType
 import com.edgefocus.app.domain.model.TimerState
+import com.edgefocus.app.domain.precheck.PrecheckConfirmationPolicy
 import com.edgefocus.app.util.TimeUtils
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -907,6 +909,21 @@ class TimerStateHolder @Inject constructor(
         scope.launch { checkBoardSession() }
     }
 
+    suspend fun pausePrecheckPreviewRequests() {
+        stopPreviewLoop()
+        bleManager.cancelPreviewRequests()
+    }
+
+    fun applyBoardCommandResponse(
+        response: ByteArray,
+        expectedSessionId: String
+    ): Result<BoardSessionState> = runCatching {
+        val boardState = BoardJsonParser.parseSessionState(String(response, Charsets.UTF_8))
+        check(boardState.sessionId == expectedSessionId) { "PRECHECK 会话已变化" }
+        applyBoardSessionState(boardState)
+        boardState
+    }
+
     private fun startPreviewLoop() {
         if (!connectionSupervisor.snapshot.value.isReady || !bleManager.isConnected()) return
         if (previewJob?.isActive == true) return
@@ -1188,6 +1205,20 @@ class TimerStateHolder @Inject constructor(
         fallbackDurationMinutes: Int = _state.value.targetDurationMinutes
     ) {
         if (PrecheckObservationPolicy.isClosedPrecheck(closedPrecheckSessionId, boardState)) return
+        val before = _state.value
+        if (PrecheckConfirmationPolicy.isStalePrecheckRegression(
+                currentTimerState = before.timerState,
+                currentSessionId = before.sessionId,
+                incomingSessionId = boardState.sessionId,
+                incomingPhase = boardState.effectivePhase()
+            )
+        ) {
+            appEventLog.log(
+                "STALE_PRECHECK_IGNORED",
+                "session=${boardState.sessionId}, current=${before.sessionPhase}"
+            )
+            return
+        }
         if (boardState.effectivePhase() == BoardSessionPhase.PRECHECK &&
             boardState.sessionId != closedPrecheckSessionId
         ) {
@@ -1200,13 +1231,22 @@ class TimerStateHolder @Inject constructor(
             else -> fallbackTotalMs
         }
         val phase = boardState.effectivePhase()
-        val remainingMs = when {
+        val incomingRemainingMs = when {
             phase == BoardSessionPhase.PRECHECK && boardState.remainingMs <= 0L -> targetMs
             boardState.hasRemainingMs -> boardState.remainingMs.coerceAtLeast(0L)
             phase == BoardSessionPhase.PRECHECK -> targetMs
             _state.value.timeRemaining > 0L -> _state.value.timeRemaining
             else -> targetMs
         }
+        val currentState = _state.value
+        val remainingMs = BoardRemainingTimePolicy.select(
+            currentSessionId = currentState.sessionId,
+            incomingSessionId = boardState.sessionId,
+            currentPhase = currentState.sessionPhase,
+            incomingPhase = phase,
+            currentRemainingMs = currentState.timeRemaining,
+            incomingRemainingMs = incomingRemainingMs
+        )
         val timerState = when (phase) {
             BoardSessionPhase.PRECHECK -> TimerState.PRECHECK
             BoardSessionPhase.FOCUSING -> TimerState.RUNNING
@@ -1476,7 +1516,11 @@ class TimerStateHolder @Inject constructor(
                 return
             }
 
-            val boardRemainingMs = data.optLong("remaining_ms", 0)
+            val boardRemainingMs = if (boardState.hasRemainingMs) {
+                boardState.remainingMs
+            } else {
+                data.optLong("remaining_ms", 0)
+            }
             val boardTargetDurationMs = data.optLong("target_duration_ms", 0)
             val boardDistractionCount = data.optInt(
                 "distraction_count",
@@ -1530,14 +1574,23 @@ class TimerStateHolder @Inject constructor(
                     return
                 }
 
-                val localRemaining = _state.value.timeRemaining
-                val diff = kotlin.math.abs(localRemaining - boardRemainingMs)
+                val currentState = _state.value
+                val localRemaining = currentState.timeRemaining
+                val acceptedRemainingMs = BoardRemainingTimePolicy.select(
+                    currentSessionId = currentState.sessionId,
+                    incomingSessionId = boardState.sessionId,
+                    currentPhase = currentState.sessionPhase,
+                    incomingPhase = boardState.effectivePhase(),
+                    currentRemainingMs = localRemaining,
+                    incomingRemainingMs = boardRemainingMs
+                )
+                val diff = kotlin.math.abs(localRemaining - acceptedRemainingMs)
 
                 if (diff > CALIBRATION_THRESHOLD_MS) {
-                    Log.d(TAG, "Calibrating: local=${localRemaining}ms, board=${boardRemainingMs}ms, diff=${diff}ms")
+                    Log.d(TAG, "Calibrating: local=${localRemaining}ms, board=${boardRemainingMs}ms, accepted=${acceptedRemainingMs}ms, diff=${diff}ms")
                     _state.update {
                         it.copy(
-                            timeRemaining = boardRemainingMs,
+                            timeRemaining = acceptedRemainingMs,
                             totalTime = boardTargetDurationMs
                         )
                     }

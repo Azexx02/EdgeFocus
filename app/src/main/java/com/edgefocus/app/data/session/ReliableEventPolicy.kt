@@ -32,3 +32,9 @@ object SequencePolicy {
         return if (maximum == Long.MAX_VALUE) Long.MAX_VALUE else maximum + 1L
     }
 }
+
+object GimbalSequencePolicy {
+    fun next(localCheckpoint: Long?, hostSequence: Long?, nowMs: Long): Long {
+        return SequencePolicy.next(localCheckpoint, hostSequence, nowMs)
+    }
+}

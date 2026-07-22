@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.DevicesOther
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Timelapse
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -39,6 +40,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -62,8 +64,10 @@ fun SettingsScreen(
 ) {
     val settings by viewModel.settings.collectAsState()
     val bandControl by viewModel.bandControl.collectAsState()
+    val gimbalMaintenance by viewModel.gimbalMaintenance.collectAsState()
     var versionTapCount by remember { mutableIntStateOf(0) }
     var showDevTools by remember { mutableIntStateOf(0) }
+    var showForwardConfirm by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         viewModel.refreshHostStatus()
@@ -179,6 +183,62 @@ fun SettingsScreen(
 
         Spacer(modifier = Modifier.height(16.dp))
 
+        if (gimbalMaintenance.hostConnected && gimbalMaintenance.available) {
+            SettingsCard(title = "云台维护", icon = Icons.Default.DevicesOther) {
+                val status = gimbalMaintenance.status
+                Text(
+                    "电气校准：${if (status?.calibrationValid == true) "有效" else "未确认"}",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                Text(
+                    "正前方原点：${if (status?.originValid == true) "有效" else "未设置"}",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                if (status?.originEpoch != null) {
+                    Text(
+                        "原点版本：${status.originEpoch}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Text(
+                    "仅在没有进行专注会话时使用。先将摄像头对准机械正前方，再保存；普通预检确认不会修改此原点。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = viewModel::refreshGimbalMaintenanceStatus,
+                        enabled = !gimbalMaintenance.inProgress,
+                        modifier = Modifier.weight(1f)
+                    ) { Text("刷新状态") }
+                    OutlinedButton(
+                        onClick = { showForwardConfirm = true },
+                        enabled = gimbalMaintenance.hostIdle && !gimbalMaintenance.inProgress,
+                        modifier = Modifier.weight(1f)
+                    ) { Text("设为正前方") }
+                }
+                if (!gimbalMaintenance.hostIdle) {
+                    Text(
+                        "会话进行中，不能修改正前方原点。",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+                gimbalMaintenance.message?.let {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(16.dp))
+        }
+
         SettingsCard(title = "显示与提醒", icon = Icons.Default.Settings) {
             SettingsToggle(
                 label = "启用 App 黑屏屏保",
@@ -253,6 +313,23 @@ fun SettingsScreen(
                 color = MaterialTheme.colorScheme.surfaceVariant
             )
         }
+    }
+
+    if (showForwardConfirm) {
+        AlertDialog(
+            onDismissRequest = { showForwardConfirm = false },
+            title = { Text("确认设置正前方") },
+            text = { Text("这会将摄像头当前位置保存为以后启动、回正和自动搜索使用的机械正前方。确认镜头已经人工对准正前方。") },
+            confirmButton = {
+                OutlinedButton(onClick = {
+                    showForwardConfirm = false
+                    viewModel.captureForwardOrigin()
+                }) { Text("确认保存") }
+            },
+            dismissButton = {
+                OutlinedButton(onClick = { showForwardConfirm = false }) { Text("取消") }
+            }
+        )
     }
 }
 

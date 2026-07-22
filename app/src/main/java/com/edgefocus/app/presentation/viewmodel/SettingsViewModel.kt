@@ -7,6 +7,9 @@ import com.edgefocus.app.domain.repository.ISettingsRepository
 import com.edgefocus.app.data.ble.ConnectionSupervisor
 import com.edgefocus.app.data.ble.HostJsonCodec
 import com.edgefocus.app.data.remote.BleManager
+import com.edgefocus.app.data.remote.BoardJsonParser
+import com.edgefocus.app.data.remote.GimbalStatus
+import com.edgefocus.app.data.ble.model.HostSessionPhase
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -24,6 +27,15 @@ data class BandControlUiState(
     val message: String? = null
 )
 
+data class GimbalMaintenanceUiState(
+    val hostConnected: Boolean = false,
+    val available: Boolean = false,
+    val hostIdle: Boolean = false,
+    val inProgress: Boolean = false,
+    val status: GimbalStatus? = null,
+    val message: String? = null
+)
+
 @HiltViewModel
 class SettingsViewModel @Inject constructor(
     private val settingsRepository: ISettingsRepository,
@@ -35,6 +47,9 @@ class SettingsViewModel @Inject constructor(
     val settings: StateFlow<Settings> = _settings.asStateFlow()
     private val _bandControl = MutableStateFlow(BandControlUiState())
     val bandControl: StateFlow<BandControlUiState> = _bandControl.asStateFlow()
+    private val _gimbalMaintenance = MutableStateFlow(GimbalMaintenanceUiState())
+    val gimbalMaintenance: StateFlow<GimbalMaintenanceUiState> =
+        _gimbalMaintenance.asStateFlow()
 
     init {
         viewModelScope.launch {
@@ -51,13 +66,76 @@ class SettingsViewModel @Inject constructor(
                         available = snapshot.hello?.supports("band_proxy_control_v1") == true
                     )
                 }
+                _gimbalMaintenance.update {
+                    it.copy(
+                        hostConnected = snapshot.isReady,
+                        available = snapshot.hello?.supports(HostJsonCodec.CAP_GIMBAL_ORIGIN) == true,
+                        hostIdle = snapshot.hostState?.session?.phase == HostSessionPhase.IDLE
+                    )
+                }
             }
         }
     }
 
     fun refreshHostStatus() {
         if (!connectionSupervisor.snapshot.value.isReady) return
-        viewModelScope.launch { connectionSupervisor.refreshHostState() }
+        viewModelScope.launch {
+            connectionSupervisor.refreshHostState()
+            refreshGimbalMaintenanceStatusInternal()
+        }
+    }
+
+    fun refreshGimbalMaintenanceStatus() {
+        if (!connectionSupervisor.snapshot.value.isReady) return
+        viewModelScope.launch { refreshGimbalMaintenanceStatusInternal() }
+    }
+
+    fun captureForwardOrigin() {
+        val current = _gimbalMaintenance.value
+        if (!current.hostConnected || !current.available || !current.hostIdle || current.inProgress) return
+        viewModelScope.launch {
+            _gimbalMaintenance.update { it.copy(inProgress = true, message = null) }
+            bleManager.captureForwardOrigin(System.currentTimeMillis().coerceAtLeast(1L))
+                .onSuccess { response ->
+                    val acceptance = HostJsonCodec.parseGimbalAcceptance(
+                        String(response, Charsets.UTF_8)
+                    )
+                    _gimbalMaintenance.update {
+                        it.copy(
+                            message = if (acceptance.accepted) {
+                                "正前方已保存（原点版本 ${acceptance.originEpoch ?: "已更新"}）"
+                            } else {
+                                acceptance.error ?: "主机未接受正前方设置"
+                            }
+                        )
+                    }
+                    refreshGimbalMaintenanceStatusInternal()
+                }
+                .onFailure { error ->
+                    _gimbalMaintenance.update {
+                        it.copy(message = error.message ?: "设置正前方失败")
+                    }
+                }
+            _gimbalMaintenance.update { it.copy(inProgress = false) }
+        }
+    }
+
+    private suspend fun refreshGimbalMaintenanceStatusInternal() {
+        bleManager.getGimbalStatus()
+            .onSuccess { response ->
+                _gimbalMaintenance.update {
+                    it.copy(
+                        status = BoardJsonParser.parseGimbalStatus(
+                            String(response, Charsets.UTF_8)
+                        )
+                    )
+                }
+            }
+            .onFailure { error ->
+                _gimbalMaintenance.update {
+                    it.copy(message = error.message ?: "无法读取云台维护状态")
+                }
+            }
     }
 
     fun updatePomodoroDuration(duration: Int) {
