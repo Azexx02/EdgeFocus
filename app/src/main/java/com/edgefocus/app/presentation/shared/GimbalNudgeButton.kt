@@ -2,16 +2,14 @@ package com.edgefocus.app.presentation.shared
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Button
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -27,28 +25,30 @@ import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.coroutineScope
 
 @Composable
-fun GimbalStepModeSelector(
-    fineTune: Boolean,
+fun GimbalDirectionalStepButtons(
+    directionLabel: String,
     enabled: Boolean,
-    onModeChange: (Boolean) -> Unit,
+    onNudge: (Boolean) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    Row(modifier = modifier, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        if (fineTune) {
-            Button(onClick = { onModeChange(true) }, enabled = enabled) { Text("微调") }
-        } else {
-            OutlinedButton(onClick = { onModeChange(true) }, enabled = enabled) { Text("微调") }
-        }
-        if (fineTune) {
-            OutlinedButton(onClick = { onModeChange(false) }, enabled = enabled) { Text("普通步进") }
-        } else {
-            Button(onClick = { onModeChange(false) }, enabled = enabled) { Text("普通步进") }
-        }
+    Row(modifier = modifier, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        GimbalNudgeButton(
+            label = "$directionLabel 微调",
+            enabled = enabled,
+            fineTune = true,
+            onNudge = onNudge
+        )
+        GimbalNudgeButton(
+            label = "$directionLabel 普通",
+            enabled = enabled,
+            fineTune = false,
+            onNudge = onNudge
+        )
     }
 }
 
@@ -67,7 +67,7 @@ fun GimbalNudgeButton(
         MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
     }
     val interaction = if (enabled) {
-            Modifier.pointerInput(fineTune) {
+        Modifier.pointerInput(fineTune) {
             detectTapGestures(
                 onPress = press@ {
                     var repeated = false
@@ -110,15 +110,18 @@ fun GimbalNudgeButton(
         contentColor = contentColor,
         border = BorderStroke(
             1.dp,
-            if (enabled) MaterialTheme.colorScheme.outline else
+            if (enabled) {
+                MaterialTheme.colorScheme.outline
+            } else {
                 MaterialTheme.colorScheme.outline.copy(alpha = 0.38f)
+            }
         )
     ) {
         Box(
             modifier = Modifier
-                .widthIn(min = 64.dp)
+                .widthIn(min = 72.dp)
                 .heightIn(min = 40.dp)
-                .padding(horizontal = 18.dp, vertical = 8.dp),
+                .padding(horizontal = 14.dp, vertical = 8.dp),
             contentAlignment = Alignment.Center
         ) {
             Text(label)

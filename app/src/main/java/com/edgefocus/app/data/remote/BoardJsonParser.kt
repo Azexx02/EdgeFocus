@@ -605,6 +605,18 @@ object BoardJsonParser {
         val manualLease = runtime?.optBooleanOrNull("manual_lease")
             ?: legacy?.optBooleanOrNull("manual_lease")
             ?: false
+        val state = runtime?.optJsonString("state")
+            ?: legacy?.optJsonString("state")
+            ?: "idle"
+        val controlMode = runtime?.optJsonString("control_mode")
+            ?: legacy?.optJsonString("control_mode")
+        val detail = runtime?.optJsonString("detail") ?: legacy?.optJsonString("detail")
+        val inferredManualControlAvailable =
+            state.equals("manual_available", ignoreCase = true) ||
+                state.equals("manual", ignoreCase = true) ||
+                state.equals("holding", ignoreCase = true) ||
+                controlMode.equals("manual", ignoreCase = true) ||
+                detail?.contains("manual_available", ignoreCase = true) == true
         return PrecheckGimbal(
             enabled = available,
             online = online,
@@ -616,15 +628,12 @@ object BoardJsonParser {
             angleY = runtime?.optDoubleOrNull("angle_y")
                 ?: legacy?.optDoubleOrNull("angle_y")
                 ?: currentYaw,
-            state = runtime?.optJsonString("state")
-                ?: legacy?.optJsonString("state")
-                ?: "idle",
-            controlMode = runtime?.optJsonString("control_mode")
-                ?: legacy?.optJsonString("control_mode"),
+            state = state,
+            controlMode = controlMode,
             manualLease = manualLease,
             manualControlAvailable = runtime?.optBooleanOrNull("manual_control_available")
                 ?: legacy?.optBooleanOrNull("manual_control_available")
-                ?: manualLease,
+                ?: (manualLease || inferredManualControlAvailable),
             communicationHealth = communicationHealth,
             hardwareFaultActive = hardwareFault,
             hardwareFaultCode = runtime?.optJsonString("hardware_fault_code")
@@ -656,7 +665,7 @@ object BoardJsonParser {
                 ?: legacy?.optLongOrNull("search_generation"),
             waypointIndex = runtime?.optIntOrNull("waypoint_index")
                 ?: legacy?.optIntOrNull("waypoint_index"),
-            detail = runtime?.optJsonString("detail") ?: legacy?.optJsonString("detail")
+            detail = detail
         )
     }
 

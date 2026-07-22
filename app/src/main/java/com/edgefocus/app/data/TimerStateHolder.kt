@@ -792,6 +792,11 @@ class TimerStateHolder @Inject constructor(
                 action = "stop",
                 sessionId = sessionId
             )
+            if (request.isSuccess) {
+                val state = parseAuthoritativeBoardState(request.getOrThrow()) ?: BoardSessionState()
+                completePrecheckExit(exitEpoch, state)
+                return@launch
+            }
             val idleState = awaitAuthoritativeIdle()
             if (exitEpoch != precheckExitEpoch.get() || !precheckExitInFlight.get()) {
                 return@launch

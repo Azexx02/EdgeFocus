@@ -162,6 +162,24 @@ class PrecheckConfirmationPolicyTest {
     }
 
     @Test
+    fun manualAvailableDetailCanAcquireLeaseOnFirstManualCommand() {
+        val gimbal = PrecheckGimbal(
+            enabled = true,
+            online = true,
+            safe = true,
+            state = "idle",
+            manualLease = false,
+            detail = "automatic_search_skipped_manual_available"
+        )
+
+        assertEquals(
+            PrecheckGimbalReadiness.MANUAL_READY,
+            PrecheckConfirmationPolicy.gimbalReadiness(gimbal)
+        )
+        assertTrue(PrecheckConfirmationPolicy.canUseManualControls(gimbal))
+    }
+
+    @Test
     fun remainingManualLeaseMeansPositionDidNotComplete() {
         val state = boardState(
             phase = BoardSessionPhase.PRECHECK,

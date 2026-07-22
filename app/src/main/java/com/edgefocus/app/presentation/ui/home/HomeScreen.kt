@@ -43,9 +43,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
@@ -62,8 +60,7 @@ import com.edgefocus.app.data.remote.PowerProfile
 import com.edgefocus.app.data.remote.BoardPreparationState
 import com.edgefocus.app.data.ble.model.ExternalPowerState
 import com.edgefocus.app.presentation.shared.rememberCameraPreviewBitmap
-import com.edgefocus.app.presentation.shared.GimbalNudgeButton
-import com.edgefocus.app.presentation.shared.GimbalStepModeSelector
+import com.edgefocus.app.presentation.shared.GimbalDirectionalStepButtons
 import com.edgefocus.app.domain.model.SessionType
 import com.edgefocus.app.domain.model.TimerState
 import com.edgefocus.app.domain.precheck.PrecheckConfirmationPolicy
@@ -341,7 +338,6 @@ private fun HomePrecheckPage(
     )
     val skipAutoAdjustReady = !uiState.isPrecheckConfirming &&
         PrecheckConfirmationPolicy.canSkipAutoAdjust(gimbal)
-    var fineTune by remember { mutableStateOf(true) }
     Box(modifier = modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier
@@ -436,36 +432,27 @@ private fun HomePrecheckPage(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-            GimbalStepModeSelector(
-                fineTune = fineTune,
+            GimbalDirectionalStepButtons(
+                directionLabel = "上",
                 enabled = manualControlsReady,
-                onModeChange = { fineTune = it }
-            )
-            GimbalNudgeButton(
-                label = "上",
-                enabled = manualControlsReady,
-                fineTune = fineTune,
                 onNudge = { viewModel.nudgeGimbal("UP", it) }
             )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                GimbalNudgeButton(
-                    label = "左",
+                GimbalDirectionalStepButtons(
+                    directionLabel = "左",
                     enabled = manualControlsReady,
-                    fineTune = fineTune,
                     onNudge = { viewModel.nudgeGimbal("LEFT", it) }
                 )
                 OutlinedButton(onClick = viewModel::centerGimbal, enabled = manualControlsReady) { Text("归中") }
-                GimbalNudgeButton(
-                    label = "右",
+                GimbalDirectionalStepButtons(
+                    directionLabel = "右",
                     enabled = manualControlsReady,
-                    fineTune = fineTune,
                     onNudge = { viewModel.nudgeGimbal("RIGHT", it) }
                 )
             }
-            GimbalNudgeButton(
-                label = "下",
+            GimbalDirectionalStepButtons(
+                directionLabel = "下",
                 enabled = manualControlsReady,
-                fineTune = fineTune,
                 onNudge = { viewModel.nudgeGimbal("DOWN", it) }
             )
             TextButton(onClick = viewModel::stopGimbal, enabled = manualControlsReady) { Text("停止云台") }

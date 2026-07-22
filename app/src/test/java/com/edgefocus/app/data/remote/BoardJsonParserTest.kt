@@ -775,6 +775,28 @@ class BoardJsonParserTest {
     }
 
     @Test
+    fun parseSessionStateInfersManualAvailabilityFromRuntimeDetail() {
+        val response = """
+            {
+              "status":"success",
+              "data":{
+                "precheck":{"gimbal":{"enabled":true,"online":true,"safe":true}},
+                "runtime_snapshot":{
+                  "session":{"id":"session_2","phase":"PRECHECK","preparation_state":"READY"},
+                  "gimbal":{"state":"idle","manual_lease":false,"detail":"automatic_search_skipped_manual_available"}
+                }
+              }
+            }
+        """.trimIndent()
+
+        val gimbal = BoardJsonParser.parseSessionState(response).precheck?.gimbal
+
+        assertNotNull(gimbal)
+        assertFalse(gimbal!!.manualLease)
+        assertTrue(gimbal.manualControlAvailable)
+    }
+
+    @Test
     fun `new gimbal fields win while legacy angles remain available`() {
         val response = """
             {"status":"success","data":{
