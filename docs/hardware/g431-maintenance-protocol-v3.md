@@ -27,9 +27,11 @@ gimbal_bringup capture-origin --confirm-origin-capture
 
 该原点写入 G431 A/B Flash 事务槽。普通 `ARM`、会话启动、故障恢复和重启均不得重新定义它。默认软件安全窗是原点两轴 ±70°。
 
-## 3. 电流保护标定
+## 3. 首装电流保护初始化
 
-维护低功率模式下采集：
+`ARM MAINTENANCE` 只作为主机与 G431 之间的内部初始化通道保留，不是用户可见模式。它仅在电流保护尚未配置时放行固定采样流程，使用与 Production 相同的驱动力和全周位置能力；普通 `ARM` 仍必须在电流保护有效后才能成功。
+
+主机工具先确认固件声明 `INITIALIZATION_PROFILE`，随后以当前位置为中心执行 yaw、pitch 各 ±15°并回到起点。流程不重新定义机械原点、不要求人工扶正，也不受旧版 ±10°窗口限制：
 
 ```sh
 gimbal_bringup current-sample --allow-motion --confirm-board
@@ -42,7 +44,7 @@ JSON 中必须同时满足：
 - `current.window_ms >= 1000`
 - `samples` 随窗口增长，`sample_age_ms` 新鲜
 
-结合多方向、空载与受控轻阻力采样确定峰值/均值阈值后写入：
+结合多方向实测结果确定峰值/均值阈值后写入：
 
 ```sh
 gimbal_bringup protect-current-set \
@@ -52,24 +54,9 @@ gimbal_bringup protect-current-set \
 
 上例的 `0` 只是参数位置示意，工具会拒绝无效组合；必须替换为实测值，且 peak 大于对应 average。
 
-### 3.1 维护 yaw 运动验证与脱粘诊断
+初始化运动要求同 generation、位置有效、无 Fault；误差不超过 2°并连续稳定 3 个 80 ms 样本即可通过。任何命令超时、位置持续背离、能力缺失或电流采样无效都会 STOP，且不会写入保护参数。
 
-新固件通过 `MAINT_ASSIST_DIAG` 能力声明只读诊断 `MAINTASSIST?`。该辅助仅作用于维护模式 yaw：目标斜坡完成、误差大于 8 raw、速度在 ±1 raw、连续停滞至少 150 ms 时，一次性把既有请求下限每个控制周期提高 2 tick，最高 180，最长 300 ms。速度只用于触发前确认停滞；触发后持续到误差进入到位带、方向反转或 300 ms 到期，单个编码器速度跳变不会提前撤销；生产模式和 pitch 不变。
-
-上板必须分级执行。维护验收目标为永久零位的 `0° / +10° / -10°`，不再使用容易受静摩擦影响的±3°小行程。若任一轴起点超出±10°，仅在两轴raw有效、样本年龄≤50 ms、无Fault且仍处于持久化产品安全窗（当前±70°）时，CLI才允许一次特殊 `AUTO_CENTER_RECOVERY` 双轴回到 `(0°,0°)`；该恢复不能用于其他目标，5秒超时、持续背离或越出产品安全窗都会立即STOP。随后执行请求目标并最终STOP，无需人工持续扶正：
-
-```sh
-gimbal_bringup maintenance-move --axis yaw --target-deg 0 --allow-motion --confirm-board
-gimbal_bringup maintenance-move --axis yaw --target-deg 10 --allow-motion --confirm-board
-gimbal_bringup maintenance-move --axis yaw --target-deg 0 --allow-motion --confirm-board
-gimbal_bringup maintenance-move --axis yaw --target-deg -10 --allow-motion --confirm-board
-```
-
-维护验收要求同generation、位置有效、无Fault且目标未越界；误差不超过2°并连续稳定3个80 ms采样即可通过，`SETTLED=1` 是更强结果但不是该维护命令的唯一必要条件。10°目标仍保证约8°同向有效位移；该规则不改变生产控制器的settled定义。
-
-每次输出应包含 `maintenance_assist`：其 `target_generation` 与运动 generation 一致，`active_ms <= 300`，`peak_floor <= 180`。到位后工具先执行 `CURRENT RESET`，保持固定目标并每 100 ms 读取一次电流，最多等待 2 秒取得完整、未饱和的 1000 ms 窗口；Fault、饱和或超时均失败。无论成功与否，工具退出前都执行 STOP。
-
-只有0°、+10°、再次0°和-10°验证全部通过，才允许继续完整 `current-sample`；本步骤不写入任何电流保护阈值。
+旧命令 `maintenance-move` 仅为兼容诊断保留，不属于首装流程，也不应暴露在产品页面或 App 中。
 
 ## 4. 生产前验证
 

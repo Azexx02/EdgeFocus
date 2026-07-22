@@ -17,6 +17,13 @@
 9. [in_progress] 验收配置已获用户批准，ARM 主机发布已原子部署并通过 HTTP/BLE 健康检查；等待 G431 新固件刷入后执行分阶段实机运动验收
 10. [complete] 输出 `docs/integration/gimbal-manual-boundary-app-fields.md`，完成源代码、测试、固件产物与本地交付证据
 
+### Maintenance 范围外回零顺序修复
+
+1. [complete] 实机定位 `HOLD` 在回零判断之前触发 `BAD_RANGE`，固件安全拒绝并 STOP
+2. [complete] 用户选择方案 A：仅调整维护 CLI 为先读位置、必要时安全回零，不放宽固件范围
+3. [in_progress] 编写并审查短规格，随后修改 CLI 顺序并完成本机/ARM 构建
+4. [pending] 只替换板端 `gimbal_bringup`，继续回零、维护运动、电流采样与生产验收
+
 ### 固定约束
 
 - G431 不区分 AUTO/MANUAL，不新增 TRACK 协议；Production 忽略旧 NVM ±70°窗口，Maintenance 仍 ±10°。
@@ -191,3 +198,23 @@
 4. [pending] 主 Agent 完整阅读 ViewModel、导航、全部 Compose 页面及策略文件
 5. [pending] 阅读测试并核对原产品语义、现有保护和真实缺口
 6. [pending] 输出可供后续 Agent 复用的现有设计事实表、代码索引、有效缺口和禁止误判项；之后才继续设计问答
+## 2026-07-22 Internal gimbal initialization (no user-visible maintenance mode)
+
+Goal: keep the unconfigured-current safety bootstrap internally, but remove the
+manual centering/holding workflow and the +/-10 degree maintenance restriction.
+Production motion must still require configured current protection.
+
+1. [complete] Reproduce the failure with absolute +/-3 and +/-8 degree samples;
+   commands were accepted but the low-power maintenance profile could not start yaw.
+2. [complete] Change G431 initialization profile to full-range target validation
+   and production-equivalent drive while preserving fault/current safety gates.
+3. [complete] Update the host initialization command to run the sampling flow without
+   exposing maintenance positioning requirements.
+4. [complete] Run firmware/host tests and build firmware plus AArch64 tool artifacts.
+5. [in_progress] Flash firmware, run automatic current sampling, approve measured
+   thresholds, and verify Production motion.
+
+Errors:
+- The first local rebuild invoked MSVC without the Visual Studio developer
+  environment and could not find `stdbool.h`; retry via `VsDevCmd.bat` rather
+  than repeating the same command.

@@ -400,3 +400,19 @@
 - 2026-07-22：发布 `edgefocus-fullrange-7fc36a4-20260722-130700` 已原子部署至 `192.168.10.173`；安装二进制与 release 哈希一致，HTTP 状态、BLE GATT 注册和广播均正常。
 - 2026-07-22：部署前无运动 UART 探测五项均超时，因此未把当前 G431 视为新固件；尚未执行云台运动，等待刷入 `3014b53` 对应 HEX 后继续能力协商与分阶段验收。
 - 2026-07-22：板端 RTC 仍显示 2024-02-28，解包产生 future timestamp 警告；不影响哈希与服务健康，但时间保持问题仍需单独修复。
+## 2026-07-22 Internal gimbal initialization
+
+- Replaced the unusable low-power +/-10 degree maintenance workflow with an
+  internal initialization profile: G431 uses production-equivalent drive and
+  full-range target validation while Production ARM still requires configured
+  current protection.
+- Added firmware capability `INITIALIZATION_PROFILE`; the host refuses the new
+  sampling pattern when connected to older firmware.
+- Host current sampling now moves relative to the starting pose by +/-15 degrees
+  on each axis and returns to the same pose, so no manual centering/holding is
+  required after the new firmware is flashed.
+- G431 core tests and host gimbal hardware-service tests pass. Release HEX SHA-256:
+  `090709f3ab7820559324852c989be6a7dd1fcb8c98a2daddd72bf2ecc8211a3c`.
+- AArch64 `gimbal_bringup` SHA-256:
+  `120fc5fb33c00573e9a369281e3cb6cc2e5232401e80f2653774b54e5f2c05b6`;
+  installed to `/opt/edgefocus/tools/gimbal_bringup-current`, main service remained active.

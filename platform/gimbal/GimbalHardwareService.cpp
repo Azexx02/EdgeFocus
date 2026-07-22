@@ -742,6 +742,12 @@ CommandResult GimbalHardwareService::executeMaintenanceLocked(
             }
             break;
         case MaintenanceOperation::VerifyMotionPattern: {
+            if (std::find(snapshot_.capabilities.begin(),
+                          snapshot_.capabilities.end(),
+                          "INITIALIZATION_PROFILE") == snapshot_.capabilities.end()) {
+                return failure("initialization_profile_unavailable",
+                               ErrorClass::Link, "CAPABILITY_UNAVAILABLE");
+            }
             if (snapshot_.arm_profile != ArmProfile::Maintenance ||
                 (machine_.status().state != State::Holding &&
                  machine_.status().state != State::Ready)) {
@@ -756,21 +762,21 @@ CommandResult GimbalHardwareService::executeMaintenanceLocked(
                               "SAMPLE_STALE")
                     : refreshed;
             }
-            const double origin_yaw = *snapshot_.current_yaw10 / 10.0;
-            const double origin_pitch = *snapshot_.current_pitch10 / 10.0;
+            const double start_yaw = *snapshot_.current_yaw10 / 10.0;
+            const double start_pitch = *snapshot_.current_pitch10 / 10.0;
             const std::pair<double, double> targets[] = {
-                {offsetAngle(origin_yaw, 3.0), origin_pitch},
-                {offsetAngle(origin_yaw, -3.0), origin_pitch},
-                {origin_yaw, origin_pitch},
-                {origin_yaw, offsetAngle(origin_pitch, 3.0)},
-                {origin_yaw, offsetAngle(origin_pitch, -3.0)},
-                {origin_yaw, origin_pitch},
+                {offsetAngle(start_yaw, 15.0), start_pitch},
+                {offsetAngle(start_yaw, -15.0), start_pitch},
+                {start_yaw, start_pitch},
+                {start_yaw, offsetAngle(start_pitch, 15.0)},
+                {start_yaw, offsetAngle(start_pitch, -15.0)},
+                {start_yaw, start_pitch},
             };
             result.success = true;
             for (const auto& target : targets) {
                 auto moved = moveToVerifiedLocked(target.first, target.second,
                                                   std::min(timeout_ms, 5000),
-                                                  1.0, true, true, 1U, false);
+                                                  2.0, true, false, 3U, false);
                 result.transcript.insert(result.transcript.end(),
                                          moved.transcript.begin(),
                                          moved.transcript.end());

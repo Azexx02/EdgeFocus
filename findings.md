@@ -677,3 +677,21 @@
 - 精确 180°目标无法通过旧协议携带方向；AUTO 不得直接下发，G431 对外部直接等距目标固定负方向。
 - 规格三轮审查最终 Approved；提交链为 `b0edd38`、`9804976`、`b50a6cd`、`b247b43`。
 - 上一轮未提交 `containsWithMargin`/维护恢复带与最终产品设计冲突，实施首步必须定向删除而非提交。
+# 2026-07-22 Maintenance 范围外回零失败
+
+- 新 G431 固件能力协商通过：协议 3.0、`REV=FULLRNG`、`FULL_RANGE_POSITION`，Fault/UARTERR 均为 0。
+- Production 10°测试被 `CURRENT_CONFIG_REQUIRED` 正确拒绝，未运动并 STOP。
+- 起点 yaw≈353.7°（-6.3°）、pitch≈58.6°，仍在产品 ±70°窗内，但超出 Maintenance ±10°窗。
+- `maintenance-move` 在检查起点和进入专用回零前先调用 `Hold`，固件因此返回 `BAD_RANGE`；`auto_center_attempted=false` 证明失败发生在回零分支之前。
+- 修复应删除该前置 HOLD；现有 `moveToMaintenanceVerified(0,0,...,reject_divergence=true)` 已具备目标固定为原点、姿态新鲜、产品窗和背离停止保护。
+## 2026-07-22 Gimbal initialization findings
+
+- `current-sample` with absolute +/-3 and +/-8 degree targets was accepted by
+  protocol 3.0 but yaw stayed near -3 to -4 degrees until timeout; no hardware
+  fault was asserted.
+- G431 Maintenance is capped at pitch/yaw 260/180 duty ticks versus Production
+  360/520 ticks. The yaw cap is below the measured mechanical start requirement.
+- G431 also applies a +/-10 degree target/hold window only to Maintenance.
+- Production correctly rejects arming while current protection is unconfigured.
+  This gate must remain; only the bootstrap profile should become internal and
+  mechanically usable.
