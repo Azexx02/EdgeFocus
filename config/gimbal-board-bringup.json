@@ -11,7 +11,8 @@
     "pitch_min": -10.0,
     "pitch_max": 10.0
   },
-  "small_nudge_deg": 10.0,
+  "manual_nudge_deg": 30.0,
+  "manual_fine_nudge_deg": 10.0,
   "maximum_safe_target_speed": null,
   "tracking": {
     "target_x": 0.5,

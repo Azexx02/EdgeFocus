@@ -1,5 +1,42 @@
 # Focus App 当前实施计划
 
+## 2026-07-22 云台全周人工控制与受限自动控制
+
+目标：G431 两轴提供 0～359.9°单圈位置控制；主机 AUTO 限制在原点 ±70°且范围外只准小步向内；MANUAL 全周并在从内部向外跨 ±70°时完成一次物理稳定停靠；网页与 APP 通过每条命令的 `fine_tune` 布尔属性选择主机配置的普通/微调步进。
+
+规格：`docs/superpowers/specs/2026-07-22-gimbal-full-range-manual-bounded-auto-design.md`，三轮审查 Approved，用户批准，最终规格提交 `b247b43` 之后包含修订提交 `b50a6cd` 与状态提交。
+
+1. [complete] 盘点 G431、主机自动/人工链路与旧 ±70°约束，确认两轴全周机械能力
+2. [complete] 与用户确认 AUTO 范围外向内、MANUAL 单次停靠、边界原位直接运动和普通/微调按钮语义
+3. [complete] 编写规格并完成三轮独立审查，闭合环形角度、并发事务、NVM 兼容和板端验收安全
+4. [complete] 清理上一轮未提交的临时维护恢复带，形成详细实现切片与测试先行顺序
+5. [complete] G431 Production 全周 TRACK/HOLD、Maintenance ±10°隔离、能力标识与 NVM golden 测试
+6. [complete] 主机纯 `GimbalMotionPolicy`、普通/微调配置、AUTO 双轴裁决和 MANUAL PENDING/ARMED 状态机
+7. [complete] AppCommandService/网页接入 `fine_tune`，保持旧客户端缺省普通步进兼容
+8. [complete] 完成本机 G431/Host 构建、专项测试、全量测试及静态检查
+9. [pending] 生成并批准版本化板端验收配置，再构建/部署/分阶段实机验收；未批准前禁止运动
+10. [complete] 输出 `docs/integration/gimbal-manual-boundary-app-fields.md`，完成源代码、测试、固件产物与本地交付证据
+
+### 固定约束
+
+- G431 不区分 AUTO/MANUAL，不新增 TRACK 协议；Production 忽略旧 NVM ±70°窗口，Maintenance 仍 ±10°。
+- APP/网页不发送角度；`fine_tune` 仅属于当前命令，缺失/false=普通，true=微调，可任意交替。
+- 普通/微调初始主机配置 30°/10°，配置必须大于 0 且小于 180°。
+- `BOUNDARY_PENDING` 必须等实测稳定后才能转 `BOUNDARY_ARMED`；快速第二次点击不能提前越界。
+- 单串行执行器事务化双轴快照、策略、TRACK ACK、权威目标和边界状态；UART 结果不确定必须 STOP/重同步。
+- AUTO 精确 180°差值不得直接下发，先生成朝 0°且小于 180°的中间目标。
+- 板端运动前必须存在无占位的 `config/gimbal-full-range-acceptance-v1.json` 并获得批准。
+
+### 本轮错误记录
+
+| 错误 | 处理 |
+|---|---|
+| 多文件 `apply_patch` 在本环境偶发挂起 | 中止挂起单元并拆成单文件小补丁；未使用覆盖式写入，最终执行 `git diff --check` |
+| 2026-07-21 外部执行额度耗尽，上一轮构建/SSH 中断 | 不把临时恢复带标为完成；新轮按最终规格重做并重新测试 |
+| PowerShell 使用 `$host` 触发内置只读变量冲突 | 改用 `$repo` 后重新检索，未影响源码 |
+| 首轮 MSVC 构建未初始化标准库环境 | 通过 Visual Studio `VsDevCmd.bat` 运行真实构建 |
+| G431 host test 旧进程占用 EXE | 终止仅该测试进程后重建，测试通过 |
+
 ## 2026-07-16 云台 UART4 恢复、双后端与正式接入
 
 1. [complete] 只读核对硬件提供的 G431 工程、附带 DTB、板端 UART4 设备节点/设备树、现有 Linux 云台实现和未提交改动

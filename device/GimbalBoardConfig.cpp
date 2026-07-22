@@ -61,10 +61,12 @@ GimbalBoardConfig loadGimbalBoardConfig(const std::string& path) {
             result.limits.pitch_min_offset_deg = numberOrNone(window, "pitch_min");
             result.limits.pitch_max_offset_deg = numberOrNone(window, "pitch_max");
         }
-        const auto nudge = numberOrNone(config, "small_nudge_deg");
+        const auto normal_nudge = numberOrNone(config, "manual_nudge_deg");
+        const auto fine_nudge = numberOrNone(config, "manual_fine_nudge_deg");
         result.precheck.relative_to_alignment = false;
         result.precheck.center = Waypoint{0.0, 0.0};
-        result.precheck.nudge_step_deg = nudge.value_or(5.0);
+        result.precheck.normal_nudge_step_deg = normal_nudge.value_or(30.0);
+        result.precheck.fine_nudge_step_deg = fine_nudge.value_or(10.0);
 
         if (config.contains("search") && config["search"].is_object()) {
             const auto& search = config["search"];

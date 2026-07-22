@@ -39,7 +39,11 @@ struct PrecheckConfig {
     std::vector<Waypoint> search_waypoints;
     std::vector<Waypoint> recovery_waypoints;
     std::optional<Waypoint> center;
-    double nudge_step_deg{5.0};
+    double normal_nudge_step_deg{30.0};
+    double fine_nudge_step_deg{10.0};
+    double manual_boundary_deg{70.0};
+    double boundary_settle_tolerance_deg{2.0};
+    std::int64_t boundary_permission_ttl_ms{10000};
     std::int64_t initial_observe_ms{600};
     std::int64_t waypoint_period_ms{350};
     std::int64_t stop_queueing_ms{23000};
@@ -100,7 +104,8 @@ public:
     CommandResult skipAuto(const std::string& session_id, std::uint64_t sequence,
                            std::int64_t now_ms);
     CommandResult nudge(const std::string& session_id, std::uint64_t sequence,
-                        NudgeDirection direction, std::int64_t now_ms);
+                        NudgeDirection direction, std::int64_t now_ms,
+                        bool fine_tune = false);
     CommandResult center(const std::string& session_id, std::uint64_t sequence,
                          std::int64_t now_ms);
     CommandResult stopMotion(const std::string& session_id, std::uint64_t sequence,
@@ -126,7 +131,8 @@ public:
                                   std::int64_t now_ms);
     CommandResult nudge(const ManualCommandContext& command,
                         NudgeDirection direction,
-                        std::int64_t now_ms);
+                        std::int64_t now_ms,
+                        bool fine_tune = false);
     CommandResult center(const ManualCommandContext& command,
                          std::int64_t now_ms);
     CommandResult stopMotion(const ManualCommandContext& command,
@@ -159,6 +165,7 @@ private:
                                const CommandResult& result);
     void clearLeaseLocked(session::Phase phase, std::string detail);
     void initializeAuthoritativeTargetLocked();
+    void updateBoundaryGatesLocked(const Status& hardware, std::int64_t now_ms);
     std::string issueLeaseTokenLocked(const std::string& owner_id) const;
     bool isMaintenanceFailureLocked(const CommandResult& result,
                                     std::string& detail) const;
@@ -182,6 +189,13 @@ private:
     struct CommandHistory {
         std::uint64_t sequence{};
         CommandResult result;
+    };
+
+    enum class BoundaryGateState : std::uint8_t { Normal, Pending, Armed };
+    struct BoundaryGate {
+        BoundaryGateState state{BoundaryGateState::Normal};
+        int side{};
+        std::int64_t expires_at_ms{};
     };
 
     IGimbalSessionHardware& hardware_;
@@ -218,6 +232,8 @@ private:
     std::vector<double> framing_scores_;
     std::optional<double> manual_target_yaw_deg_;
     std::optional<double> manual_target_pitch_deg_;
+    BoundaryGate yaw_boundary_gate_;
+    BoundaryGate pitch_boundary_gate_;
     std::optional<Waypoint> session_composition_target_;
     PrecheckState state_before_degrade_{PrecheckState::Inactive};
     session::Phase last_phase_{session::Phase::Idle};

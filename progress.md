@@ -379,3 +379,19 @@
 - 2026-07-16：完成 ARM 参考位环形相对安全窗口、PRECHECK 相对 waypoint 与正式会话视觉跟踪控制器；生产配置继续关闭运动，独立 bring-up 配置限制为 yaw ±15°、pitch ±10°。
 - 2026-07-16：本机 `focus_app`/`gimbal_bringup` 编译通过，云台专项 6/6、完整 CTest 30/30 通过，`git diff --check` 无新增格式错误。
 - 2026-07-16：准备上传源码到既有 ARM 编译机时被安全审查拦截；等待用户明确批准向 `192.168.10.6` 传输本项目源码。板端主程序和正式服务均未变更。
+
+# 2026-07-22 云台全周人工控制与受限自动控制
+
+- 完成现有 G431/主机角度链、人工 nudge 和未提交临时恢复带盘点。
+- 用户确认两轴全周机械能力、AUTO 仅主机限 ±70°、范围外向内小步、人工向外跨界单次停靠。
+- 用户确认普通/微调步进由主机配置为 30°/10°，APP/网页每条命令只携带 `fine_tune`，可任意交替。
+- 规格写入 `docs/superpowers/specs/2026-07-22-gimbal-full-range-manual-bounded-auto-design.md`。
+- 三轮独立规格审查修复物理停靠门槛、UART 不确定结果、双轴事务、环形角度、NVM ABI 和板端验收参数后 Approved。
+- 用户已批准最终规格，进入文件化实施计划；writing-plans 技能不可用，按说明使用 planning-with-files 替代。
+- 当前 G431 与主机仍各自保留上一轮未提交临时恢复带改动，尚未进入最终实现或提交。
+- 当前板端运行的是诊断固件 `d32d4c2`；主程序服务此前保持停用，任何运动前需重新只读确认。
+- 2026-07-22：完成主机纯环形角度/AUTO 策略、全周 ACK-only 人工入口、边界 `PENDING/ARMED` 门、30°/10°双步进和 `OUTCOME_UNKNOWN` 停机语义。
+- 2026-07-22：App 与网页均改为逐次 `fine_tune`；网页增加四个独立微调按钮，字段说明写入 `docs/integration/gimbal-manual-boundary-app-fields.md`。
+- 2026-07-22：G431 Production 接受完整单圈、Maintenance 保持 ±10°，`VER` 新增 `FULL_RANGE_POSITION`；旧 NVM V3 结构未修改。
+- 2026-07-22：主机启用 Demo HTTP 的完整构建与 CTest 32/32、G431 host-core 1/1 和 STM32 Release 构建全部通过；BIN/HEX 已由新 ELF 重新生成并记录 SHA-256。
+- 2026-07-22：已生成待批准的 `config/gimbal-full-range-acceptance-v1.json`，`board_motion_allowed=false`；尚未刷写、部署或执行板端运动。

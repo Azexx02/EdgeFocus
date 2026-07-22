@@ -88,7 +88,7 @@ public:
             if (protocol_version == "3.0") {
                 reads_.push_back(
                     "VER,PROTO=3.0,FW=G431-GIMBAL,"
-                    "CAPS=ASYNC_MOTION|POSE|ORIGIN|FAULT_CLASS|HOLD_NOW|NVM_V3|MAINT_ASSIST_DIAG|NEGOTIATION_REQUIRED\n");
+                    "CAPS=ASYNC_MOTION|POSE|ORIGIN|FAULT_CLASS|HOLD_NOW|NVM_V3|MAINT_ASSIST_DIAG|FULL_RANGE_POSITION|NEGOTIATION_REQUIRED\n");
             } else {
                 reads_.push_back("VER,PROTO=2.0,CAPS=UART_ONLY|ARM|TRACK\n");
             }

@@ -99,7 +99,8 @@ PrecheckConfig config() {
     PrecheckConfig value;
     value.search_waypoints = {{-5.0, 0.0, 1000}, {5.0, 0.0, 1000}};
     value.center = Waypoint{0.0, 0.0};
-    value.nudge_step_deg = 2.0;
+    value.normal_nudge_step_deg = 2.0;
+    value.fine_nudge_step_deg = 1.0;
     return value;
 }
 
@@ -136,7 +137,8 @@ void test_board_config_is_protocol3_compact_profile() {
     assert(board.precheck.hard_deadline_ms == 24000);
     assert(board.precheck.search_waypoints.size() == 4);
     assert(board.precheck.recovery_waypoints.empty());
-    assert(board.precheck.nudge_step_deg == 5.0);
+    assert(board.precheck.normal_nudge_step_deg == 30.0);
+    assert(board.precheck.fine_nudge_step_deg == 10.0);
     assert(!board.precheck.relative_to_alignment);
 }
 
@@ -259,6 +261,38 @@ void test_fault_recovery_does_not_repeat_completed_search() {
     assert(controller.snapshot().search_completed);
 }
 
+void test_manual_boundary_stop_then_alternating_fine_crossing() {
+    FakeHardware hardware;
+    hardware.current.yaw_deg = 50.0;
+    hardware.current.pitch_deg = 0.0;
+    auto boundary_config = config();
+    boundary_config.normal_nudge_step_deg = 30.0;
+    boundary_config.fine_nudge_step_deg = 10.0;
+    GimbalPrecheckController controller(hardware, boundary_config);
+    assert(controller.start("boundary", 0));
+    assert(controller.skipAuto("boundary", 1, 50).success);
+    PrecheckStatus issued;
+    assert(controller.manualTakeover("boundary", "web", 1,
+                                     session::Phase::Precheck, 100,
+                                     &issued).success);
+    const auto stopped = controller.nudge(
+        command(issued, 2), NudgeDirection::Right, 200, false);
+    assert(stopped.success && stopped.boundary_stop_planned);
+    assert(stopped.resolved_step_deg == 30.0);
+    assert(hardware.targets.back().first == 70.0);
+
+    const auto pending = controller.nudge(
+        command(issued, 3), NudgeDirection::Right, 201, true);
+    assert(!pending.success && pending.boundary_paused);
+    hardware.current.snapshot.settled = true;
+    controller.maintain(session::Phase::Precheck, 300);
+    const auto crossed = controller.nudge(
+        command(issued, 4), NudgeDirection::Right, 301, true);
+    assert(crossed.success && crossed.fine_tune);
+    assert(crossed.resolved_step_deg == 10.0);
+    assert(hardware.targets.back().first == 80.0);
+}
+
 void test_force_release_and_session_end_origin_policy() {
     FakeHardware hardware;
     GimbalPrecheckController controller(hardware, config());
@@ -294,6 +328,7 @@ int main() {
     test_search_waits_for_verified_waypoints_then_returns_origin();
     test_manual_lease_owner_ttl_and_idempotency();
     test_authoritative_target_preserves_net_displacement();
+    test_manual_boundary_stop_then_alternating_fine_crossing();
     test_fault_recovery_does_not_repeat_completed_search();
     test_force_release_and_session_end_origin_policy();
     std::cout << "gimbal precheck tests passed\n";

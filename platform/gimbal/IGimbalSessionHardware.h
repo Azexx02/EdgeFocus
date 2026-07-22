@@ -11,6 +11,10 @@ public:
     virtual CommandResult enableAndAlign(int timeout_ms = 10000) = 0;
     virtual CommandResult stopAndDisable(int timeout_ms = 1000) = 0;
     virtual CommandResult moveTo(double yaw_deg, double pitch_deg, int timeout_ms = 2000) = 0;
+    virtual CommandResult moveToManual(double yaw_deg, double pitch_deg,
+                                       int timeout_ms = 500) {
+        return moveToManualVerified(yaw_deg, pitch_deg, timeout_ms, 1.5);
+    }
     virtual CommandResult moveToVerified(double yaw_deg, double pitch_deg,
                                          int timeout_ms = 8000,
                                          double tolerance_deg = 1.5) = 0;

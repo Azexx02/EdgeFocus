@@ -1,4 +1,5 @@
 #include "platform/gimbal/GimbalHardwareService.h"
+#include "platform/gimbal/GimbalMotionPolicy.h"
 
 #include "app/AppContext.h"
 #include "app/Logger.h"
@@ -859,6 +860,13 @@ CommandResult GimbalHardwareService::moveTo(double yaw_deg, double pitch_deg,
     }, timeout_ms + 1000);
 }
 
+CommandResult GimbalHardwareService::moveToManual(double yaw_deg, double pitch_deg,
+                                                  int timeout_ms) {
+    return submit([this, yaw_deg, pitch_deg, timeout_ms] {
+        return moveToLocked(yaw_deg, pitch_deg, timeout_ms, false);
+    }, timeout_ms + 1000);
+}
+
 CommandResult GimbalHardwareService::trackTo(double yaw_deg, double pitch_deg,
                                              int timeout_ms) {
     return submit([this, yaw_deg, pitch_deg, timeout_ms] {
@@ -870,14 +878,35 @@ CommandResult GimbalHardwareService::moveToLocked(double yaw_deg, double pitch_d
                                                   int timeout_ms,
                                                   bool enforce_limits) {
     CommandResult result;
+    std::string yaw_decision = "manual_full_range";
+    std::string pitch_decision = "manual_full_range";
     if (!motionAllowedLocked(result)) return result;
     if (enforce_limits && !limits_.verified()) {
         return failure("motion_limits_unverified", ErrorClass::Safety,
                        "LIMITS_UNVERIFIED");
     }
-    if (enforce_limits && !limits_.contains(0.0, 0.0, yaw_deg, pitch_deg)) {
-        return failure("target_out_of_bounds", ErrorClass::Safety,
-                       "TARGET_OUT_OF_BOUNDS");
+    if (enforce_limits) {
+        const bool pose_valid = snapshot_.current_yaw10 && snapshot_.current_pitch10 &&
+            snapshot_.yaw_raw_valid.value_or(false) &&
+            snapshot_.pitch_raw_valid.value_or(false) &&
+            snapshot_.last_pose_at_ms > 0 &&
+            clock_() - snapshot_.last_pose_at_ms <= 500;
+        if (!pose_valid) {
+            return failure("auto_motion_pose_unavailable", ErrorClass::Safety,
+                           "AUTO_POSE_UNAVAILABLE");
+        }
+        const auto yaw_policy = motion_policy::resolveAutoAxis(
+            *snapshot_.current_yaw10, degreeToTenths(yaw_deg),
+            static_cast<std::int32_t>(std::lround(*limits_.yaw_min_offset_deg * 10.0)),
+            static_cast<std::int32_t>(std::lround(*limits_.yaw_max_offset_deg * 10.0)));
+        const auto pitch_policy = motion_policy::resolveAutoAxis(
+            *snapshot_.current_pitch10, degreeToTenths(pitch_deg),
+            static_cast<std::int32_t>(std::lround(*limits_.pitch_min_offset_deg * 10.0)),
+            static_cast<std::int32_t>(std::lround(*limits_.pitch_max_offset_deg * 10.0)));
+        yaw_deg = static_cast<double>(yaw_policy.applied10) / 10.0;
+        pitch_deg = static_cast<double>(pitch_policy.applied10) / 10.0;
+        yaw_decision = motion_policy::axisDecisionName(yaw_policy.decision);
+        pitch_decision = motion_policy::axisDecisionName(pitch_policy.decision);
     }
     if (!machine_.beginMove(clock_())) {
         return failure("invalid_state:" + std::string(stateName(machine_.status().state)),
@@ -889,6 +918,13 @@ CommandResult GimbalHardwareService::moveToLocked(double yaw_deg, double pitch_d
         [](const Event& event) { return event.kind == EventKind::MotionAccepted; },
         timeout_ms, &accepted);
     if (!result.success) {
+        if (result.timeout) {
+            emergencyStopLocked();
+            result.error = "motion_outcome_unknown";
+            result.error_class = ErrorClass::Safety;
+            result.error_code = "OUTCOME_UNKNOWN";
+            result.motion_status = "outcome_unknown_stopped";
+        }
         if (result.error_class == ErrorClass::Fault ||
             result.error_class == ErrorClass::Link) {
             tripFaultLocked(result.error, result.error_class, result.error_code);
@@ -898,6 +934,9 @@ CommandResult GimbalHardwareService::moveToLocked(double yaw_deg, double pitch_d
     result.firmware_accepted = true;
     result.motion_generation = accepted.motion_generation;
     result.settled = false;
+    result.motion_status = "firmware_accepted";
+    result.yaw_decision = yaw_decision;
+    result.pitch_decision = pitch_decision;
     snapshot_.target_yaw10 = degreeToTenths(yaw_deg);
     snapshot_.target_pitch10 = degreeToTenths(pitch_deg);
     snapshot_.motion_generation = accepted.motion_generation;
@@ -955,6 +994,10 @@ CommandResult GimbalHardwareService::moveToVerifiedLocked(
     auto aggregate = moveToLocked(yaw_deg, pitch_deg,
                                   std::min(timeout_ms, 1000), enforce_limits);
     if (!aggregate.success || !aggregate.motion_generation) return aggregate;
+    if (enforce_limits && snapshot_.target_yaw10 && snapshot_.target_pitch10) {
+        yaw_deg = static_cast<double>(*snapshot_.target_yaw10) / 10.0;
+        pitch_deg = static_cast<double>(*snapshot_.target_pitch10) / 10.0;
+    }
     const auto generation = *aggregate.motion_generation;
     const auto deadline = clock_() + timeout_ms;
     unsigned consecutive_samples = 0U;

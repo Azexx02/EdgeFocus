@@ -452,7 +452,8 @@ int main() {
         gimbal::PrecheckConfig config;
         config.search_waypoints = {{-5.0, 0.0}, {5.0, 0.0}};
         config.center = gimbal::Waypoint{0.0, 0.0};
-        config.nudge_step_deg = 2.0;
+        config.normal_nudge_step_deg = 2.0;
+        config.fine_nudge_step_deg = 1.0;
         gimbal::GimbalPrecheckController controller(hardware, config);
         assert(controller.start(started.context->session_id, monotonic));
         PhoneFactBuffer typed_phone_facts;

@@ -1111,7 +1111,11 @@ std::string AppCommandService::executeGimbalPrecheckCommand(
             else if (direction == "up") parsed = gimbal::NudgeDirection::Up;
             else if (direction == "down") parsed = gimbal::NudgeDirection::Down;
             else return makeError(req_id, "direction must be UP, DOWN, LEFT or RIGHT");
-            result = gimbal_precheck_->nudge(lease, parsed, now_ms);
+            if (data.contains("fine_tune") && !data["fine_tune"].is_boolean()) {
+                return makeError(req_id, "fine_tune must be boolean");
+            }
+            result = gimbal_precheck_->nudge(
+                lease, parsed, now_ms, data.value("fine_tune", false));
         } else if (command == "gimbal_center") {
             result = gimbal_precheck_->center(lease, now_ms);
         } else if (command == "gimbal_stop") {
@@ -1128,6 +1132,17 @@ std::string AppCommandService::executeGimbalPrecheckCommand(
         }
     }
     if (!result.success) {
+        if (result.motion_status == "boundary_pending") {
+            return makeResponse(req_id, {
+                {"accepted", false},
+                {"error", result.error},
+                {"fine_tune", result.fine_tune},
+                {"resolved_step_deg", result.resolved_step_deg},
+                {"motion_status", result.motion_status},
+                {"boundary_stop_planned", result.boundary_stop_planned},
+                {"boundary_paused", result.boundary_paused}
+            });
+        }
         return makeError(req_id, result.error.empty() ? "Gimbal command failed" : result.error);
     }
     const auto status = gimbal_precheck_->snapshot();
@@ -1147,6 +1162,15 @@ std::string AppCommandService::executeGimbalPrecheckCommand(
         {"queued", result.queued},
         {"firmware_accepted", result.firmware_accepted},
         {"settled", result.settled},
+        {"fine_tune", result.fine_tune},
+        {"resolved_step_deg", result.resolved_step_deg},
+        {"motion_status", result.motion_status},
+        {"boundary_stop_planned", result.boundary_stop_planned},
+        {"boundary_paused", result.boundary_paused},
+        {"axes", {
+            {"yaw", {{"decision", result.yaw_decision}}},
+            {"pitch", {{"decision", result.pitch_decision}}}
+        }},
         {"motion_generation", result.motion_generation
              ? json(*result.motion_generation) : json(nullptr)},
         {"target_yaw10", hardware.snapshot.target_yaw10

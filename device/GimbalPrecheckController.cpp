@@ -27,8 +27,13 @@ bool PrecheckConfig::verified() const noexcept {
     };
     return center.has_value() && !search_waypoints.empty() &&
            waypoints_valid(search_waypoints) &&
-           waypoints_valid(recovery_waypoints) && nudge_step_deg >= 1.0 &&
-           nudge_step_deg <= 10.0 &&
+           waypoints_valid(recovery_waypoints) && normal_nudge_step_deg >= 1.0 &&
+           normal_nudge_step_deg <= 90.0 && fine_nudge_step_deg >= 1.0 &&
+           fine_nudge_step_deg <= normal_nudge_step_deg &&
+           manual_boundary_deg > 0.0 && manual_boundary_deg < 180.0 &&
+           boundary_settle_tolerance_deg > 0.0 &&
+           boundary_settle_tolerance_deg <= 10.0 &&
+           boundary_permission_ttl_ms >= 1000 &&
            initial_observe_ms >= 0 && waypoint_period_ms > 0 && stop_queueing_ms > 0 &&
            hard_deadline_ms > stop_queueing_ms && hard_deadline_ms <= 24000 &&
            subject_observations >= 2 && subject_observations <= 3 &&
@@ -188,6 +193,8 @@ bool GimbalPrecheckController::start(
     framing_scores_.clear();
     manual_target_yaw_deg_.reset();
     manual_target_pitch_deg_.reset();
+    yaw_boundary_gate_ = {};
+    pitch_boundary_gate_ = {};
     session_composition_target_.reset();
     state_before_degrade_ = PrecheckState::Inactive;
     last_phase_ = session::Phase::Precheck;
@@ -612,6 +619,7 @@ void GimbalPrecheckController::maintain(
         }
     }
     const auto hardware = hardware_.status();
+    updateBoundaryGatesLocked(hardware, now_ms);
     if (status_.state == PrecheckState::Degraded) {
         (void)restoreLocked(phase, now_ms);
         return;
@@ -710,6 +718,28 @@ void GimbalPrecheckController::initializeAuthoritativeTargetLocked() {
     status_.authoritative_target_pitch_deg = manual_target_pitch_deg_;
 }
 
+void GimbalPrecheckController::updateBoundaryGatesLocked(
+    const Status& hardware, std::int64_t now_ms) {
+    const auto update = [&](BoundaryGate& gate, const std::optional<double>& pose) {
+        if (gate.state == BoundaryGateState::Armed && now_ms >= gate.expires_at_ms) {
+            gate = {};
+            return;
+        }
+        if (gate.state != BoundaryGateState::Pending || !pose ||
+            !hardware.snapshot.settled) return;
+        const double offset = shortestAngleDelta(0.0, *pose);
+        const double boundary = static_cast<double>(gate.side) *
+                                config_.manual_boundary_deg;
+        if (std::abs(shortestAngleDelta(boundary, offset)) <=
+            config_.boundary_settle_tolerance_deg) {
+            gate.state = BoundaryGateState::Armed;
+            gate.expires_at_ms = now_ms + config_.boundary_permission_ttl_ms;
+        }
+    };
+    update(yaw_boundary_gate_, hardware.yaw_deg);
+    update(pitch_boundary_gate_, hardware.pitch_deg);
+}
+
 std::string GimbalPrecheckController::issueLeaseTokenLocked(
     const std::string& owner_id) const {
     return status_.session_id + ":" + owner_id + ":" +
@@ -765,16 +795,16 @@ CommandResult GimbalPrecheckController::skipAuto(
 
 CommandResult GimbalPrecheckController::nudge(
     const std::string& session_id, std::uint64_t sequence,
-    NudgeDirection direction, std::int64_t now_ms) {
+    NudgeDirection direction, std::int64_t now_ms, bool fine_tune) {
     const auto current = snapshot();
     return nudge(ManualCommandContext{session_id, "legacy", current.lease_token,
                                       sequence},
-                 direction, now_ms);
+                 direction, now_ms, fine_tune);
 }
 
 CommandResult GimbalPrecheckController::nudge(
     const ManualCommandContext& command, NudgeDirection direction,
-    std::int64_t now_ms) {
+    std::int64_t now_ms, bool fine_tune) {
     std::lock_guard<std::mutex> lock(mutex_);
     CommandResult result;
     if (!validateManualCommandLocked(command, now_ms, result)) return result;
@@ -786,29 +816,69 @@ CommandResult GimbalPrecheckController::nudge(
         rememberCommandLocked(command.sequence, result);
         return result;
     }
+    const double step = fine_tune ? config_.fine_nudge_step_deg
+                                  : config_.normal_nudge_step_deg;
     double yaw = *manual_target_yaw_deg_;
     double pitch = *manual_target_pitch_deg_;
-    if (direction == NudgeDirection::Left) {
-        yaw = offsetAngle(yaw, -config_.nudge_step_deg);
+    BoundaryGate* gate = nullptr;
+    double* selected = nullptr;
+    int direction_sign = 0;
+    if (direction == NudgeDirection::Left || direction == NudgeDirection::Right) {
+        gate = &yaw_boundary_gate_;
+        selected = &yaw;
+        direction_sign = direction == NudgeDirection::Right ? 1 : -1;
+    } else {
+        gate = &pitch_boundary_gate_;
+        selected = &pitch;
+        direction_sign = direction == NudgeDirection::Up ? 1 : -1;
     }
-    if (direction == NudgeDirection::Right) {
-        yaw = offsetAngle(yaw, config_.nudge_step_deg);
+    const double current_offset = shortestAngleDelta(0.0, *selected);
+    const bool outward = direction_sign > 0
+        ? current_offset >= config_.manual_boundary_deg
+        : current_offset <= -config_.manual_boundary_deg;
+    if (gate->state == BoundaryGateState::Pending &&
+        gate->side == direction_sign && outward) {
+        result = rejected("gimbal_boundary_settle_pending");
+        result.fine_tune = fine_tune;
+        result.resolved_step_deg = step;
+        result.motion_status = "boundary_pending";
+        result.boundary_paused = true;
+        rememberCommandLocked(command.sequence, result);
+        return result;
     }
-    if (direction == NudgeDirection::Up) {
-        pitch = offsetAngle(pitch, config_.nudge_step_deg);
-    }
-    if (direction == NudgeDirection::Down) {
-        pitch = offsetAngle(pitch, -config_.nudge_step_deg);
+    bool consume_permission = gate->state == BoundaryGateState::Armed &&
+                              gate->side == direction_sign && outward;
+    const double requested_offset = current_offset + direction_sign * step;
+    bool boundary_stop = false;
+    if (!consume_permission && std::abs(current_offset) < config_.manual_boundary_deg &&
+        ((direction_sign > 0 && requested_offset > config_.manual_boundary_deg) ||
+         (direction_sign < 0 && requested_offset < -config_.manual_boundary_deg))) {
+        *selected = normalizeAngle(direction_sign * config_.manual_boundary_deg);
+        boundary_stop = true;
+    } else {
+        *selected = offsetAngle(*selected, direction_sign * step);
     }
     // Manual input is acknowledged at the firmware target-acceptance boundary.
     // Settlement remains observable through the shared gimbal snapshot, so a
     // BLE/network callback never waits several seconds for the motor to arrive.
-    result = hardware_.moveTo(yaw, pitch, 500);
+    result = hardware_.moveToManual(yaw, pitch, 500);
+    result.fine_tune = fine_tune;
+    result.resolved_step_deg = step;
+    result.boundary_stop_planned = boundary_stop;
+    result.boundary_paused = boundary_stop;
+    result.motion_status = boundary_stop ? "moving_to_boundary" : "firmware_accepted";
     if (result.success) {
         manual_target_yaw_deg_ = yaw;
         manual_target_pitch_deg_ = pitch;
         status_.authoritative_target_yaw_deg = yaw;
         status_.authoritative_target_pitch_deg = pitch;
+        if (boundary_stop) {
+            gate->state = BoundaryGateState::Pending;
+            gate->side = direction_sign;
+            gate->expires_at_ms = 0;
+        } else if (consume_permission || !outward) {
+            *gate = {};
+        }
     } else if (result.error != "target_out_of_bounds" &&
                result.error_code != "TARGET_OUT_OF_RANGE") {
         degradeLocked(result.error.empty() ? "gimbal_nudge_failed" : result.error);

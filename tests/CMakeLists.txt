@@ -390,6 +390,11 @@ add_executable(test_gimbal_state_machine
 target_link_libraries(test_gimbal_state_machine PRIVATE edgefocus_gimbal_core)
 add_test(NAME test_gimbal_state_machine COMMAND test_gimbal_state_machine)
 
+add_executable(test_gimbal_motion_policy
+    ../platform/gimbal/tests/test_gimbal_motion_policy.cpp)
+target_include_directories(test_gimbal_motion_policy PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+add_test(NAME test_gimbal_motion_policy COMMAND test_gimbal_motion_policy)
+
 add_executable(test_gimbal_hardware_service
     ../platform/gimbal/tests/test_gimbal_hardware_service.cpp
     ../app/AppContext.cpp)

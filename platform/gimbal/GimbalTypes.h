@@ -254,6 +254,13 @@ struct CommandResult {
     std::optional<std::uint32_t> motion_generation;
     std::optional<CurrentTelemetry> current;
     std::optional<MaintenanceAssistDiagnostics> maintenance_assist;
+    bool fine_tune{};
+    double resolved_step_deg{};
+    std::string motion_status;
+    bool boundary_stop_planned{};
+    bool boundary_paused{};
+    std::string yaw_decision;
+    std::string pitch_decision;
     ErrorClass error_class{ErrorClass::None};
     std::string error_code;
 };

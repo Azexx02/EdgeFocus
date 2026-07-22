@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "policy": "full-range-manual-bounded-auto",
+  "approval_state": "pending_explicit_user_approval",
+  "required_firmware_protocol": "3.0",
+  "required_firmware_capability": "FULL_RANGE_POSITION",
+  "auto_boundary_deg": 70.0,
+  "first_boundary_crossing_max_step_deg": 10.0,
+  "minimum_command_interval_ms": 1000,
+  "test_one_axis_at_a_time": true,
+  "independent_stop_required": true,
+  "board_motion_allowed": false
+}

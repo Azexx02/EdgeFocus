@@ -307,7 +307,7 @@ bool hasRequiredProtocol3Capabilities(const Event& event) noexcept {
     const std::set<std::string> available(event.capabilities.begin(), event.capabilities.end());
     static const char* required[] = {
         "ASYNC_MOTION", "POSE", "ORIGIN", "FAULT_CLASS", "HOLD_NOW",
-        "NVM_V3", "NEGOTIATION_REQUIRED",
+        "NVM_V3", "FULL_RANGE_POSITION", "NEGOTIATION_REQUIRED",
     };
     return std::all_of(std::begin(required), std::end(required),
                        [&](const char* value) { return available.count(value) != 0; });

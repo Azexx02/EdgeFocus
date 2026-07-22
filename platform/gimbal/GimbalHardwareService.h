@@ -73,6 +73,8 @@ public:
     CommandResult enableAndAlign(int timeout_ms = 10000) override;
     CommandResult stopAndDisable(int timeout_ms = 1000) override;
     CommandResult moveTo(double yaw_deg, double pitch_deg, int timeout_ms = 2000) override;
+    CommandResult moveToManual(double yaw_deg, double pitch_deg,
+                               int timeout_ms = 500) override;
     CommandResult moveToVerified(double yaw_deg, double pitch_deg,
                                  int timeout_ms = 8000,
                                  double tolerance_deg = 1.5) override;

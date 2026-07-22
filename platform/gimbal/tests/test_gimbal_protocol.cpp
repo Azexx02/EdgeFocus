@@ -20,7 +20,7 @@ int main() {
 
     auto event = parseEvent(
         "VER,PROTO=3.0,FW=G431-GIMBAL,"
-        "CAPS=ASYNC_MOTION|POSE|ORIGIN|FAULT_CLASS|HOLD_NOW|NVM_V3|NEGOTIATION_REQUIRED");
+        "CAPS=ASYNC_MOTION|POSE|ORIGIN|FAULT_CLASS|HOLD_NOW|NVM_V3|FULL_RANGE_POSITION|NEGOTIATION_REQUIRED");
     assert(event.kind == EventKind::Version);
     assert(event.protocol_version == "3.0");
     assert(hasRequiredProtocol3Capabilities(event));
