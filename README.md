@@ -6,6 +6,7 @@
 - 主机必须先完成 `VER` 和 `HELLO HOST PROTO=3.0` 协商。
 - 普通 `ARM` 不校准、不改变零位；缺少电气校准、机械原点或电流保护时拒绝生产使能。
 - `TRACK YP yaw10 pitch10` 使用 0.1° 环形坐标，ACK 只表示目标已接受；物理到位以同 generation 的 `POSE,SETTLED=1` 为准。
+- Production 位置域为完整 `0..3599` 单圈坐标，并以 `FULL_RANGE_POSITION` 能力标识协商；AUTO ±70°业务边界由主机负责，Maintenance 仍限制在永久原点 ±10°。
 - 单字节 `!` 是独立急停入口；`STOP` 关闭 PWM/Boost，但不清除 NVM。
 - 电气校准、永久原点、电流保护和 NVM 清除只允许通过主机维护向导执行。
 

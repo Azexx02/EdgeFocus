@@ -82,7 +82,7 @@ static void test_angles(void) {
     assert(!gimbal_angle10_target_in_window(701U, -700, 700));
     assert(!gimbal_angle10_target_in_window(2899U, -700, 700));
     assert(!gimbal_angle10_target_in_window(0U, 10, 700));
-    assert(gimbal_angle10_profile_target_allowed(
+    assert(!gimbal_angle10_profile_target_allowed(
         0U, 559U, -700, 700, -700, 700, true, true, 100));
     assert(!gimbal_angle10_profile_target_allowed(
         0U, 701U, -700, 700, -700, 700, true, true, 100));
@@ -92,10 +92,14 @@ static void test_angles(void) {
         101U, 0U, -700, 700, -700, 700, true, false, 100));
     assert(gimbal_angle10_profile_target_allowed(
         700U, 559U, -700, 700, -700, 700, false, true, 100));
+    assert(gimbal_angle10_profile_target_allowed(
+        1700U, 2500U, -700, 700, -700, 700, false, false, 100));
     assert(!gimbal_angle10_profile_target_allowed(
         3600U, 0U, -700, 700, -700, 700, true, true, 100));
-    assert(!gimbal_angle10_profile_target_allowed(
+    assert(gimbal_angle10_profile_target_allowed(
         0U, 0U, 10, 700, -700, 700, true, true, 100));
+    assert(!gimbal_angle10_profile_target_allowed(
+        0U, 0U, -700, 700, -700, 700, true, true, 0));
     assert(!gimbal_angle10_profile_target_allowed(
         0U, 0U, -700, 700, -700, 700, true, false, 0));
     assert(gimbal_raw_to_angle10(1000U, 1000U, 1) == 0U);

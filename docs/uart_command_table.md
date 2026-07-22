@@ -27,7 +27,7 @@ POSE
 | `STOP` | 使能/校准/FAULT | 确保 PWM/Boost 关闭；不清 NVM |
 | `!` | 任意 | 无需换行的独立紧急停止 |
 
-`yaw10/pitch10` 为 `0..3599` 的 0.1° 环形坐标。目标还会由永久原点 ±70° 安全窗校验。ACK 不是到位；只接受同 generation 的 `POSE,SETTLED=1`。
+`yaw10/pitch10` 为 `0..3599` 的 0.1° 单圈环形坐标。Production 接受完整单圈位置，`VER` 通过 `FULL_RANGE_POSITION` 声明该能力；旧 NVM V3 安全窗字段保留但不再作为 Production 业务限位。AUTO ±70°边界和人工跨界停靠由 STM32MP257 主机执行。ACK 不是到位；只接受同 generation 的 `POSE,SETTLED=1`。
 
 ## 维护命令
 
