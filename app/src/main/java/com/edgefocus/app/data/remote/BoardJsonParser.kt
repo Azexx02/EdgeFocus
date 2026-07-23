@@ -145,7 +145,6 @@ data class PrecheckGimbal(
     val manualControlAvailable: Boolean = manualLease,
     val searchCompleted: Boolean = false,
     val skipSearchEnabled: Boolean = false,
-    val stopEnabled: Boolean = false,
     val communicationHealth: String? = null,
     val hardwareFaultActive: Boolean = false,
     val hardwareFaultCode: String? = null,
@@ -663,7 +662,6 @@ object BoardJsonParser {
                 ?: inferredManualControlAvailable,
             skipSearchEnabled = controls?.optBooleanOrNull("skip_search_enabled")
                 ?: (state.lowercase() in setOf("searching", "centering", "framing")),
-            stopEnabled = controls?.optBooleanOrNull("stop_enabled") ?: false,
             communicationHealth = communicationHealth,
             hardwareFaultActive = hardwareFault,
             hardwareFaultCode = runtime?.optJsonString("hardware_fault_code")

@@ -112,9 +112,6 @@ class PrecheckController @Inject constructor(
         val sessionId = currentSessionId()
         val current = timerStateHolder.state.value
         check(current.timerState == TimerState.PRECHECK) { "主机已退出 PRECHECK" }
-        check(PrecheckConfirmationPolicy.canStopGimbal(current.precheck?.gimbal)) {
-            "主机尚未开放云台停止"
-        }
         manualInput.clear("已请求停止云台")
         bleManager.cancelPreviewRequests()
         bleManager.cancelGimbalControlRequests()

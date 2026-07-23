@@ -823,7 +823,7 @@ class BoardJsonParserTest {
     }
 
     @Test
-    fun `runtime gimbal controls expose skip and stop buttons during search`() {
+    fun `runtime gimbal controls expose skip button during search`() {
         val response = """
             {
               "status":"success",
@@ -837,8 +837,7 @@ class BoardJsonParserTest {
                     "search_completed":false,
                     "controls":{
                       "manual_enabled":false,
-                      "skip_search_enabled":true,
-                      "stop_enabled":true
+                      "skip_search_enabled":true
                     }
                   }
                 }
@@ -852,7 +851,6 @@ class BoardJsonParserTest {
         assertFalse(gimbal!!.manualControlAvailable)
         assertFalse(gimbal.searchCompleted)
         assertTrue(gimbal.skipSearchEnabled)
-        assertTrue(gimbal.stopEnabled)
     }
 
     @Test
@@ -868,8 +866,7 @@ class BoardJsonParserTest {
                       "search_completed":true,
                       "controls":{
                         "manual_enabled":true,
-                        "skip_search_enabled":false,
-                        "stop_enabled":true
+                        "skip_search_enabled":false
                       }
                     }
                 """.trimIndent()
@@ -883,7 +880,6 @@ class BoardJsonParserTest {
         assertTrue(gimbal!!.manualControlAvailable)
         assertTrue(gimbal.searchCompleted)
         assertFalse(gimbal.skipSearchEnabled)
-        assertTrue(gimbal.stopEnabled)
     }
 
     @Test

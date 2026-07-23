@@ -69,8 +69,6 @@ internal object PrecheckConfirmationPolicy {
         (gimbal.skipSearchEnabled ||
             gimbal.state.lowercase() in setOf("searching", "centering", "framing"))
 
-    fun canStopGimbal(gimbal: PrecheckGimbal?): Boolean = gimbal?.stopEnabled == true
-
     fun afterPositionUncertain(
         expectedSessionId: String,
         state: BoardSessionState

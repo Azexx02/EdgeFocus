@@ -29,7 +29,6 @@ class PrecheckConfirmationPolicyTest {
         assertTrue(PrecheckConfirmationPolicy.canConfirm(true, false, gimbal))
         assertFalse(PrecheckConfirmationPolicy.canUseManualControls(gimbal))
         assertFalse(PrecheckConfirmationPolicy.canSkipAutoAdjust(gimbal))
-        assertFalse(PrecheckConfirmationPolicy.canStopGimbal(gimbal))
     }
 
     @Test
@@ -83,31 +82,6 @@ class PrecheckConfirmationPolicyTest {
         assertFalse(PrecheckConfirmationPolicy.canConfirm(true, false, searching))
         assertTrue(PrecheckConfirmationPolicy.canSkipAutoAdjust(searching))
         assertFalse(PrecheckConfirmationPolicy.canUseManualControls(searching))
-        assertFalse(PrecheckConfirmationPolicy.canStopGimbal(searching))
-    }
-
-    @Test
-    fun stopButtonFollowsAuthoritativeStopControlDuringSearchAndDegradedStates() {
-        val searching = PrecheckGimbal(
-            enabled = true,
-            online = true,
-            safe = true,
-            state = "searching",
-            manualLease = false,
-            manualControlAvailable = false,
-            stopEnabled = true
-        )
-        val degraded = searching.copy(
-            state = "degraded",
-            hardwareFaultActive = true,
-            skipSearchEnabled = true
-        )
-
-        assertFalse(PrecheckConfirmationPolicy.canUseManualControls(searching))
-        assertFalse(PrecheckConfirmationPolicy.canUseManualControls(degraded))
-        assertFalse(PrecheckConfirmationPolicy.canSkipAutoAdjust(degraded))
-        assertTrue(PrecheckConfirmationPolicy.canStopGimbal(searching))
-        assertTrue(PrecheckConfirmationPolicy.canStopGimbal(degraded))
     }
 
     @Test
