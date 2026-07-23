@@ -372,7 +372,6 @@ private fun PrecheckPage(
         PrecheckConfirmationPolicy.canSkipAutoAdjust(gimbal)
     val stopGimbalReady = uiState.isBoardConnected &&
         !uiState.sessionId.isNullOrBlank() &&
-        gimbal != null &&
         !uiState.isPrecheckConfirming &&
         uiState.timerState == TimerState.PRECHECK
     Row(
