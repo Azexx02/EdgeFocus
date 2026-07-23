@@ -104,7 +104,8 @@ data class BoardSessionState(
     val precheckGuidance: String? = null,
     val cameraPreview: CameraPreviewImage? = null,
     val focusReason: String? = null,
-    val behaviorContext: String? = null
+    val behaviorContext: String? = null,
+    val partialGimbalPrecheckPush: Boolean = false
 )
 
 fun BoardSessionState.representsActiveRuntime(): Boolean =
@@ -518,7 +519,8 @@ object BoardJsonParser {
             } else {
                 BoardPreparationState.READY
             },
-            precheck = BoardPrecheck(gimbal = gimbal)
+            precheck = BoardPrecheck(gimbal = gimbal),
+            partialGimbalPrecheckPush = true
         )
     }
 

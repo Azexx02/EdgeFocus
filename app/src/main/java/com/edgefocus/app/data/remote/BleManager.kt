@@ -1405,7 +1405,7 @@ class BleManager @Inject constructor(
                 }
                 cmd == "push_gimbal_precheck_state" && eventData != null -> {
                     val snapshot = BoardJsonParser.parseGimbalPrecheckState(eventData)
-                    pushEventHandlers.forEach { it.onPushGimbalPrecheckState(snapshot) }
+                    pushEventHandlers.forEach { it.onPushStateSnapshot(snapshot) }
                 }
                 cmd == "push_session_end" && eventData != null -> {
                     val summary = eventData.toString()

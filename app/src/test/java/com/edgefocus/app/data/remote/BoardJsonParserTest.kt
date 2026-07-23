@@ -876,6 +876,7 @@ class BoardJsonParserTest {
 
         assertEquals(BoardSessionPhase.PRECHECK, state.sessionPhase)
         assertEquals("session_push", state.sessionId)
+        assertTrue(state.partialGimbalPrecheckPush)
         assertNotNull(gimbal)
         assertTrue(gimbal!!.manualControlAvailable)
         assertTrue(gimbal.searchCompleted)

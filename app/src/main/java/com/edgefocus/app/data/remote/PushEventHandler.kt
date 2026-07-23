@@ -20,7 +20,6 @@ data class TimerComplete(
 interface PushEventHandler {
     fun onPushState(state: FocusState)
     fun onPushStateSnapshot(state: BoardSessionState) {}
-    fun onPushGimbalPrecheckState(state: BoardSessionState) {}
     fun onPushSessionEnd(summary: String)
     fun onPushTimerComplete(timerComplete: TimerComplete)
     fun onPushAlert(alert: PushAlert) {}

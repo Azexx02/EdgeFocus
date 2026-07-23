@@ -250,6 +250,12 @@ class TimerStateHolder @Inject constructor(
             }
             override fun onPushStateSnapshot(state: BoardSessionState) {
                 if (_state.value.sessionMode != SessionMode.EDGEFOCUS) return
+                if (state.partialGimbalPrecheckPush) {
+                    if (!precheckExitInFlight.get()) {
+                        applyPrecheckGimbalState(state)
+                    }
+                    return
+                }
                 if (precheckExitInFlight.get()) {
                     if (state.effectivePhase() == BoardSessionPhase.IDLE) {
                         completePrecheckExit(precheckExitEpoch.get(), state)
@@ -266,11 +272,6 @@ class TimerStateHolder @Inject constructor(
                 if (state.representsActiveRuntime()) {
                     applyBoardSessionState(state)
                 }
-            }
-            override fun onPushGimbalPrecheckState(state: BoardSessionState) {
-                if (_state.value.sessionMode != SessionMode.EDGEFOCUS) return
-                if (precheckExitInFlight.get()) return
-                applyPrecheckGimbalState(state)
             }
             override fun onPushSessionEnd(summary: String) {
                 cancelBoardCompletionFallback()
