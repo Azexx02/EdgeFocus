@@ -105,13 +105,9 @@ object HostJsonCodec {
     ): JSONObject {
         require(command in setOf(
             "precheck_skip_auto_adjust",
-            "gimbal_manual_takeover",
-            "gimbal_lease_keepalive",
             "gimbal_nudge",
             "gimbal_center",
             "gimbal_stop",
-            "gimbal_release",
-            "gimbal_force_release",
             "gimbal_recover",
             "precheck_confirm_position"
         ))
@@ -120,16 +116,8 @@ object HostJsonCodec {
         val data = JSONObject()
             .put("session_id", sessionId)
             .put("sequence", sequence)
-        if (command !in setOf("precheck_skip_auto_adjust", "gimbal_recover")) {
+        if (command != "gimbal_recover") {
             data.put("owner_id", requireNotNull(ownerId).also { require(it.isNotBlank()) })
-        }
-        if (command !in setOf(
-                "precheck_skip_auto_adjust",
-                "gimbal_recover",
-                "gimbal_manual_takeover"
-            )
-        ) {
-            data.put("lease_token", requireNotNull(leaseToken).also { require(it.isNotBlank()) })
         }
         if (command == "gimbal_nudge") {
             val normalized = requireNotNull(direction).uppercase()
@@ -137,7 +125,6 @@ object HostJsonCodec {
             data.put("direction", normalized)
             data.put("fine_tune", fineTune ?: true)
         }
-        if (command == "gimbal_force_release") data.put("confirmed", confirmed == true)
         return request(command, requestId, data)
     }
 

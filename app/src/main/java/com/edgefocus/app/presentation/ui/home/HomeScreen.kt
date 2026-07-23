@@ -339,6 +339,9 @@ private fun HomePrecheckPage(
     )
     val skipAutoAdjustReady = !uiState.isPrecheckConfirming &&
         PrecheckConfirmationPolicy.canSkipAutoAdjust(gimbal)
+    val stopGimbalReady = preparationReady &&
+        !uiState.isPrecheckConfirming &&
+        PrecheckConfirmationPolicy.canStopGimbal(gimbal)
     Box(modifier = modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier
@@ -458,7 +461,7 @@ private fun HomePrecheckPage(
                 enabled = manualControlsReady,
                 onNudge = { viewModel.nudgeGimbal("DOWN", it) }
             )
-            TextButton(onClick = viewModel::stopGimbal, enabled = manualControlsReady) { Text("停止云台") }
+            TextButton(onClick = viewModel::stopGimbal, enabled = stopGimbalReady) { Text("停止云台") }
         }
 
             uiState.boardErrorMessage?.let {

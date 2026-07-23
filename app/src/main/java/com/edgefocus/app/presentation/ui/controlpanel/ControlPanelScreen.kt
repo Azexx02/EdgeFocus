@@ -370,6 +370,9 @@ private fun PrecheckPage(
     )
     val skipAutoAdjustReady = !uiState.isPrecheckConfirming &&
         PrecheckConfirmationPolicy.canSkipAutoAdjust(gimbal)
+    val stopGimbalReady = preparationReady &&
+        !uiState.isPrecheckConfirming &&
+        PrecheckConfirmationPolicy.canStopGimbal(gimbal)
     Row(
         modifier = Modifier
             .fillMaxSize()
@@ -554,7 +557,7 @@ private fun PrecheckPage(
                         enabled = manualControlsReady,
                         onNudge = { viewModel.nudgeGimbal("DOWN", it) }
                     )
-                    TextButton(onClick = viewModel::stopGimbal, enabled = manualControlsReady) {
+                    TextButton(onClick = viewModel::stopGimbal, enabled = stopGimbalReady) {
                         Text("停止")
                     }
                 }

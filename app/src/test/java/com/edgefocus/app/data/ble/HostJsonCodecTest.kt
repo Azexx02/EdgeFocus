@@ -22,21 +22,20 @@ class HostJsonCodecTest {
     }
 
     @Test
-    fun `precheck nudge carries lease identity and host resolved fine tune intent`() {
+    fun `precheck nudge carries owner identity without lease token`() {
         val request = HostJsonCodec.gimbalCommand(
             requestId = 2,
             command = "gimbal_nudge",
             sessionId = "session_1",
             sequence = 18,
             direction = "left",
-            ownerId = "app-test",
-            leaseToken = "lease-test"
+            ownerId = "app-test"
         )
         val data = request.getJSONObject("data")
 
         assertEquals("LEFT", data.getString("direction"))
         assertEquals("app-test", data.getString("owner_id"))
-        assertEquals("lease-test", data.getString("lease_token"))
+        assertFalse(data.has("lease_token"))
         assertTrue(data.getBoolean("fine_tune"))
         assertFalse(data.has("step_deg"))
     }
@@ -50,13 +49,30 @@ class HostJsonCodecTest {
             sequence = 19,
             direction = "right",
             ownerId = "app-test",
-            leaseToken = "lease-test",
             fineTune = false
         )
         val data = request.getJSONObject("data")
 
         assertFalse(data.getBoolean("fine_tune"))
+        assertFalse(data.has("lease_token"))
         assertFalse(data.has("step_deg"))
+    }
+
+    @Test
+    fun `skip automatic adjustment carries owner identity without lease token`() {
+        val request = HostJsonCodec.gimbalCommand(
+            requestId = 4,
+            command = "precheck_skip_auto_adjust",
+            sessionId = "session_1",
+            sequence = 20,
+            ownerId = "app-test"
+        )
+        val data = request.getJSONObject("data")
+
+        assertEquals("session_1", data.getString("session_id"))
+        assertEquals("app-test", data.getString("owner_id"))
+        assertEquals(20L, data.getLong("sequence"))
+        assertFalse(data.has("lease_token"))
     }
 
     @Test

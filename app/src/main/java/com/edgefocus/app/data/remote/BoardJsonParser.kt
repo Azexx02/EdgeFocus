@@ -143,6 +143,9 @@ data class PrecheckGimbal(
     val controlMode: String? = null,
     val manualLease: Boolean = false,
     val manualControlAvailable: Boolean = manualLease,
+    val searchCompleted: Boolean = false,
+    val skipSearchEnabled: Boolean = false,
+    val stopEnabled: Boolean = false,
     val communicationHealth: String? = null,
     val hardwareFaultActive: Boolean = false,
     val hardwareFaultCode: String? = null,
@@ -502,6 +505,24 @@ object BoardJsonParser {
         )
     }
 
+    fun parseGimbalPrecheckState(data: JSONObject): BoardSessionState {
+        val gimbal = parsePrecheckGimbal(legacy = null, runtime = data)
+        val degraded = data.optBoolean("degraded", false) ||
+            gimbal?.state.equals("degraded", ignoreCase = true) ||
+            gimbal?.hardwareFaultActive == true
+        return BoardSessionState(
+            sessionId = data.optJsonString("session_id"),
+            active = true,
+            sessionPhase = BoardSessionPhase.PRECHECK,
+            preparationState = if (degraded) {
+                BoardPreparationState.DEGRADED
+            } else {
+                BoardPreparationState.READY
+            },
+            precheck = BoardPrecheck(gimbal = gimbal)
+        )
+    }
+
     fun parseTimerComplete(data: JSONObject): TimerComplete {
         return TimerComplete(
             sessionId = data.optJsonString("session_id"),
@@ -592,6 +613,7 @@ object BoardJsonParser {
             ?: legacy?.optBooleanOrNull("online")
             ?: (available && normalizedHealth !in setOf("not_started", "offline", "failed"))
         val hardwareFault = runtime?.optBooleanOrNull("hardware_fault_active")
+            ?: runtime?.optBooleanOrNull("degraded")
             ?: legacy?.optBooleanOrNull("hardware_fault_active")
             ?: false
         val currentYaw = runtime?.optDoubleOrNull("current_yaw_deg")
@@ -611,6 +633,7 @@ object BoardJsonParser {
         val controlMode = runtime?.optJsonString("control_mode")
             ?: legacy?.optJsonString("control_mode")
         val detail = runtime?.optJsonString("detail") ?: legacy?.optJsonString("detail")
+        val controls = runtime?.optJSONObject("controls")
         val inferredManualControlAvailable =
             state.equals("manual_available", ignoreCase = true) ||
                 state.equals("manual", ignoreCase = true) ||
@@ -631,12 +654,20 @@ object BoardJsonParser {
             state = state,
             controlMode = controlMode,
             manualLease = manualLease,
-            manualControlAvailable = runtime?.optBooleanOrNull("manual_control_available")
+            manualControlAvailable = controls?.optBooleanOrNull("manual_enabled")
+                ?: runtime?.optBooleanOrNull("manual_control_available")
                 ?: legacy?.optBooleanOrNull("manual_control_available")
                 ?: (manualLease || inferredManualControlAvailable),
+            searchCompleted = runtime?.optBooleanOrNull("search_completed")
+                ?: legacy?.optBooleanOrNull("search_completed")
+                ?: inferredManualControlAvailable,
+            skipSearchEnabled = controls?.optBooleanOrNull("skip_search_enabled")
+                ?: (state.lowercase() in setOf("searching", "centering", "framing")),
+            stopEnabled = controls?.optBooleanOrNull("stop_enabled") ?: false,
             communicationHealth = communicationHealth,
             hardwareFaultActive = hardwareFault,
             hardwareFaultCode = runtime?.optJsonString("hardware_fault_code")
+                ?: runtime?.optJsonString("fault_code")
                 ?: legacy?.optJsonString("hardware_fault_code"),
             lastCommandErrorCode = runtime?.optJsonString("last_command_error_code")
                 ?: legacy?.optJsonString("last_command_error_code"),

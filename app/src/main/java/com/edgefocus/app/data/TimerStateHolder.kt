@@ -210,7 +210,9 @@ class TimerStateHolder @Inject constructor(
                     checkBoardSession()
                     if (_state.value.timerState == TimerState.RUNNING ||
                         (_state.value.timerState == TimerState.PRECHECK &&
-                            _state.value.precheck?.gimbal?.manualLease != true) ||
+                            !PrecheckConfirmationPolicy.canUseManualControls(
+                                _state.value.precheck?.gimbal
+                            )) ||
                         _state.value.timerState == TimerState.PAUSED
                     ) {
                         startBoardSync()
@@ -264,6 +266,11 @@ class TimerStateHolder @Inject constructor(
                 if (state.representsActiveRuntime()) {
                     applyBoardSessionState(state)
                 }
+            }
+            override fun onPushGimbalPrecheckState(state: BoardSessionState) {
+                if (_state.value.sessionMode != SessionMode.EDGEFOCUS) return
+                if (precheckExitInFlight.get()) return
+                applyPrecheckGimbalState(state)
             }
             override fun onPushSessionEnd(summary: String) {
                 cancelBoardCompletionFallback()
@@ -1304,8 +1311,8 @@ class TimerStateHolder @Inject constructor(
         when (timerState) {
             TimerState.PRECHECK -> {
                 localCountdownJob?.cancel()
-                if (boardState.precheck?.gimbal?.manualLease == true) {
-                    // Once the board grants manual control, the last
+                if (PrecheckConfirmationPolicy.canUseManualControls(boardState.precheck?.gimbal)) {
+                    // Once PRECHECK manual control is open, the last
                     // authoritative snapshot is sufficient for UI gating.
                     // Continuous 3 KB state responses otherwise occupy the
                     // BLE notification channel and delay every direction tap.
@@ -1328,6 +1335,55 @@ class TimerStateHolder @Inject constructor(
                 localCountdownJob?.cancel()
                 stopBoardSync()
             }
+        }
+    }
+
+    private fun applyPrecheckGimbalState(boardState: BoardSessionState) {
+        val gimbal = boardState.precheck?.gimbal ?: return
+        val incomingSessionId = boardState.sessionId?.takeIf { it.isNotBlank() }
+        val before = _state.value
+        if (PrecheckConfirmationPolicy.isStalePrecheckRegression(
+                currentTimerState = before.timerState,
+                currentSessionId = before.sessionId,
+                incomingSessionId = incomingSessionId,
+                incomingPhase = BoardSessionPhase.PRECHECK
+            )
+        ) {
+            appEventLog.log(
+                "STALE_PRECHECK_GIMBAL_IGNORED",
+                "session=$incomingSessionId, current=${before.sessionPhase}"
+            )
+            return
+        }
+        if (!before.sessionId.isNullOrBlank() &&
+            !incomingSessionId.isNullOrBlank() &&
+            before.sessionId != incomingSessionId
+        ) {
+            appEventLog.log(
+                "PRECHECK_GIMBAL_SESSION_IGNORED",
+                "incoming=$incomingSessionId, current=${before.sessionId}"
+            )
+            return
+        }
+
+        _state.update {
+            it.copy(
+                timerState = TimerState.PRECHECK,
+                sessionMode = SessionMode.EDGEFOCUS,
+                isSyncingWithBoard = true,
+                sessionId = incomingSessionId ?: it.sessionId,
+                boardSessionActive = true,
+                sessionPhase = BoardSessionPhase.PRECHECK,
+                preparationState = boardState.preparationState,
+                precheck = (it.precheck ?: BoardPrecheck()).copy(gimbal = gimbal),
+                boardErrorMessage = null
+            )
+        }
+
+        if (PrecheckConfirmationPolicy.canUseManualControls(gimbal)) {
+            stopBoardSync()
+        } else {
+            startBoardSync()
         }
     }
 

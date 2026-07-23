@@ -35,7 +35,8 @@ internal enum class SessionReconcileDecision {
 internal object PrecheckConfirmationPolicy {
     fun gimbalReadiness(gimbal: PrecheckGimbal?): PrecheckGimbalReadiness = when {
         gimbal == null -> PrecheckGimbalReadiness.NO_GIMBAL
-        gimbal.state.equals("degraded", ignoreCase = true) -> PrecheckGimbalReadiness.DEGRADED
+        gimbal.hardwareFaultActive || gimbal.state.equals("degraded", ignoreCase = true) ->
+            PrecheckGimbalReadiness.DEGRADED
         !gimbal.manualLease &&
             (gimbal.state.equals("holding", ignoreCase = true) ||
                 gimbal.detail.equals("position_confirmed", ignoreCase = true)) ->
@@ -54,6 +55,7 @@ internal object PrecheckConfirmationPolicy {
         gimbalReadiness(gimbal) != PrecheckGimbalReadiness.BLOCKED_UNREADY
 
     fun canUseManualControls(gimbal: PrecheckGimbal?): Boolean = gimbal != null &&
+        !gimbal.hardwareFaultActive &&
         !gimbal.state.equals("degraded", ignoreCase = true) &&
         (gimbal.manualLease || gimbal.manualControlAvailable ||
             gimbal.state.lowercase() in setOf("manual_available", "holding", "manual") ||
@@ -62,8 +64,12 @@ internal object PrecheckConfirmationPolicy {
 
     fun canSkipAutoAdjust(gimbal: PrecheckGimbal?): Boolean = gimbal != null &&
         !gimbal.manualLease &&
+        !gimbal.hardwareFaultActive &&
         !gimbal.state.equals("degraded", ignoreCase = true) &&
-        gimbal.state.lowercase() in setOf("searching", "centering", "framing")
+        (gimbal.skipSearchEnabled ||
+            gimbal.state.lowercase() in setOf("searching", "centering", "framing"))
+
+    fun canStopGimbal(gimbal: PrecheckGimbal?): Boolean = gimbal?.stopEnabled == true
 
     fun afterPositionUncertain(
         expectedSessionId: String,

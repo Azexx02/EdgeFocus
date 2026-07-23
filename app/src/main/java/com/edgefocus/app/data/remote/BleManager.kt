@@ -1221,8 +1221,7 @@ class BleManager @Inject constructor(
                     .put("command", command)
                     .put("session_id", sessionId)
                     .put("request_sequence", sequence)
-                    .put("manual_lease", command == "gimbal_manual_takeover")
-                    .put("lease_token", if (command == "gimbal_manual_takeover") "simulated-lease" else leaseToken))
+                    .put("manual_lease", false))
             return Result.success(simulated.toString().toByteArray(Charsets.UTF_8))
         }
         val key = GimbalResultKey(sessionId, sequence, command)
@@ -1403,6 +1402,10 @@ class BleManager @Inject constructor(
                         val focusState = FocusState(state = state)
                         pushEventHandlers.forEach { it.onPushState(focusState) }
                     }
+                }
+                cmd == "push_gimbal_precheck_state" && eventData != null -> {
+                    val snapshot = BoardJsonParser.parseGimbalPrecheckState(eventData)
+                    pushEventHandlers.forEach { it.onPushGimbalPrecheckState(snapshot) }
                 }
                 cmd == "push_session_end" && eventData != null -> {
                     val summary = eventData.toString()

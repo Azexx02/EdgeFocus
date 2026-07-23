@@ -797,6 +797,96 @@ class BoardJsonParserTest {
     }
 
     @Test
+    fun `runtime gimbal controls manual enabled wins without lease`() {
+        val response = """
+            {
+              "status":"success",
+              "data":{
+                "runtime_snapshot":{
+                  "session":{"id":"session_controls","phase":"PRECHECK","preparation_state":"READY"},
+                  "gimbal":{
+                    "available":true,
+                    "state":"manual_available",
+                    "manual_lease":false,
+                    "controls":{"manual_enabled":true}
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+
+        val gimbal = BoardJsonParser.parseSessionState(response).precheck?.gimbal
+
+        assertNotNull(gimbal)
+        assertFalse(gimbal!!.manualLease)
+        assertTrue(gimbal.manualControlAvailable)
+    }
+
+    @Test
+    fun `runtime gimbal controls expose skip and stop buttons during search`() {
+        val response = """
+            {
+              "status":"success",
+              "data":{
+                "runtime_snapshot":{
+                  "session":{"id":"session_search","phase":"PRECHECK","preparation_state":"READY"},
+                  "gimbal":{
+                    "available":true,
+                    "state":"searching",
+                    "manual_lease":false,
+                    "search_completed":false,
+                    "controls":{
+                      "manual_enabled":false,
+                      "skip_search_enabled":true,
+                      "stop_enabled":true
+                    }
+                  }
+                }
+              }
+            }
+        """.trimIndent()
+
+        val gimbal = BoardJsonParser.parseSessionState(response).precheck?.gimbal
+
+        assertNotNull(gimbal)
+        assertFalse(gimbal!!.manualControlAvailable)
+        assertFalse(gimbal.searchCompleted)
+        assertTrue(gimbal.skipSearchEnabled)
+        assertTrue(gimbal.stopEnabled)
+    }
+
+    @Test
+    fun `push gimbal precheck state maps to precheck snapshot without full state`() {
+        val state = BoardJsonParser.parseGimbalPrecheckState(
+            org.json.JSONObject(
+                """
+                    {
+                      "session_id":"session_push",
+                      "state":"manual_available",
+                      "degraded":false,
+                      "health_status":"healthy",
+                      "search_completed":true,
+                      "controls":{
+                        "manual_enabled":true,
+                        "skip_search_enabled":false,
+                        "stop_enabled":true
+                      }
+                    }
+                """.trimIndent()
+            )
+        )
+        val gimbal = state.precheck?.gimbal
+
+        assertEquals(BoardSessionPhase.PRECHECK, state.sessionPhase)
+        assertEquals("session_push", state.sessionId)
+        assertNotNull(gimbal)
+        assertTrue(gimbal!!.manualControlAvailable)
+        assertTrue(gimbal.searchCompleted)
+        assertFalse(gimbal.skipSearchEnabled)
+        assertTrue(gimbal.stopEnabled)
+    }
+
+    @Test
     fun `new gimbal fields win while legacy angles remain available`() {
         val response = """
             {"status":"success","data":{

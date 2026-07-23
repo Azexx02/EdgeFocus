@@ -29,8 +29,6 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 
 @Singleton
 class PrecheckController @Inject constructor(
@@ -44,40 +42,20 @@ class PrecheckController @Inject constructor(
         val state: BoardSessionState
     )
 
-    private data class HeldManualLease(
-        val sessionId: String,
-        val token: String,
-        val epoch: Long?,
-        val expiresAtMs: Long?
-    )
-
     private val controllerScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val confirmationGuard = Any()
     private var activeConfirmation: Deferred<Result<Unit>>? = null
     private val _isConfirming = MutableStateFlow(false)
     val isConfirming: StateFlow<Boolean> = _isConfirming.asStateFlow()
-    private val manualLeaseMutex = Mutex()
-    @Volatile private var heldManualLease: HeldManualLease? = null
-
-    private val manualTransactions = ManualGimbalTransactionCoordinator(
-        observe = ::readManualLease,
-        requestSkipAuto = { sessionId ->
-            sendCommand("precheck_skip_auto_adjust", sessionId)
-        }
-    )
 
     private val manualInput = ManualGimbalInputCoordinator(
         scope = controllerScope,
         send = { sessionId, direction, fineTune ->
-            val lease = heldManualLease
-                ?.takeIf { it.sessionId == sessionId }
-                ?: error("云台手动控制租约已失效")
             sendGimbalCommand(
                 command = "gimbal_nudge",
                 sessionId = sessionId,
                 direction = direction.wireValue,
                 ownerId = bleManager.gimbalOwnerId,
-                leaseToken = lease.token,
                 fineTune = fineTune
             )
         }
@@ -90,7 +68,6 @@ class PrecheckController @Inject constructor(
                 .distinctUntilChanged()
                 .collect { (_, ready) ->
                     if (!ready) {
-                        heldManualLease = null
                         manualInput.clear("主机连接已断开")
                     }
                 }
@@ -101,27 +78,9 @@ class PrecheckController @Inject constructor(
                 .distinctUntilChanged()
                 .collect { (_, timerState) ->
                     if (timerState != TimerState.PRECHECK) {
-                        heldManualLease = null
                         manualInput.clear("已退出 PRECHECK")
                     }
                 }
-        }
-        controllerScope.launch {
-            while (true) {
-                delay(LEASE_KEEPALIVE_INTERVAL_MS)
-                val lease = heldManualLease ?: continue
-                val current = timerStateHolder.state.value
-                if (current.timerState != TimerState.PRECHECK || current.sessionId != lease.sessionId) {
-                    heldManualLease = null
-                    continue
-                }
-                sendGimbalCommand(
-                    command = "gimbal_lease_keepalive",
-                    sessionId = lease.sessionId,
-                    ownerId = bleManager.gimbalOwnerId,
-                    leaseToken = lease.token
-                ).onFailure { heldManualLease = null }
-            }
         }
     }
 
@@ -130,24 +89,21 @@ class PrecheckController @Inject constructor(
         val current = timerStateHolder.state.value
         val sessionId = currentSessionId()
         check(current.timerState == TimerState.PRECHECK) { "主机已退出 PRECHECK" }
-        ensureManualLease(sessionId)
+        ensureManualControlsAvailable(sessionId)
         bleManager.cancelPreviewRequests()
         manualInput.enqueue(
             sessionId = sessionId,
-            leaseGeneration = heldManualLease?.epoch,
+            leaseGeneration = null,
             direction = ManualGimbalDirection.fromWire(direction),
             fineTune = fineTune
         ).getOrThrow()
     }
 
-    suspend fun center(): Result<Unit> = withManualLease { sessionId, lease ->
-        manualInput.clear("已请求云台回正")
-        bleManager.cancelGimbalControlRequests()
+    suspend fun center(): Result<Unit> = withManualControls { sessionId ->
         sendGimbalCommand(
             "gimbal_center",
             sessionId,
-            ownerId = bleManager.gimbalOwnerId,
-            leaseToken = lease.token
+            ownerId = bleManager.gimbalOwnerId
         ).map { Unit }
     }
 
@@ -156,15 +112,16 @@ class PrecheckController @Inject constructor(
         val sessionId = currentSessionId()
         val current = timerStateHolder.state.value
         check(current.timerState == TimerState.PRECHECK) { "主机已退出 PRECHECK" }
-        val lease = ensureManualLease(sessionId)
+        check(PrecheckConfirmationPolicy.canStopGimbal(current.precheck?.gimbal)) {
+            "主机尚未开放云台停止"
+        }
         manualInput.clear("已请求停止云台")
         bleManager.cancelPreviewRequests()
         bleManager.cancelGimbalControlRequests()
         sendGimbalCommand(
             "gimbal_stop",
             sessionId,
-            ownerId = bleManager.gimbalOwnerId,
-            leaseToken = lease.token
+            ownerId = bleManager.gimbalOwnerId
         ).getOrThrow()
     }
 
@@ -188,9 +145,7 @@ class PrecheckController @Inject constructor(
         return runCatching { currentSessionId() }.fold(
             onSuccess = {
                 bleManager.cancelPreviewRequests()
-                manualTransactions.runOrdinaryCommand {
-                    stopAutomaticAdjustment(it)
-                }
+                stopAutomaticAdjustment(it)
             },
             onFailure = { Result.failure(it) }
         )
@@ -201,7 +156,7 @@ class PrecheckController @Inject constructor(
             _isConfirming.value = true
             lateinit var created: Deferred<Result<Unit>>
             created = controllerScope.async(start = CoroutineStart.LAZY) {
-                manualTransactions.runCommand { runConfirmationTransaction() }
+                runConfirmationTransaction()
             }
             activeConfirmation = created
             created.invokeOnCompletion {
@@ -251,12 +206,10 @@ class PrecheckController @Inject constructor(
     }
 
     private suspend fun confirmPositionWithReconciliation(sessionId: String) {
-        val lease = ensureManualLease(sessionId)
         val positionResult = sendCommandBytes(
             "precheck_confirm_position",
             sessionId,
-            ownerId = bleManager.gimbalOwnerId,
-            leaseToken = lease.token
+            ownerId = bleManager.gimbalOwnerId
         )
         if (positionResult.isSuccess) {
             val acceptance = HostJsonCodec.parseGimbalAcceptance(
@@ -323,7 +276,11 @@ class PrecheckController @Inject constructor(
     }
 
     private suspend fun stopAutomaticAdjustment(sessionId: String): Result<Unit> = runCatching {
-        sendCommand("precheck_skip_auto_adjust", sessionId).getOrThrow()
+        sendGimbalCommand(
+            "precheck_skip_auto_adjust",
+            sessionId,
+            ownerId = bleManager.gimbalOwnerId
+        ).getOrThrow()
         val deadline = System.nanoTime() + SKIP_SETTLE_TIMEOUT_MS * 1_000_000L
         while (System.nanoTime() < deadline) {
             val observation = readBoardState().getOrThrow()
@@ -342,24 +299,24 @@ class PrecheckController @Inject constructor(
         error("主机未及时结束云台自动调整")
     }
 
-    private suspend fun withManualLease(
-        command: suspend (String, HeldManualLease) -> Result<Unit>
+    private suspend fun withManualControls(
+        command: suspend (String) -> Result<Unit>
     ): Result<Unit> {
         if (_isConfirming.value) {
             return Result.failure(IllegalStateException("正在进入专注会话，请稍候"))
         }
         return runCatching { currentSessionId() }.fold(
             onSuccess = { expectedSessionId ->
-                manualTransactions.runOrdinaryCommand {
-                    runCatching {
-                        val current = timerStateHolder.state.value
-                        check(current.timerState == TimerState.PRECHECK &&
-                            current.sessionId == expectedSessionId
-                        ) { "PRECHECK 会话已变化" }
-                        val lease = ensureManualLease(expectedSessionId)
-                        bleManager.cancelPreviewRequests()
-                        command(expectedSessionId, lease).getOrThrow()
-                    }
+                runCatching {
+                    val current = timerStateHolder.state.value
+                    check(current.timerState == TimerState.PRECHECK &&
+                        current.sessionId == expectedSessionId
+                    ) { "PRECHECK 会话已变化" }
+                    ensureManualControlsAvailable(expectedSessionId)
+                    manualInput.clear("已请求云台控制命令")
+                    bleManager.cancelPreviewRequests()
+                    bleManager.cancelGimbalControlRequests()
+                    command(expectedSessionId).getOrThrow()
                 }
             },
             onFailure = { Result.failure(it) }
@@ -376,14 +333,6 @@ class PrecheckController @Inject constructor(
         BoardObservation(
             response = response,
             state = BoardJsonParser.parseSessionState(String(response, Charsets.UTF_8))
-        )
-    }
-
-    private suspend fun readManualLease(): Result<ManualLeaseObservation> = readBoardState().map { observation ->
-        ManualLeaseObservation(
-            sessionId = observation.state.sessionId,
-            phase = observation.state.effectivePhase(),
-            manualLease = observation.state.precheck?.gimbal?.manualLease == true
         )
     }
 
@@ -447,42 +396,27 @@ class PrecheckController @Inject constructor(
         response
     }
 
-    private suspend fun ensureManualLease(sessionId: String): HeldManualLease =
-        manualLeaseMutex.withLock {
-            val current = timerStateHolder.state.value
-            check(current.timerState == TimerState.PRECHECK && current.sessionId == sessionId) {
-                "PRECHECK 会话已变化"
-            }
-            val gimbal = current.precheck?.gimbal ?: error("主机未提供云台状态")
-            check(!gimbal.state.equals("degraded", ignoreCase = true)) {
-                "云台已降级，当前无法人工接管"
-            }
-            heldManualLease?.takeIf { it.sessionId == sessionId }?.let { return@withLock it }
-
-            check(gimbal.state.lowercase() !in setOf("searching", "centering", "framing")) {
-                "云台正在自动调整；请先点击跳过自动调整"
-            }
-            val takeover = sendGimbalCommand(
-                command = "gimbal_manual_takeover",
-                sessionId = sessionId,
-                ownerId = bleManager.gimbalOwnerId
-            ).getOrThrow()
-            val token = takeover.leaseToken?.takeIf { it.isNotBlank() }
-                ?: error("主机未返回云台控制租约")
-            HeldManualLease(
-                sessionId = sessionId,
-                token = token,
-                epoch = takeover.leaseEpoch,
-                expiresAtMs = takeover.leaseExpiresAtMs
-            ).also {
-                heldManualLease = it
-            }
+    private fun ensureManualControlsAvailable(sessionId: String) {
+        val current = timerStateHolder.state.value
+        check(current.timerState == TimerState.PRECHECK && current.sessionId == sessionId) {
+            "PRECHECK 会话已变化"
         }
+        val gimbal = current.precheck?.gimbal ?: error("主机未提供云台状态")
+        check(!gimbal.state.equals("degraded", ignoreCase = true)) {
+            "云台已降级，当前无法手动调整"
+        }
+        check(gimbal.state.lowercase() !in setOf("searching", "centering", "framing")) {
+            "云台正在自动调整；请先点击跳过自动调整"
+        }
+        check(PrecheckConfirmationPolicy.canUseManualControls(gimbal)) {
+            "主机尚未开放云台手动调整"
+        }
+    }
 
     private fun friendlyGimbalError(error: Throwable): Throwable {
         val commandError = error as? HostCommandException ?: return error
         val message = when (commandError.errorCode) {
-            "MANUAL_LEASE_REQUIRED" -> "请先结束或跳过自动调整"
+            "MANUAL_LEASE_REQUIRED" -> "主机仍要求旧版控制租约，请确认主机已更新"
             "STALE_SEQUENCE" -> "云台状态已更新，请重试"
             "COMMUNICATION_DEGRADED" -> "云台通信不稳定，请稍后重试"
             "HARDWARE_FAULT" -> "云台发生硬件故障，请点击恢复云台"
@@ -517,7 +451,6 @@ class PrecheckController @Inject constructor(
     }
 
     private companion object {
-        const val LEASE_KEEPALIVE_INTERVAL_MS = 5_000L
         const val SKIP_SETTLE_TIMEOUT_MS = 3_000L
         const val SKIP_SETTLE_POLL_MS = 150L
     }
