@@ -122,17 +122,6 @@ class PrecheckController @Inject constructor(
         ).getOrThrow()
     }
 
-    suspend fun recover(): Result<Unit> = runCatching {
-        check(!_isConfirming.value) { "正在进入专注会话，请稍候" }
-        val sessionId = currentSessionId()
-        manualInput.clear("正在恢复云台")
-        bleManager.cancelPreviewRequests()
-        bleManager.cancelGimbalControlRequests()
-        sendGimbalCommand("gimbal_recover", sessionId).getOrThrow()
-    }
-
-    suspend fun realign(): Result<Unit> = recover()
-
     suspend fun confirmPositionAndContinue(): Result<Unit> = confirmationTask().await()
 
     suspend fun skipAutoAdjust(): Result<Unit> {
@@ -387,7 +376,7 @@ class PrecheckController @Inject constructor(
             .getOrThrow()
         val accepted = HostJsonCodec.parseGimbalAcceptance(String(response, Charsets.UTF_8))
         check(accepted.accepted) { accepted.error ?: "$command 被主机拒绝" }
-        if (command == "precheck_skip_auto_adjust" || command == "gimbal_recover") {
+        if (command == "precheck_skip_auto_adjust") {
             timerStateHolder.refreshBoardState()
         }
         response
@@ -416,7 +405,7 @@ class PrecheckController @Inject constructor(
             "MANUAL_LEASE_REQUIRED" -> "主机仍要求旧版控制租约，请确认主机已更新"
             "STALE_SEQUENCE" -> "云台状态已更新，请重试"
             "COMMUNICATION_DEGRADED" -> "云台通信不稳定，请稍后重试"
-            "HARDWARE_FAULT" -> "云台发生硬件故障，请点击恢复云台"
+            "HARDWARE_FAULT" -> "云台发生硬件故障，请检查主机或云台状态"
             "CALIBRATION_REQUIRED" -> "云台需要维护校准"
             "ORIGIN_REQUIRED" -> "云台尚未设置正前方"
             "TARGET_OUT_OF_SAFE_RANGE" -> "已到达云台安全活动范围"

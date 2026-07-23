@@ -444,10 +444,6 @@ class ControlPanelViewModel @Inject constructor(
         runPrecheckCommand { precheckController.stop() }
     }
 
-    fun recoverGimbal() {
-        runPrecheckCommand { precheckController.recover() }
-    }
-
     fun centerGimbal() {
         runPrecheckCommand { precheckController.center() }
     }

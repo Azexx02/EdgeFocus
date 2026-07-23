@@ -108,7 +108,6 @@ object HostJsonCodec {
             "gimbal_nudge",
             "gimbal_center",
             "gimbal_stop",
-            "gimbal_recover",
             "precheck_confirm_position"
         ))
         require(sessionId.isNotBlank())
@@ -116,9 +115,7 @@ object HostJsonCodec {
         val data = JSONObject()
             .put("session_id", sessionId)
             .put("sequence", sequence)
-        if (command != "gimbal_recover") {
-            data.put("owner_id", requireNotNull(ownerId).also { require(it.isNotBlank()) })
-        }
+            .put("owner_id", requireNotNull(ownerId).also { require(it.isNotBlank()) })
         if (command == "gimbal_nudge") {
             val normalized = requireNotNull(direction).uppercase()
             require(normalized in setOf("UP", "DOWN", "LEFT", "RIGHT"))

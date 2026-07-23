@@ -245,10 +245,6 @@ class HomeViewModel @Inject constructor(
         runPrecheckCommand { precheckController.stop() }
     }
 
-    fun recoverGimbal() {
-        runPrecheckCommand { precheckController.recover() }
-    }
-
     private fun runPrecheckCommand(block: suspend () -> Result<Unit>) {
         viewModelScope.launch {
             block()

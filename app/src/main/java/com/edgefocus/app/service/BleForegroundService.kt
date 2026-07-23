@@ -76,7 +76,6 @@ class BleForegroundService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         serviceScope.cancel()
-        bleManager.disconnect()
     }
 
     private fun handleStartScan() {

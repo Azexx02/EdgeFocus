@@ -1241,7 +1241,7 @@ class BleManager @Inject constructor(
             confirmed = confirmed
         )
         val priority = when (command) {
-            "gimbal_stop", "precheck_skip_auto_adjust", "gimbal_recover" ->
+            "gimbal_stop", "precheck_skip_auto_adjust" ->
                 HostRequestPriority.P0_CRITICAL
             else -> HostRequestPriority.P1_GIMBAL_CONTROL
         }

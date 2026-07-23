@@ -483,14 +483,6 @@ private fun PrecheckPage(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    if (gimbal.hardwareFaultActive || gimbal.state.equals("degraded", ignoreCase = true)) {
-                        OutlinedButton(
-                            onClick = viewModel::recoverGimbal,
-                            enabled = preparationReady
-                        ) {
-                            Text("恢复云台")
-                        }
-                    }
                     val gimbalStatus = uiState.gimbalStatus
                     if (gimbalStatus != null) {
                         StatRow("在线", if (gimbalStatus.online) "是" else "否")

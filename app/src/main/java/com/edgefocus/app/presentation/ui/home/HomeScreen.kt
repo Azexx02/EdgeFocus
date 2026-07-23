@@ -413,14 +413,6 @@ private fun HomePrecheckPage(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            if (gimbal.hardwareFaultActive || gimbal.state.equals("degraded", ignoreCase = true)) {
-                OutlinedButton(
-                    onClick = viewModel::recoverGimbal,
-                    enabled = preparationReady
-                ) {
-                    Text("恢复云台")
-                }
-            }
             if (gimbal.currentYawDeg != null || gimbal.currentPitchDeg != null) {
                 Text(
                     "当前位置 偏航 ${gimbal.currentYawDeg?.toInt() ?: "-"}° · " +
