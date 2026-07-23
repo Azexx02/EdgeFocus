@@ -344,18 +344,18 @@ private fun HomePrecheckPage(
             modifier = Modifier
                 .fillMaxSize()
                 .verticalScroll(rememberScrollState())
-                .padding(top = 16.dp, bottom = 132.dp),
+                .padding(top = 4.dp, bottom = 108.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-        Text("开始前预检", style = MaterialTheme.typography.headlineMedium)
+        Text("开始前预检", style = MaterialTheme.typography.headlineSmall)
         Text(
             when (uiState.preparationState) {
                 BoardPreparationState.INITIALIZING -> "EdgeFocus 正在准备摄像头与预检功能…"
                 BoardPreparationState.FAILED -> uiState.preparationError ?: "EdgeFocus 预检准备失败"
                 else -> uiState.precheckGuidance ?: "请确认画面、距离和坐姿，再开始正式专注。"
             },
-            style = MaterialTheme.typography.bodyMedium,
+            style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
 
@@ -364,8 +364,8 @@ private fun HomePrecheckPage(
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
         ) {
             Column(
-                modifier = Modifier.padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                modifier = Modifier.padding(10.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 val preview = uiState.cameraPreview
                 val bitmap by rememberCameraPreviewBitmap(preview)
@@ -373,7 +373,7 @@ private fun HomePrecheckPage(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(140.dp),
+                        .height(104.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     if (preview?.available == true && decodedBitmap != null) {
@@ -397,7 +397,7 @@ private fun HomePrecheckPage(
         }
 
         if (gimbal != null) {
-            Text("云台微调", style = MaterialTheme.typography.titleMedium)
+            Text("云台微调", style = MaterialTheme.typography.titleSmall)
             Text(
                 when (gimbalReadiness) {
                     PrecheckGimbalReadiness.DEGRADED -> "云台已降级，将以固定机位继续。"
@@ -471,10 +471,10 @@ private fun HomePrecheckPage(
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
                 .background(MaterialTheme.colorScheme.background)
-                .padding(top = 8.dp, bottom = 4.dp),
+                .padding(top = 6.dp, bottom = 2.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(
                     onClick = viewModel::skipPrecheckAutoAdjust,
                     enabled = skipAutoAdjustReady

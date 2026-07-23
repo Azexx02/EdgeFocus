@@ -87,7 +87,10 @@ fun GimbalNudgeButton(
 ) {
     val latestNudge by rememberUpdatedState(onNudge)
     var pressed by remember { mutableStateOf(false) }
-    val contentColor = if (enabled) {
+    val visualPressed = enabled && pressed
+    val contentColor = if (visualPressed) {
+        Color.White
+    } else if (enabled) {
         MaterialTheme.colorScheme.primary
     } else {
         MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
@@ -114,6 +117,7 @@ fun GimbalNudgeButton(
                             if (released && !repeated) latestNudge(fineTune)
                         }
                     } finally {
+                        delay(PRESS_FEEDBACK_HOLD_MS)
                         pressed = false
                     }
                 }
@@ -137,15 +141,15 @@ fun GimbalNudgeButton(
     Surface(
         modifier = modifier.then(accessibility).then(interaction),
         shape = RoundedCornerShape(20.dp),
-        color = if (pressed && enabled) {
-            MaterialTheme.colorScheme.primary.copy(alpha = 0.14f)
+        color = if (visualPressed) {
+            MaterialTheme.colorScheme.primary
         } else {
             Color.Transparent
         },
         contentColor = contentColor,
         border = BorderStroke(
             1.dp,
-            if (pressed && enabled) {
+            if (visualPressed) {
                 MaterialTheme.colorScheme.primary
             } else if (enabled) {
                 MaterialTheme.colorScheme.outline
@@ -168,3 +172,4 @@ fun GimbalNudgeButton(
 
 private const val LONG_PRESS_DELAY_MS = 400L
 private const val REPEAT_INTERVAL_MS = 150L
+private const val PRESS_FEEDBACK_HOLD_MS = 120L
