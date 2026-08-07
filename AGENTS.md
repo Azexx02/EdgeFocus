@@ -1,8 +1,17 @@
 # EdgeFocus Agent 快速入口
 
-本文件适用于整个 `code/focus_app` 仓库。开始修改前，先读
+本文件适用于当前主机目标仓库 `code/focus_app_national`。`code/focus_app` 是较早现场/原型树，除非用户明确要求回退或对照，不要把它当作默认修改目标。
+
+开始修改前，先读
 [`docs/architecture/current-architecture.md`](docs/architecture/current-architecture.md)。
 它描述当前工作树实际架构；`docs/superpowers/specs/` 是历史设计依据，不一定等于当前实现。
+
+相关仓库入口：
+
+- G431 云台固件当前目标：`C:/Users/Aze/Desktop/self_developed/code/G431_national/`
+- App 当前目标：`C:/Users/Aze/Desktop/APP/EdgeFocusApp/`
+- App 同步交接入口：`C:/Users/Aze/Desktop/APP/新app迭代必看/`
+- 总工作区入口：`C:/Users/Aze/Desktop/self_developed/AGENTS.md`
 
 ## 先建立这张心智图
 
@@ -34,6 +43,8 @@
 12. Home/Go 只调整应用层视觉采样节奏：Home 约 4 FPS、Go 约 3 FPS。不得降低 PD6 Fault、供电检测、BLE 心跳或 G431 内部控制频率；worker 必须优先处理最新帧。
 13. 电量硬件已删除。禁止恢复 `battery_*`、旧 `power_source` 或伪造百分比；App 只使用 `external_power_*`、`power_profile` 和显式 `set_power_profile`。
 14. 云台 PRECHECK 手动命令必须绑定当前 session、严格递增 sequence 和 manual lease。UART、PD6、对齐或控制器状态任一失败，PRECHECK 和会话内跟踪能力必须同时停用；只允许低频安全探测，连续健康后才可重新对齐，并按当前 phase 恢复搜索或 HOLD。
+15. App 产品端云台控制只存在于 PRECHECK；正式会话中的浏览器云台控制是展示/诊断恢复能力，不是 App 产品需求。
+16. App 端“停止云台”语义是强制释放/停止云台控制，不需要 `stop_enabled` 之类字段协商；主机若保留旧字段，应删除或停止对 App 暴露。
 
 ## 阅读顺序
 
@@ -83,8 +94,8 @@
 
 ```powershell
 # 工作区检查（仓库所有权不同，必须显式声明 safe.directory）
-git -c safe.directory=C:/Users/Aze/Desktop/self_developed/code/focus_app status --short
-git -c safe.directory=C:/Users/Aze/Desktop/self_developed/code/focus_app diff --check
+git -c safe.directory=C:/Users/Aze/Desktop/self_developed/code/focus_app_national status --short
+git -c safe.directory=C:/Users/Aze/Desktop/self_developed/code/focus_app_national diff --check
 
 # 部署脚本参数检查
 python deploy_to_board.py --help
@@ -98,8 +109,25 @@ ssh root@192.168.10.174 "cat /sys/class/remoteproc/remoteproc0/state /sys/class/
 ssh root@192.168.10.174 "cat /run/edgefocus/fan-status.json"
 ```
 
-交叉编译机为 `hu@192.168.10.6`，板端为 `root@192.168.10.174`。部署入口是
+交叉编译机为 `hu@192.168.10.6`。板端 IP 会随现场网络变化；最近使用过
+`192.168.10.173`、`192.168.10.174` 和现场 `192.168.10.125`，部署前按当前任务或用户最新说明确认。部署入口是
 `deploy_to_board.py`；它执行 ARM 全目标编译、安装包校验、板端备份、健康检查和失败回滚。
+
+## App 同步修改入口
+
+主机改动影响 App 时，先更新或引用以下文档，不要只在聊天里描述：
+
+- `docs/integration/app-band-protocol-v2.1.md`：BLE/GATT、会话、手环和 App 交互协议的主机侧事实。
+- `docs/integration/app-host-alignment-v3.md`：App 与主机的架构对齐。
+- `docs/integration/gimbal-phase-control-app-handoff-2026-07-23.md`：云台 PRECHECK 阶段控制、故障状态和 App 展示/命令入口。
+- `C:/Users/Aze/Desktop/APP/新app迭代必看/`：交给 App agent 的入口目录。
+
+当前 App 侧边界：
+
+- App 可以在未连接主机时做本地模式，但会话记录最终以主机为权威存储，App 做缓存与后续同步。
+- App 上报手机原始类别：`未使用/学习/娱乐/其他`；最终分心等级由主机融合生成。
+- App 负责前台交互、弹窗/屏幕闪烁提醒、预检页、专注页和设置页。
+- App 预检页可展示云台异常，并允许发送“停止云台/强制释放”；不要要求主机提供 `stop_enabled`、`gimbal_async_motion_v1`、`gimbal_manual_step_v1` 这类未批准能力字段。
 
 ## 文档维护规则
 
