@@ -146,6 +146,10 @@ public:
     CommandResult forceRelease(const ManualCommandContext& command,
                                session::Phase phase,
                                std::int64_t now_ms);
+    CommandResult forceReleaseOperator(const std::string& session_id,
+                                       const std::string& owner_id,
+                                       std::uint64_t sequence,
+                                       std::int64_t now_ms);
     void holdForSession(std::int64_t now_ms);
     void stop() noexcept;
     CommandResult executeMaintenance(const MaintenanceRequest& request,
@@ -156,7 +160,8 @@ public:
 private:
     bool validateManualCommandLocked(const ManualCommandContext& command,
                                      std::int64_t now_ms,
-                                     CommandResult& result);
+                                     CommandResult& result,
+                                     bool require_lease = false);
     bool validateSequenceLocked(const std::string& session_id,
                                 const std::string& owner_id,
                                 std::uint64_t sequence,
@@ -240,6 +245,7 @@ private:
     BoundaryGate pitch_boundary_gate_;
     std::optional<Waypoint> session_composition_target_;
     PrecheckState state_before_degrade_{PrecheckState::Inactive};
+    session::Phase phase_at_degrade_{session::Phase::Idle};
     session::Phase last_phase_{session::Phase::Idle};
 };
 

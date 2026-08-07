@@ -695,3 +695,158 @@
 - Production correctly rejects arming while current protection is unconfigured.
   This gate must remain; only the bootstrap profile should become internal and
   mechanically usable.
+
+## 2026-07-22 Preview/tracking/UART initial findings
+
+- The live demo already has a `PreviewFrameStore` and a dedicated preview thread
+  in `DemoHttpServer`; producer/consumer sequencing and evidence lookup need narrow inspection.
+- `GimbalVisualTracker` uses an EMA, fixed deadbands, proportional gains, a
+  2-degree maximum step, and a minimum command period. Visible jitter can come
+  from measurement noise, direction reversal, or command cadence. UI masking is out of scope.
+- `GimbalHardwareService` runs periodic health probes, while G431 exposes a cumulative
+  `UARTERR` counter. The board remained functional after `8137116`, but the counter
+  rose intermittently; software traffic and electrical errors must be separated.
+- Latest relevant host commit: `8137116 gimbal: fix precheck hold and recovery lifecycle`.
+
+### Narrow source inspection
+
+- `CameraPipeline` captures one full camera frame per loop, publishes every second
+  frame to `PreviewFrameStore`, and separately moves every frame into the inference
+  queue. The intended preview rate is therefore about 15 FPS for a 30 FPS camera.
+- `PreviewFrameStore` is latest-only, so it does not itself accumulate a backlog.
+- `DemoHttpServer::previewEncoderLoop` also uses latest-only replacement and an MJPEG
+  period of 67 ms. It sleeps until the next encode deadline, then attempts to replace
+  its candidate with the newest store frame before JPEG encoding.
+- The existing architecture can support the requested contract (15 FPS live image,
+  3-4 FPS held evidence). Observed video lag is therefore likely introduced by camera
+  backend buffering, JPEG/HTTP throughput, or the browser MJPEG receive buffer rather
+  than by the evidence snapshot itself.
+- Frontend overlay state intentionally holds the newest visual inference result while
+  the MJPEG stream advances. The user confirms overlay geometry is accurate and asks
+  to preserve this behavior.
+
+- The browser uses one persistent MJPEG `<img>` and does not periodically reset it;
+  evidence JSON is polled independently and held until a newer inference frame arrives.
+- The inference frame queue is capacity 3 with drop-oldest enabled, so inference cannot
+  directly backlog capture through the queue.
+- Current tracking config commands up to 1.5 degrees every new visual result, applies
+  EMA alpha 0.35, and updates its target by accumulating each commanded step. It has no
+  reversal hysteresis, no minimum useful step, no motion prediction, and no requirement
+  that error retain a direction before reversing. This supports the user's observation
+  of visible stepwise correction and likely near-target hunting.
+- The host sends `FAULT` every 500 ms even during active tracking; each probe uses a
+  synchronous 250 ms response window on the same UART. This adds two commands per second
+  alongside 3-4 FPS `TRACK` and `POSE` traffic. Reducing redundant probes while retaining
+  the PD6 fault pin is a viable software-side UART traffic reduction.
+
+- Current deployed board config is `uart_only`, so the host cannot currently depend on
+  PD6 as a replacement for serial fault queries. Any probe reduction must retain bounded
+  fault/status discovery or deliberately switch and validate GPIO interlock mode first.
+- Linux UART is configured correctly as raw 115200 8N1 without flow control. Writes append
+  CRLF and are serialized through the hardware service; no obvious host termios mismatch
+  was found.
+- The board was idle during the first metric sample, so no meaningful live preview latency
+  measurement was possible. Do not infer the bottleneck from the 0 FPS idle result.
+
+- User approved up to 0.5-1 second of additional recentering latency in exchange for
+  visibly smoother tracking, and approved the bounded latest-only architecture without
+  requiring further per-step approval.
+- G431 protocol 3 currently receives UART one byte at a time with `HAL_UART_Receive_IT`.
+  Any HAL UART error clears the partial framer and also clears `hello_complete`; receive
+  re-arm return values are ignored. These behaviors turn isolated noise into avoidable
+  protocol disruption and hide failed re-arm.
+- G431 already has a 5 ms motor loop and target slew limiting. A host 10 Hz velocity/
+  acceleration planner can bridge the 3-4 FPS visual cadence without changing motor PWM
+  ownership or creating high-rate waveforms on Linux.
+- The server encoder is already paced at 67 ms, but blocking socket sends and the browser's opaque MJPEG image can retain stale transport/decode work. Both boundaries need latest-only behavior.
+- The existing tracker commands one accumulated fixed step per inference result. A periodic planner can reuse only the latest still-fresh visual intent without fabricating evidence.
+- Production is `uart_only`, so serial health probes remain required; they should be state-aware and excluded from in-flight motion transactions.
+# 2026-07-22 H.264 preview / manual-control verification
+
+- The deployed AVC path is active on the board, not a simulated browser animation:
+  `compiled=true`, `active=true`, `healthy=true`, about 13.6 FPS at 384x216.
+- PRECHECK manual takeover succeeds while automatic search is still active. The host
+  creates an owner-bound lease, accepts STOP under that lease, and permits the session
+  to end cleanly.
+- A separate physical/kernel issue remains: the EHCI hub intermittently emits USB
+  disconnects and URB status `-71`, simultaneously removing the RTL8723DU Wi-Fi/Bluetooth
+  combo adapter and the UVC camera. H.264 avoids the previous JPEG polling/reconnect
+  degradation, but cannot preserve a browser connection through a physical USB bus reset.
+# 2026-07-22 MJPEG overlay regression findings
+
+- The originally accurate preview client used a continuous multipart MJPEG
+  stream directly in an `img` element.
+- The current national client uses an AVC/MSE branch and a different fallback
+  that repeatedly fetches `/api/demo/frame.jpg`, decodes it, and paints a Canvas.
+  That fallback is not the original MJPEG implementation.
+- Both current transports share the rewritten media rectangle, preview
+  controller, and independently polled evidence state, so both can exhibit the
+  same overlay regression even though their codecs differ.
+- The evidence drawing path uses normalized subject/keypoint coordinates and
+  directly renders the newest NPU result. No smoothing exists today.
+- The current Web gimbal client enables manual motion when takeover is merely
+  available and silently acquires/retries a lease from a motion action. This is
+  why motion can work without pressing Take Over.
+- User confirmed the initial MJPEG implementation was accurate. The repair must
+  restore that known-good presentation path before considering pose smoothing.
+- The national page now selects a direct multipart MJPEG `img` while leaving the
+  AVC encoder and endpoint compiled. Static diff checking passes.
+- Automatic PRECHECK search and session tracking remain enabled; only Web manual
+  motion is gated by explicit lease ownership.
+- The App has a related transition defect: skip-search and natural search
+  completion do not promptly converge its controls to manual-available and
+  confirmable state. Confirm must depend on host HOLD/confirmability, not on App
+  manual-lease ownership.
+- App root cause: `skipAutoAdjust()` calls `ensureManualLease()`, so a button
+  labelled Skip actually performs skip plus takeover. Every command also calls
+  `checkPreparationReady()`, while both Home and Control Panel disable Skip until
+  preparation is already READY. This makes a command intended to end automatic
+  preparation unavailable during the preparation it must stop.
+- `PrecheckConfirmationPolicy` already treats no-lease `holding` and
+  `manual_available` as confirmable, and its manual-control policy already
+  permits takeover-capable states. The fix should preserve those semantics and
+  correct the skip transaction/gating rather than redesigning the full UI.
+# 2026-07-23 Phase-scoped gimbal control findings
+
+- PRECHECK latency came from a mandatory two-command path: `gimbal_manual_takeover` had to finish and return a lease token before the actual nudge could be queued.
+- `DemoHttpServer` treated `ownsLease` as a reason to keep the takeover button enabled, which allowed repeated takeover clicks after manual mode was already active.
+- `ManualAvailable` is only used by PRECHECK; FOCUSING returns to `Holding` when no manual lease exists. This makes the controller state itself a safe boundary for token-free PRECHECK adjustment while retaining lease enforcement in FOCUSING.
+- PRECHECK `gimbal_stop` must terminate/freeze active automatic search before entering direct manual adjustment; merely issuing HOLD while leaving the search state active would allow later automatic waypoints to resume.
+- App and Web should consume authoritative control flags rather than infer readiness from timeouts.
+
+# 2026-07-23 PRECHECK fault-stop findings
+
+- `stop_enabled` currently reaches the App only inside solicited `runtime_snapshot` responses; `push_state` does not contain the gimbal control block.
+- Current degraded logic disables `stop_enabled`, and degraded `gimbal_stop` fails normal manual-state validation.
+- `degradeLocked()` currently records state only. Several motion failures call containment first, but runtime Fault/RecoveryCheck transitions do not guarantee `stopAndDisable`.
+- The selected fix keeps fault state visible after automatic containment and uses an explicit App stop to enter `RELEASED`, which prevents later automatic recovery.
+- A transition-filtered gimbal snapshot callback is preferable to pushing every worker update because the gimbal feature publishes frequently.
+- User clarified command semantics: Web PRECHECK keeps separate HOLD-style `停止` and hard `强制释放`; App PRECHECK `gimbal_stop` always means hard release (`stopAndDisable`).
+- `SystemStateStore::pushEvent` is thread-safe and already feeds the BLE server callback, so a transition-filtered snapshot callback can publish without adding a second transport.
+- `GimbalSessionFeature` publishes a gimbal snapshot every 250 ms during PRECHECK; the App notifier must deduplicate state/control signatures to avoid four BLE pushes per second.
+- `AppCommandService` owns the gimbal command worker and has a deterministic destructor, so it can register/unregister the snapshot callback within its lifetime.
+
+## Implemented recovery boundary
+
+- Recovery uses the phase in which DEGRADED was entered, not merely the current
+  phase. A PRECHECK fault therefore cannot re-enable motion after the user
+  proceeds into a formal session.
+- A fault originating in FOCUSING/PAUSED snapshots measured yaw/pitch before
+  disable. Successful low-rate recovery restores that composition and HOLD;
+  the existing visual worker resumes tracking on its next fresh frame.
+- App `gimbal_stop` and Web `force_release` share an idempotent PRECHECK backend
+  that remains callable while degraded and permanently enters RELEASED.
+- PRECHECK push notification is transition-deduplicated and contains only the
+  three product controls: manual, skip search, and stop.
+
+## Web stop/force-release regression
+
+- `DemoHttpServer` already exposes independent backend flags for `stop_enabled`
+  and `force_release_enabled`.
+- The page incorrectly requires `ownsLease` for Force Release and only gives it
+  the visible `show` class in FOCUSING.
+- PRECHECK command routing already accepts Stop/Force Release without a lease.
+- User removed the ambiguous ordinary Web Stop control. Force Release must
+  remain visible and callable throughout PRECHECK and FOCUSING, independently
+  of manual-lease ownership. Direction/center controls retain their existing
+  phase-specific takeover rules.

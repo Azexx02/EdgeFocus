@@ -218,3 +218,187 @@ Errors:
 - The first local rebuild invoked MSVC without the Visual Studio developer
   environment and could not find `stdbool.h`; retry via `VsDevCmd.bat` rather
   than repeating the same command.
+
+## 2026-07-22 Preview synchronization, tracking damping, and UART reliability
+
+Goal: increase the real live-preview frame rate without decoupling evidence,
+remove visible closed-loop gimbal jitter, and reduce G431 UART errors without
+masking failures in the UI.
+
+1. [complete] Inspect the current preview producer/stream/evidence timestamp,
+   visual tracking controller, and UART polling/command paths; capture current
+   board metrics and define measurable acceptance criteria with the user.
+2. [complete] Compare 2-3 bounded implementation approaches and obtain approval.
+3. [in_progress] Write and review the approved design specification and implementation plan.
+4. [pending] Implement synchronized preview/evidence transport, tracking damping,
+   and UART traffic/recovery changes with focused tests.
+5. [pending] Run host tests, cross-build, deploy, and verify physical behavior and logs.
+
+Errors:
+- Existing planning files contain legacy mojibake sections; append UTF-8 English
+  sections and do not rewrite unrelated historical content.
+- First combined planning-file patch used a mojibake line as context and failed;
+  retry with stable ASCII tail anchors instead of repeating that patch.
+# 2026-07-22 H.264 preview and manual takeover
+
+- [complete] Verify board H.264 encoder/browser transport capabilities and current lease protocol behavior.
+- [complete] Select fragmented MP4/AVC with latest-frame semantics and automatic JPEG fallback.
+- [complete] Implement host/web H.264 preview without blocking camera or NPU inference.
+- [complete] Repair Web/App manual takeover, skip-search, keepalive, release, and confirm-session flow.
+- [complete] Cross-build and deploy the host, build the Android debug APK, run focused tests,
+  verify board-side H.264 health, and verify takeover during an active PRECHECK search.
+
+Observed environment issue (not caused by the HTTP transport):
+- The board USB hub intermittently disconnects with kernel `-71` errors, removing the shared
+  RTL8723DU Wi-Fi/Bluetooth adapter and UVC camera. COM19 recovery and EHCI rebind restore
+  enumeration, but external browser verification is conditional on that physical USB link.
+# 2026-07-22 National MJPEG overlay and explicit lease regression repair
+
+Goal: restore the previously accurate continuous-MJPEG presentation path in the
+national build without reverting national features, and require explicit Web
+manual takeover before any gimbal motion command.
+
+1. [complete] Compare the current H.264/latest-JPEG client with the known-good
+   continuous MJPEG client and identify the shared preview-controller regression.
+2. [complete] Agree the bounded design and write
+   `docs/superpowers/specs/2026-07-22-mjpeg-overlay-lease-regression-repair.md`.
+3. [complete] Restore the continuous MJPEG media/overlay client as one unit;
+   keep the H.264 backend present but not automatically selected.
+4. [complete] Enforce explicit Web lease ownership for nudge, fine tune, center,
+   stop, and release; remove implicit acquisition/retry.
+5. [complete] Run source checks, host build/tests, and browser regression checks.
+6. [complete] Cross-build/deploy to the board and perform bounded acceptance if
+   the board and build host are reachable.
+7. [complete] Align the Android PRECHECK transition: one-tap skip, immediate
+   state refresh after automatic completion, explicit manual takeover, and
+   confirm enabled independently of manual lease ownership.
+
+## Errors for this repair
+
+- A root-level Git command initially failed because the command was run outside
+  the national worktree. All subsequent Git operations use `code/focus_app_national`.
+- A read-only board HTTP sampling attempt timed out; the design therefore relies
+  on local source/history comparison until deployment verification.
+- The first combined source patch did not apply because mojibake text in a large
+  JavaScript line made the context unstable. It made no changes; implementation
+  was split into small ASCII-anchored patches.
+- The first host build invocation was blocked when the sandbox denied Ninja
+  process execution. The same non-destructive build is retried with explicit
+  execution permission.
+- The first permitted host build ran without the Visual Studio environment and
+  failed to locate C++ standard headers. The next build must run through the
+  installed `VsDevCmd.bat`; this is an environment error, not a source error.
+- The initialized MSVC build exposed its raw-string literal size limit after the
+  new inline JavaScript was added. The page source is split at an additional C++
+  raw-string boundary; no runtime behavior is changed by this correction.
+- The first App compile found a transaction-lambda return mismatch (`Unit` vs
+  `Result<Unit>`) in the new skip path. The lambda now returns the bounded
+  `stopAutomaticAdjustment` result directly.
+- Android emulator installation could not be used for final smoke testing because
+  both locally listed ADB targets became `offline`/closed. The full Android unit
+  test task and APK assembly still complete successfully.
+
+# 2026-07-22 Exact original MJPEG restoration
+
+Goal: remove the mixed H.264/Canvas/dynamic-MJPEG browser client and restore the
+known-good `96d40cb` live preview presentation unit without reverting national
+session, gimbal, or App behavior.
+
+1. [complete] Compare the current page with the known-good commit and identify
+   all mixed preview objects, callbacks, timers, and render branches.
+2. [complete] Record the exact restoration design and acceptance contract.
+3. [complete] Replace the entire page-side preview unit with the original
+   `img#frame` multipart MJPEG implementation.
+4. [complete] Build and run host tests; verify the generated page contract.
+5. [complete] Cross-build, deploy atomically, and verify stream progress and
+   reconnect behavior on the board.
+
+Errors:
+- The first combined source patch used PowerShell 5's mojibake rendering of the
+  UTF-8 HTML line as context and did not apply. It changed no source. Continue
+  with explicit UTF-8 reads and small independent patches.
+- The first focused Android test invocation attempted to fetch Gradle 8.2 and
+  the sandbox blocked network access. Retry the same test with explicit network
+  permission; this is an environment failure, not a source/test failure.
+- The first host-build command was parsed by PowerShell before `cmd.exe`, so the
+  `(x86)` segment of the Visual Studio path was treated as an expression. No
+  compiler ran. Retry with the complete cmd command in a single-quoted argument.
+- The second host-build invocation still supplied an extra cmd `/s` quote layer
+  and was rejected at `C:\Program`. No compiler ran. Build the command string in
+  PowerShell and pass it as one argument to `COMSPEC` instead.
+- The first correct host build selected x86 Windows libraries for x64 objects.
+  Re-running `VsDevCmd.bat` with explicit `-arch=x64 -host_arch=x64` fixed the
+  environment; the main target and demo HTTP test then passed.
+- Full host CTest passed 31/33; the two failures are existing gimbal protocol and
+  precheck assertions unrelated to the preview unit. `test_demo_http` passed.
+- The first ARM rebuild exhausted the compiler host `/tmp`. Removing only stale
+  `/tmp/edgefocus-*` build directories recovered 27 GB and the next build passed.
+- Board verification exposed two retained H.264 backend effects: AVC health
+  suspended JPEG production even though the page selected MJPEG, and a BlueZ
+  discovery owner survived plain `focus_app` restarts. The AVC worker is no
+  longer started, JPEG remains authoritative, and deployment now resets BlueZ
+  while `focus_app` is stopped before starting the new binary.
+# 2026-07-23 Phase-scoped gimbal manual control
+
+- [x] Inspect PRECHECK/session controller, Web controls, and App command timing.
+- [x] Remove explicit manual lease acquisition from PRECHECK direct adjustment.
+- [x] Keep explicit takeover/lease/release around FOCUSING automatic tracking.
+- [x] Fix Web takeover button so it disables after successful session takeover.
+- [x] Add authoritative per-phase control fields for Web and App snapshots.
+- [x] Add/update targeted controller and BLE command tests.
+- [x] Deploy to the board and validate the real Web/API phase transitions.
+
+# 2026-07-23 PRECHECK gimbal fault stop and App notification
+
+- [x] Confirm the selected safety architecture: host containment plus App redundancy.
+- [x] Write and self-review the short safety state-machine specification.
+- [ ] Implement immediate host stop on fault while preserving fault state.
+- [ ] Push PRECHECK gimbal state transitions to the App without frame-rate spam.
+- [ ] Permit idempotent App stop while the gimbal is degraded.
+- [ ] Add focused tests, cross-build, deploy, and verify on the board.
+
+Implementation update:
+
+- [x] Immediate host `stopAndDisable` on first DEGRADED entry.
+- [x] Phase-origin recovery rule: PRECHECK faults do not recover after formal
+  start; formal-session faults restore saved composition, HOLD, then resume
+  tracking.
+- [x] Transition-deduplicated `push_gimbal_precheck_state`.
+- [x] Idempotent PRECHECK force release for App stop and Web force release.
+- [x] Focused Windows host tests pass.
+- [x] ARM cross-build, atomic board deployment, and non-motion board
+  verification.
+
+# 2026-07-23 Web gimbal stop/force-release visibility correction
+
+- [x] Confirm required semantics with the user.
+- [x] Locate the conflicting Web phase/lease gates.
+- [x] Remove the ambiguous ordinary Web Stop control.
+- [x] Make Force Release visible and callable throughout PRECHECK and FOCUSING.
+- [x] Preserve existing direction/center takeover rules.
+- [x] Add/update focused controller and source-contract coverage.
+- [x] Pass focused Windows host build/tests.
+- [x] Cross-build, deploy, and verify the served page and service health.
+
+## 2026-07-23 Remove stop capability negotiation
+
+- [x] Confirm App label remains “停止云台” while command semantics remain force release.
+- [x] Remove the stop capability flag from App snapshots and PRECHECK pushes.
+- [x] Remove the unused stop capability flag from Demo HTTP state.
+- [x] Update tests and App integration documentation.
+- [x] Build, deploy, and verify the field is absent on the board.
+
+Final clarification: remove the ordinary Web Stop control entirely. Keep Force
+Release visible and callable without a manual lease in both PRECHECK and
+FOCUSING. App `gimbal_stop` remains the product safety command and continues to
+mean force release.
+
+## Errors Encountered
+
+| Error | Attempt | Resolution |
+|---|---:|---|
+| Workspace `rg.exe` returned Access Denied | 1 | Use native PowerShell `Select-String` for targeted source inspection. |
+| Host Ninja build could not find C++ standard headers | 1 | Re-run inside `VsDevCmd.bat -arch=x64 -host_arch=x64`; the cached Ninja generator requires the MSVC environment on each new shell. |
+| Focused test executables were not at the build root | 1 | Locate the Ninja output paths before running; source-contract checks passed in the same attempt. |
+| Existing session-recovery test compared normalized pitch to `-12` | 1 | The controller emits the protocol-normalized equivalent `348`; correct the stale assertion without changing runtime behavior. |
+| Demo server rejected `/?verify=...` | 1 | This server matches the root path exactly; verify the served HTML at `/` without a cache-busting query. |

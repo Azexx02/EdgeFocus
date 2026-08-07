@@ -258,6 +258,7 @@ bool GimbalPrecheckController::start(
     pitch_boundary_gate_ = {};
     session_composition_target_.reset();
     state_before_degrade_ = PrecheckState::Inactive;
+    phase_at_degrade_ = session::Phase::Idle;
     last_phase_ = session::Phase::Precheck;
     if (centering_tracker_) centering_tracker_->reset();
     LOGI("GimbalPrecheckController",
@@ -270,8 +271,37 @@ bool GimbalPrecheckController::start(
 }
 
 void GimbalPrecheckController::degradeLocked(std::string detail) noexcept {
-    if (status_.state != PrecheckState::Degraded) {
+    const bool first_entry = status_.state != PrecheckState::Degraded;
+    if (first_entry) {
         state_before_degrade_ = status_.state;
+        phase_at_degrade_ = last_phase_;
+    }
+    if (first_entry) {
+        try {
+            const auto hardware = hardware_.status();
+            if ((last_phase_ == session::Phase::Focusing ||
+                 last_phase_ == session::Phase::Paused) &&
+                hardware.yaw_deg && hardware.pitch_deg) {
+                // Preserve the last real session composition. Recovery during
+                // a formal session must return here and HOLD; it must never
+                // re-enter PRECHECK search.
+                session_composition_target_ = Waypoint{
+                    normalizeAngle(*hardware.yaw_deg),
+                    normalizeAngle(*hardware.pitch_deg)};
+            }
+            if (hardware.state != State::Disabled) {
+                const auto stopped = hardware_.stopAndDisable(1000);
+                if (!stopped.success &&
+                    hardware_.status().state != State::Disabled) {
+                    detail += detail.empty() ? "safety_stop_failed"
+                                             : ";safety_stop_failed";
+                    if (!stopped.error.empty()) detail += ":" + stopped.error;
+                }
+            }
+        } catch (...) {
+            detail += detail.empty() ? "safety_stop_exception"
+                                     : ";safety_stop_exception";
+        }
     }
     status_.state = PrecheckState::Degraded;
     status_.manual_lease = false;
@@ -655,7 +685,11 @@ bool GimbalPrecheckController::restoreLocked(
             session_composition_target_->yaw_deg,
             session_composition_target_->pitch_deg, 8000, 5.0);
         if (!repositioned.success) {
-            status_.detail = "gimbal_recovered_fixed_position_unavailable";
+            containMotionFailureLocked();
+            degradeLocked(repositioned.error.empty()
+                              ? "gimbal_recovered_position_restore_failed"
+                              : repositioned.error);
+            return false;
         }
     }
     const auto held = hardware_.hold(1000);
@@ -701,7 +735,18 @@ void GimbalPrecheckController::maintain(
     const auto hardware = hardware_.status();
     updateBoundaryGatesLocked(hardware, now_ms);
     if (status_.state == PrecheckState::Degraded) {
-        (void)restoreLocked(phase, now_ms);
+        // PRECHECK resumes its preparation state. A formal/paused session may
+        // also recover, but restoreLocked returns it to the saved composition
+        // and HOLD rather than restarting PRECHECK search.
+        const bool precheck_recovery = phase == session::Phase::Precheck;
+        const bool session_fault_recovery =
+            (phase == session::Phase::Focusing ||
+             phase == session::Phase::Paused) &&
+            (phase_at_degrade_ == session::Phase::Focusing ||
+             phase_at_degrade_ == session::Phase::Paused);
+        if (precheck_recovery || session_fault_recovery) {
+            (void)restoreLocked(phase, now_ms);
+        }
         return;
     }
     if (hardware.state == State::Fault || hardware.state == State::RecoveryCheck) {
@@ -764,7 +809,7 @@ void GimbalPrecheckController::rememberCommandLocked(
 
 bool GimbalPrecheckController::validateManualCommandLocked(
     const ManualCommandContext& command, std::int64_t now_ms,
-    CommandResult& result) {
+    CommandResult& result, bool require_lease) {
     if (command.session_id.empty() || command.session_id != status_.session_id) {
         result = rejected("session_mismatch");
         return false;
@@ -773,18 +818,30 @@ bool GimbalPrecheckController::validateManualCommandLocked(
         result = rejected("owner_id_required");
         return false;
     }
-    if (!status_.manual_lease || status_.state != PrecheckState::Manual) {
-        result = rejected("manual_lease_unavailable");
-        return false;
-    }
-    if (status_.lease_owner_id != command.owner_id ||
-        status_.lease_token != command.token) {
-        result = rejected("manual_lease_mismatch");
-        return false;
-    }
-    if (now_ms >= status_.lease_expires_at_ms) {
-        result = rejected("manual_lease_expired");
-        return false;
+    if (status_.manual_lease) {
+        if (status_.state != PrecheckState::Manual) {
+            result = rejected("manual_lease_unavailable");
+            return false;
+        }
+        if (status_.lease_owner_id != command.owner_id ||
+            status_.lease_token != command.token) {
+            result = rejected("manual_lease_mismatch");
+            return false;
+        }
+        if (now_ms >= status_.lease_expires_at_ms) {
+            result = rejected("manual_lease_expired");
+            return false;
+        }
+    } else {
+        // PRECHECK manual positioning is phase-owned by the host. Once the
+        // automatic search has finished (or was skipped), a client may send a
+        // single direct adjustment command without first acquiring a lease.
+        // FOCUSING never enters ManualAvailable, so session tracking still
+        // requires an explicit takeover and lease.
+        if (require_lease || status_.state != PrecheckState::ManualAvailable) {
+            result = rejected("manual_lease_unavailable");
+            return false;
+        }
     }
     return validateSequenceLocked(command.session_id, command.owner_id,
                                   command.sequence, result);
@@ -1133,7 +1190,10 @@ CommandResult GimbalPrecheckController::manualTakeover(
         if (issued) *issued = status_;
         return sequence_result;
     }
-    if (phase != session::Phase::Precheck && phase != session::Phase::Focusing) {
+    if (phase != session::Phase::Focusing) {
+        if (phase == session::Phase::Precheck) {
+            return rejected("precheck_manual_control_does_not_require_takeover");
+        }
         return rejected("manual_control_phase_forbidden");
     }
     if (status_.state == PrecheckState::Released ||
@@ -1175,7 +1235,7 @@ CommandResult GimbalPrecheckController::keepManualLease(
     if (phase != session::Phase::Precheck && phase != session::Phase::Focusing) {
         return rejected("manual_control_phase_forbidden");
     }
-    if (!validateManualCommandLocked(command, now_ms, result)) return result;
+    if (!validateManualCommandLocked(command, now_ms, result, true)) return result;
     result.success = true;
     status_.lease_expires_at_ms = now_ms + config_.manual_lease_ttl_ms;
     rememberCommandLocked(command.sequence, result);
@@ -1196,7 +1256,7 @@ CommandResult GimbalPrecheckController::releaseManualControl(
     std::int64_t now_ms) {
     std::lock_guard<std::mutex> lock(mutex_);
     CommandResult result;
-    if (!validateManualCommandLocked(command, now_ms, result)) return result;
+    if (!validateManualCommandLocked(command, now_ms, result, true)) return result;
     result = hardware_.hold(1000);
     if (!result.success) {
         degradeLocked(result.error.empty() ? "session_manual_release_failed" : result.error);
@@ -1214,7 +1274,7 @@ CommandResult GimbalPrecheckController::forceRelease(
     std::int64_t now_ms) {
     std::lock_guard<std::mutex> lock(mutex_);
     CommandResult result;
-    if (!validateManualCommandLocked(command, now_ms, result)) return result;
+    if (!validateManualCommandLocked(command, now_ms, result, true)) return result;
     result = hardware_.stopAndDisable(1000);
     status_.manual_lease = false;
     status_.lease_owner_id.clear();
@@ -1225,6 +1285,58 @@ CommandResult GimbalPrecheckController::forceRelease(
     status_.state = PrecheckState::Released;
     status_.detail = result.success ? "released" : "released_stop_failed";
     rememberCommandLocked(command.sequence, result);
+    return result;
+}
+
+CommandResult GimbalPrecheckController::forceReleaseOperator(
+    const std::string& session_id, const std::string& owner_id,
+    std::uint64_t sequence, std::int64_t /*now_ms*/) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    CommandResult result;
+    if (!validateSequenceLocked(session_id, owner_id, sequence, result)) {
+        return result;
+    }
+    if (status_.state == PrecheckState::Released) {
+        result.success = true;
+        result.motion_status = "already_released";
+        rememberCommandLocked(sequence, result);
+        return result;
+    }
+    if (status_.state == PrecheckState::Inactive) {
+        result = rejected("gimbal_inactive");
+        rememberCommandLocked(sequence, result);
+        return result;
+    }
+
+    const auto before = hardware_.status();
+    if (before.state == State::Disabled) {
+        result.success = true;
+        result.motion_status = "already_disabled";
+    } else {
+        result = hardware_.stopAndDisable(1000);
+    }
+    if (!result.success && hardware_.status().state != State::Disabled) {
+        degradeLocked(result.error.empty() ? "force_release_stop_failed"
+                                           : result.error);
+        rememberCommandLocked(sequence, result);
+        return result;
+    }
+
+    result.success = true;
+    status_.manual_lease = false;
+    status_.lease_owner_id.clear();
+    status_.lease_token.clear();
+    status_.lease_expires_at_ms = 0;
+    status_.search_completed = true;
+    status_.released = true;
+    status_.state = PrecheckState::Released;
+    status_.detail = "released_by_operator";
+    active_waypoint_.reset();
+    frozen_subject_box_.reset();
+    candidate_subject_box_.reset();
+    framing_scores_.clear();
+    if (centering_tracker_) centering_tracker_->reset();
+    rememberCommandLocked(sequence, result);
     return result;
 }
 

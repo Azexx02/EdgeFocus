@@ -245,6 +245,12 @@ if(EDGEFOCUS_WITH_DEMO_HTTP)
     target_include_directories(test_demo_http PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
     target_link_libraries(test_demo_http PRIVATE Threads::Threads nlohmann_json::nlohmann_json)
     add_test(NAME test_demo_http COMMAND test_demo_http)
+
+    add_executable(test_h264_mp4
+        test_h264_mp4.cpp
+        ../network/FragmentedMp4Muxer.cpp)
+    target_include_directories(test_h264_mp4 PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+    add_test(NAME test_h264_mp4 COMMAND test_h264_mp4)
 endif()
 
 # ===========================================================================

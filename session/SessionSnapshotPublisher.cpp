@@ -173,7 +173,24 @@ void SessionSnapshotPublisher::updateReminder(
 void SessionSnapshotPublisher::updateGimbal(
     const GimbalSnapshot& gimbal,
     std::int64_t now_ms) {
-    mutate(now_ms, [&](SessionSnapshot& snapshot) { snapshot.gimbal = gimbal; });
+    GimbalUpdateCallback callback;
+    SessionSnapshot published;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        snapshot_.gimbal = gimbal;
+        updateTimingLocked(now_ms);
+        ++snapshot_.sequence;
+        snapshot_.snapshot_ms = now_ms;
+        callback = gimbal_update_callback_;
+        if (callback) published = snapshot_;
+    }
+    if (callback) callback(published);
+}
+
+void SessionSnapshotPublisher::setGimbalUpdateCallback(
+    GimbalUpdateCallback callback) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    gimbal_update_callback_ = std::move(callback);
 }
 
 void SessionSnapshotPublisher::end(std::int64_t now_ms) {

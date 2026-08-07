@@ -83,8 +83,41 @@ json phoneCategoryWire(const std::optional<session::PhoneCategory>& value) {
     return nullptr;
 }
 
+json precheckGimbalControls(const session::SessionSnapshot& value) {
+    const bool precheck = value.phase == session::Phase::Precheck &&
+                          value.runtime_active;
+    const bool healthy = value.gimbal.available && !value.gimbal.health.degraded;
+    const bool manual = precheck && healthy &&
+                        value.gimbal.state == "manual_available";
+    const bool skip = precheck && healthy &&
+        !value.gimbal.search_completed &&
+        (value.gimbal.state == "searching" ||
+         value.gimbal.state == "centering" ||
+         value.gimbal.state == "framing" ||
+         value.gimbal.state == "holding");
+    return {
+        {"manual_enabled", manual},
+        {"skip_search_enabled", skip}
+    };
+}
+
+json gimbalPrecheckPushData(const session::SessionSnapshot& value) {
+    return {
+        {"session_id", value.context.session_id},
+        {"state", value.gimbal.state},
+        {"degraded", value.gimbal.health.degraded},
+        {"health_status", value.gimbal.health.status},
+        {"detail", value.gimbal.detail},
+        {"fault_class", value.gimbal.fault_class},
+        {"fault_code", value.gimbal.fault_code},
+        {"search_completed", value.gimbal.search_completed},
+        {"controls", precheckGimbalControls(value)}
+    };
+}
+
 json stableSessionSnapshotData(const session::SessionSnapshot& value) {
     json level = value.assessment.level ? json(*value.assessment.level) : json(nullptr);
+    const auto gimbal_controls = precheckGimbalControls(value);
     return {
         {"schema_version", value.schema_version},
         {"sequence", value.sequence},
@@ -163,7 +196,8 @@ json stableSessionSnapshotData(const session::SessionSnapshot& value) {
             {"last_queued_sequence", value.gimbal.last_queued_sequence},
             {"acked_through_sequence", value.gimbal.acked_through_sequence},
             {"current_protection_state", value.gimbal.current_protection_state},
-            {"detail", value.gimbal.detail}
+            {"detail", value.gimbal.detail},
+            {"controls", gimbal_controls}
         }},
         {"degraded_features", value.degraded_features}
     };
@@ -604,6 +638,11 @@ json gimbalResultData(const GimbalCommandResult& result) {
 
 } // namespace
 
+struct AppCommandService::GimbalPushState {
+    std::mutex mutex;
+    std::string signature;
+};
+
 AppCommandService::AppCommandService(SystemStateStore& store, SQLiteStore& sqlite_store,
                                      ReminderPolicy& reminder_policy, ModeManager& mode_mgr,
                                      GimbalMonitor* gimbal_monitor,
@@ -626,6 +665,27 @@ AppCommandService::AppCommandService(SystemStateStore& store, SQLiteStore& sqlit
     , workload_policy_(workload_policy)
     , gimbal_precheck_(gimbal_precheck)
     , device_manager_(device_manager) {
+    if (session_snapshots_ && gimbal_precheck_) {
+        gimbal_push_state_ = std::make_shared<GimbalPushState>();
+        const auto push_state = gimbal_push_state_;
+        auto* const state_store = &store_;
+        session_snapshots_->setGimbalUpdateCallback(
+            [push_state, state_store](const session::SessionSnapshot& snapshot) {
+                if (snapshot.phase != session::Phase::Precheck ||
+                    !snapshot.runtime_active) {
+                    return;
+                }
+                auto data = gimbalPrecheckPushData(snapshot);
+                const auto signature = data.dump();
+                {
+                    std::lock_guard<std::mutex> lock(push_state->mutex);
+                    if (push_state->signature == signature) return;
+                    push_state->signature = signature;
+                }
+                state_store->pushEvent(
+                    AppCommandService::makePush("push_gimbal_precheck_state", data));
+            });
+    }
     if (gimbal_precheck_) {
         gimbal_command_worker_ = std::thread(
             &AppCommandService::gimbalCommandWorkerLoop, this);
@@ -633,6 +693,9 @@ AppCommandService::AppCommandService(SystemStateStore& store, SQLiteStore& sqlit
 }
 
 AppCommandService::~AppCommandService() {
+    if (session_snapshots_) {
+        session_snapshots_->setGimbalUpdateCallback({});
+    }
     {
         std::lock_guard<std::mutex> lock(gimbal_command_mutex_);
         stop_gimbal_command_worker_ = true;
@@ -968,11 +1031,14 @@ std::string AppCommandService::handleGimbalPrecheckCommand(
     const bool identity_free = command == "precheck_skip_auto_adjust" ||
                                command == "gimbal_recover";
     const bool takeover = command == "gimbal_manual_takeover";
+    const bool precheck_direct = phase == session::Phase::Precheck &&
+        (command == "gimbal_nudge" || command == "gimbal_center" ||
+         command == "gimbal_stop" || command == "precheck_confirm_position");
     if (!identity_free &&
         (!data.contains("owner_id") || !data["owner_id"].is_string())) {
         return makeError(req_id, "owner_id is required");
     }
-    if (!identity_free && !takeover &&
+    if (!identity_free && !takeover && !precheck_direct &&
         (!data.contains("lease_token") || !data["lease_token"].is_string())) {
         return makeError(req_id, "lease_token is required");
     }
@@ -1084,6 +1150,10 @@ std::string AppCommandService::executeGimbalPrecheckCommand(
     } else if (command == "gimbal_recover") {
         result = gimbal_precheck_->realign(session_id, sequence, now_ms);
     } else if (command == "gimbal_manual_takeover") {
+        if (phase != session::Phase::Focusing) {
+            return makeError(req_id,
+                             "Manual takeover is only available during FOCUSING");
+        }
         if (!data.contains("owner_id") || !data["owner_id"].is_string()) {
             return makeError(req_id, "owner_id is required");
         }
@@ -1091,13 +1161,19 @@ std::string AppCommandService::executeGimbalPrecheckCommand(
             session_id, data["owner_id"].get<std::string>(), sequence,
             phase, now_ms);
     } else {
-        if (!data.contains("owner_id") || !data["owner_id"].is_string() ||
-            !data.contains("lease_token") || !data["lease_token"].is_string()) {
-            return makeError(req_id, "owner_id and lease_token are required");
+        if (!data.contains("owner_id") || !data["owner_id"].is_string()) {
+            return makeError(req_id, "owner_id is required");
+        }
+        const bool precheck_direct = phase == session::Phase::Precheck &&
+            (command == "gimbal_nudge" || command == "gimbal_center" ||
+             command == "gimbal_stop" || command == "precheck_confirm_position");
+        if (!precheck_direct &&
+            (!data.contains("lease_token") || !data["lease_token"].is_string())) {
+            return makeError(req_id, "lease_token is required");
         }
         const gimbal::ManualCommandContext lease{
             session_id, data["owner_id"].get<std::string>(),
-            data["lease_token"].get<std::string>(), sequence};
+            data.value("lease_token", ""), sequence};
         if (command == "gimbal_lease_keepalive") {
             result = gimbal_precheck_->keepManualLease(lease, phase, now_ms);
         } else if (command == "gimbal_nudge") {
@@ -1119,7 +1195,12 @@ std::string AppCommandService::executeGimbalPrecheckCommand(
         } else if (command == "gimbal_center") {
             result = gimbal_precheck_->center(lease, now_ms);
         } else if (command == "gimbal_stop") {
-            result = gimbal_precheck_->stopMotion(lease, now_ms);
+            if (phase == session::Phase::Precheck) {
+            result = gimbal_precheck_->forceReleaseOperator(
+                    session_id, lease.owner_id, sequence, now_ms);
+            } else {
+                result = gimbal_precheck_->stopMotion(lease, now_ms);
+            }
         } else if (command == "gimbal_release") {
             result = gimbal_precheck_->releaseManualControl(lease, phase, now_ms);
         } else if (command == "gimbal_force_release") {

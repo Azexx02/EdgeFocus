@@ -122,12 +122,12 @@ def main() -> int:
             f"unzip -q {compiler_root}.zip; source {SDK_ENV}; "
             "cmake -S . -B build-arm -DCMAKE_BUILD_TYPE=Release "
             "-DEDGEFOCUS_WITH_OPENCV=ON -DEDGEFOCUS_WITH_STAI_MPU=ON "
-            "-DEDGEFOCUS_WITH_DEMO_HTTP=ON "
+            "-DEDGEFOCUS_WITH_DEMO_HTTP=ON -DEDGEFOCUS_WITH_OPENH264=ON "
             f"-DFETCHCONTENT_SOURCE_DIR_SQLITE3={REMOTE_DEPS}/sqlite3 "
             f"-DFETCHCONTENT_SOURCE_DIR_JSON={REMOTE_DEPS}/json; "
-            # Build every test target as a compile-time contract check. The
-            # binaries are ARM artifacts, so runtime tests execute on-board.
-            "cmake --build build-arm -j4; "
+            # Runtime deployment builds only installed executables. Host CI/tests
+            # remain the compile-time contract and do not belong in the bundle.
+            "cmake --build build-arm --target focus_app gimbal_bringup edgefocus-fan-bridge -j4; "
             "DESTDIR=$PWD/stage cmake --install build-arm; "
             "tar -C stage/usr/local -czf focus_app_release.tar.gz ."
         )
@@ -155,12 +155,20 @@ def main() -> int:
             f"test -f {board_release}/models/distraction/yolo11n_pose_256_float.nb; "
             f"test -f {board_release}/models/distraction/prone_mlp_v1.json; "
             f"test -f {board_release}/config/gimbal-board.json; "
+            f"test -f {board_release}/lib/libopenh264.so.8; "
             f"cp -a /opt/edgefocus/focus_app {board_release}/rollback/focus_app; "
             f"cp -a /opt/edgefocus/models {board_release}/rollback/models; "
             f"cp -a /etc/systemd/system/focus_app.service {board_release}/rollback/focus_app.service; "
             f"if test -d /opt/edgefocus/config; then cp -a /opt/edgefocus/config {board_release}/rollback/config; fi; "
-            f"if test -d /opt/edgefocus/assets; then cp -a /opt/edgefocus/assets {board_release}/rollback/assets; fi; "
+            # Demo videos are immutable operator-provided media and dominate disk
+            # usage.  Deploy copies new traces additively, so rollback does not
+            # duplicate the entire media library for every release.
+            f"if test -d /opt/edgefocus/lib; then cp -a /opt/edgefocus/lib {board_release}/rollback/lib; fi; "
             "systemctl stop focus_app; "
+            # BlueZ can retain an in-progress discovery owned by the bracelet
+            # client after focus_app exits. Reset it while the app is stopped so
+            # the phone advertisement registers before bracelet discovery resumes.
+            "systemctl restart bluetooth; sleep 2; "
             f"install -m 755 {board_release}/bin/focus_app /opt/edgefocus/focus_app; "
             "mkdir -p /opt/edgefocus/models/distraction; "
             f"cp -a {board_release}/models/distraction/. /opt/edgefocus/models/distraction/; "
@@ -168,6 +176,8 @@ def main() -> int:
             f"cp -a {board_release}/config/. /opt/edgefocus/config/; "
             "mkdir -p /opt/edgefocus/assets/demo; "
             f"cp -a {board_release}/assets/demo/. /opt/edgefocus/assets/demo/; "
+            "mkdir -p /opt/edgefocus/lib; "
+            f"cp -a {board_release}/lib/. /opt/edgefocus/lib/; "
             "sed -i '/^Environment=EDGEFOCUS_DISABLE_GIMBAL=1$/d' /etc/systemd/system/focus_app.service; "
             "systemctl daemon-reload; "
             "if systemctl start focus_app && sleep 4 && "
@@ -177,7 +187,7 @@ def main() -> int:
             f"install -m 755 {board_release}/rollback/focus_app /opt/edgefocus/focus_app; "
             f"cp -a {board_release}/rollback/models/. /opt/edgefocus/models/; "
             f"if test -d {board_release}/rollback/config; then cp -a {board_release}/rollback/config/. /opt/edgefocus/config/; fi; "
-            f"if test -d {board_release}/rollback/assets; then cp -a {board_release}/rollback/assets/. /opt/edgefocus/assets/; fi; "
+            f"if test -d {board_release}/rollback/lib; then cp -a {board_release}/rollback/lib/. /opt/edgefocus/lib/; fi; "
             f"cp -a {board_release}/rollback/focus_app.service /etc/systemd/system/focus_app.service; "
             "systemctl daemon-reload; "
             "systemctl start focus_app; exit 1; fi; "

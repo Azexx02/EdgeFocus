@@ -14,6 +14,7 @@ option(EDGEFOCUS_OPENCV_USE_PKGCONFIG
     "Resolve OpenCV through pkg-config (workaround for incomplete vendor CMake exports)" OFF)
 option(EDGEFOCUS_WITH_STAI_MPU "Build STAI_MPU pose model adapter" OFF)
 option(EDGEFOCUS_WITH_DEMO_HTTP "Build optional HTTP demo console" OFF)
+option(EDGEFOCUS_WITH_OPENH264 "Build optional low-latency H.264 preview encoder" OFF)
 option(EDGEFOCUS_WITH_FAN_BRIDGE "Build the standalone A35-to-M33 fan bridge" ON)
 option(EDGEFOCUS_BUILD_TESTS "Build EdgeFocus test executables" ON)
 
@@ -211,8 +212,26 @@ target_link_libraries(focus_app PRIVATE
 if(EDGEFOCUS_WITH_DEMO_HTTP)
     target_sources(focus_app PRIVATE
         demo/BoardDemoRuntime.cpp
-        network/DemoHttpServer.cpp)
+        network/DemoHttpServer.cpp
+        network/FragmentedMp4Muxer.cpp
+        network/H264PreviewEncoder.cpp)
     target_compile_definitions(focus_app PRIVATE EDGEFOCUS_WITH_DEMO_HTTP)
+endif()
+
+if(EDGEFOCUS_WITH_OPENH264)
+    if(NOT EDGEFOCUS_WITH_DEMO_HTTP OR NOT EDGEFOCUS_WITH_OPENCV)
+        message(FATAL_ERROR "EDGEFOCUS_WITH_OPENH264 requires DEMO_HTTP and OPENCV")
+    endif()
+    set(EDGEFOCUS_OPENH264_ROOT
+        "${CMAKE_CURRENT_SOURCE_DIR}/third_party/openh264"
+        CACHE PATH "OpenH264 headers and optional runtime library")
+    if(NOT EXISTS "${EDGEFOCUS_OPENH264_ROOT}/include/wels/codec_api.h")
+        message(FATAL_ERROR "OpenH264 headers are missing under ${EDGEFOCUS_OPENH264_ROOT}")
+    endif()
+    target_compile_definitions(focus_app PRIVATE EDGEFOCUS_WITH_OPENH264)
+    target_include_directories(focus_app PRIVATE
+        "${EDGEFOCUS_OPENH264_ROOT}/include")
+    target_link_libraries(focus_app PRIVATE ${CMAKE_DL_LIBS})
 endif()
 
 if(EDGEFOCUS_WITH_OPENCV)
@@ -283,6 +302,14 @@ endif()
 # Install target
 install(TARGETS focus_app DESTINATION bin)
 install(TARGETS gimbal_bringup DESTINATION bin)
+if(EDGEFOCUS_WITH_OPENH264)
+    install(FILES
+        "${EDGEFOCUS_OPENH264_ROOT}/lib/aarch64/libopenh264.so.8"
+        DESTINATION lib)
+    install(FILES
+        "${EDGEFOCUS_OPENH264_ROOT}/LICENSE"
+        DESTINATION share/licenses/openh264)
+endif()
 if(TARGET edgefocus-fan-bridge)
     install(TARGETS edgefocus-fan-bridge DESTINATION bin)
     install(FILES platform/fan/bridge/edgefocus-fan-bridge.service

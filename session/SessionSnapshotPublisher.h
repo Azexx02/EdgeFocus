@@ -10,6 +10,8 @@ namespace edgefocus::session {
 
 class SessionSnapshotPublisher {
 public:
+    using GimbalUpdateCallback = std::function<void(const SessionSnapshot&)>;
+
     explicit SessionSnapshotPublisher(std::string boot_id = {});
 
     SessionSnapshot read() const;
@@ -31,6 +33,7 @@ public:
                         std::int64_t now_ms);
     void updateReminder(const ReminderSnapshot& reminder, std::int64_t now_ms);
     void updateGimbal(const GimbalSnapshot& gimbal, std::int64_t now_ms);
+    void setGimbalUpdateCallback(GimbalUpdateCallback callback);
     void end(std::int64_t now_ms);
 
 private:
@@ -40,6 +43,7 @@ private:
 
     mutable std::mutex mutex_;
     SessionSnapshot snapshot_;
+    GimbalUpdateCallback gimbal_update_callback_;
     std::int64_t focusing_started_ms_{};
     std::int64_t accumulated_focus_ms_{};
 };

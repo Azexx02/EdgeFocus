@@ -1,6 +1,7 @@
 #include "device/GimbalBoardConfig.h"
 #include "device/GimbalPrecheckController.h"
 
+#include <algorithm>
 #include <cassert>
 #include <iostream>
 #include <string>
@@ -214,46 +215,45 @@ void test_search_waits_for_verified_waypoints_then_returns_origin() {
     assert(hardware.targets[3].first == 0.0);
 }
 
-void test_manual_lease_owner_ttl_and_idempotency() {
+void test_precheck_direct_manual_and_session_lease_boundaries() {
     FakeHardware hardware;
     GimbalPrecheckController controller(hardware, config());
     assert(controller.start("lease", 0));
     assert(controller.skipAuto("lease", 1, 50).success);
-    assert(controller.snapshot().state == PrecheckState::ManualAvailable);
+    auto direct = controller.snapshot();
+    assert(direct.state == PrecheckState::ManualAvailable);
+    assert(!direct.manual_lease);
+    const auto before = hardware.targets.size();
+    assert(controller.nudge(command(direct, 1), NudgeDirection::Right, 200).success);
+    assert(hardware.targets.size() == before + 1);
+    assert(controller.nudge(command(direct, 1), NudgeDirection::Right, 201).success);
+    assert(hardware.targets.size() == before + 1);
+    assert(controller.nudge(command(direct, 1, "app"),
+                            NudgeDirection::Left, 300).success);
+    const auto stale = controller.nudge(
+        command(direct, 0), NudgeDirection::Right, 302);
+    assert(!stale.success && stale.error == "STALE_SEQUENCE");
+    const auto precheck_takeover = controller.manualTakeover(
+        "lease", "web", 2, session::Phase::Precheck, 400);
+    assert(!precheck_takeover.success &&
+           precheck_takeover.error ==
+               "precheck_manual_control_does_not_require_takeover");
 
+    controller.holdForSession(500);
     PrecheckStatus issued;
-    assert(controller.manualTakeover("lease", "web", 1,
-                                     session::Phase::Precheck, 100,
+    assert(controller.manualTakeover("lease", "web", 2,
+                                     session::Phase::Focusing, 600,
                                      &issued).success);
     assert(issued.manual_lease && !issued.lease_token.empty());
-    const auto before = hardware.targets.size();
-    assert(controller.nudge(command(issued, 2), NudgeDirection::Right, 200).success);
-    assert(hardware.targets.size() == before + 1);
-    assert(controller.nudge(command(issued, 2), NudgeDirection::Right, 201).success);
-    assert(hardware.targets.size() == before + 1);
     const auto conflict = controller.manualTakeover(
-        "lease", "app", 1, session::Phase::Precheck, 300);
+        "lease", "app", 2, session::Phase::Focusing, 700);
     assert(!conflict.success &&
            conflict.error == "manual_lease_owned_by_other_client");
-    const auto targets_after_conflict = hardware.targets.size();
-    assert(controller.nudge(command(issued, 2), NudgeDirection::Right, 301).success);
-    assert(hardware.targets.size() == targets_after_conflict);
-    const auto stale = controller.nudge(
-        command(issued, 1), NudgeDirection::Right, 302);
-    assert(!stale.success && stale.error == "STALE_SEQUENCE");
     assert(controller.keepManualLease(command(issued, 3),
-                                      session::Phase::Precheck, 5000).success);
-    const auto late_conflict = controller.manualTakeover(
-        "lease", "app", 2, session::Phase::Precheck, 5001);
-    assert(!late_conflict.success &&
-           late_conflict.error == "manual_lease_owned_by_other_client");
-    controller.maintain(session::Phase::Precheck, 35001);
-    assert(controller.snapshot().state == PrecheckState::ManualAvailable);
+                                      session::Phase::Focusing, 5000).success);
+    controller.maintain(session::Phase::Focusing, 35001);
+    assert(controller.snapshot().state == PrecheckState::Holding);
     assert(!controller.snapshot().manual_lease);
-    const auto expired_replay = controller.manualTakeover(
-        "lease", "web", 3, session::Phase::Precheck, 35002);
-    assert(!expired_replay.success &&
-           expired_replay.error == "manual_lease_expired");
 }
 
 void test_authoritative_target_preserves_net_displacement() {
@@ -262,12 +262,9 @@ void test_authoritative_target_preserves_net_displacement() {
     GimbalPrecheckController controller(hardware, config());
     assert(controller.start("net", 0));
     assert(controller.skipAuto("net", 1, 50).success);
-    PrecheckStatus issued;
-    assert(controller.manualTakeover("net", "web", 1,
-                                     session::Phase::Precheck, 100,
-                                     &issued).success);
-    assert(controller.nudge(command(issued, 2), NudgeDirection::Right, 200).success);
-    assert(controller.nudge(command(issued, 3), NudgeDirection::Right, 300).success);
+    const auto direct = controller.snapshot();
+    assert(controller.nudge(command(direct, 1), NudgeDirection::Right, 200).success);
+    assert(controller.nudge(command(direct, 2), NudgeDirection::Right, 300).success);
     assert(hardware.targets[hardware.targets.size() - 2].first == 2.0);
     assert(hardware.targets.back().first == 4.0);
 }
@@ -288,6 +285,70 @@ void test_fault_recovery_does_not_repeat_completed_search() {
     assert(controller.snapshot().state == PrecheckState::ManualAvailable);
     assert(controller.snapshot().waypoint_index == waypoint_before);
     assert(controller.snapshot().search_completed);
+}
+
+void test_session_fault_recovers_saved_position_and_holding() {
+    FakeHardware hardware;
+    GimbalPrecheckController controller(hardware, config());
+    assert(controller.start("session-recover", 0));
+    assert(controller.skipAuto("session-recover", 1, 50).success);
+    controller.holdForSession(75);
+    hardware.current.yaw_deg = 24.0;
+    hardware.current.pitch_deg = -12.0;
+    hardware.current.state = State::Fault;
+    hardware.current.fault_active = true;
+    hardware.current.recoverable = true;
+    hardware.current.fault_latched_reason = "STALL";
+
+    controller.maintain(session::Phase::Focusing, 100);
+    assert(controller.snapshot().state == PrecheckState::Degraded);
+    assert(hardware.current.state == State::Disabled);
+    controller.maintain(session::Phase::Focusing, 5100);
+    assert(controller.snapshot().state == PrecheckState::Holding);
+    assert(!hardware.targets.empty());
+    assert(hardware.targets.back().first == 24.0);
+    assert(hardware.targets.back().second == 348.0);
+}
+
+void test_precheck_fault_does_not_recover_after_session_starts() {
+    FakeHardware hardware;
+    GimbalPrecheckController controller(hardware, config());
+    assert(controller.start("precheck-fault-session", 0));
+    hardware.current.state = State::Fault;
+    hardware.current.fault_active = true;
+    hardware.current.recoverable = true;
+    hardware.current.fault_latched_reason = "STALL";
+
+    controller.maintain(session::Phase::Precheck, 100);
+    assert(controller.snapshot().state == PrecheckState::Degraded);
+    const auto calls_before_session = hardware.calls.size();
+    controller.maintain(session::Phase::Focusing, 5100);
+    assert(controller.snapshot().state == PrecheckState::Degraded);
+    assert(hardware.current.state == State::Disabled);
+    assert(hardware.calls.size() == calls_before_session);
+}
+
+void test_precheck_force_release_is_available_when_degraded_and_idempotent() {
+    FakeHardware hardware;
+    GimbalPrecheckController controller(hardware, config());
+    assert(controller.start("degraded-release", 0));
+    hardware.current.state = State::Fault;
+    hardware.current.fault_active = true;
+    hardware.current.recoverable = true;
+    controller.maintain(session::Phase::Precheck, 100);
+    assert(controller.snapshot().state == PrecheckState::Degraded);
+    const auto disable_count = std::count(
+        hardware.calls.begin(), hardware.calls.end(), "disable");
+
+    assert(controller.forceReleaseOperator(
+        "degraded-release", "app", 1, 200).success);
+    assert(controller.snapshot().state == PrecheckState::Released);
+    assert(controller.forceReleaseOperator(
+        "degraded-release", "app", 1, 201).success);
+    assert(controller.forceReleaseOperator(
+        "degraded-release", "app", 2, 202).success);
+    assert(std::count(hardware.calls.begin(), hardware.calls.end(), "disable") ==
+           disable_count);
 }
 
 void test_nonrecoverable_motion_failure_does_not_restart_search() {
@@ -318,23 +379,20 @@ void test_manual_boundary_stop_then_alternating_fine_crossing() {
     hardware.current.yaw_deg = 50.0;
     hardware.current.pitch_deg = 0.0;
     assert(controller.skipAuto("boundary", 1, 50).success);
-    PrecheckStatus issued;
-    assert(controller.manualTakeover("boundary", "web", 1,
-                                     session::Phase::Precheck, 100,
-                                     &issued).success);
+    const auto issued = controller.snapshot();
     const auto stopped = controller.nudge(
-        command(issued, 2), NudgeDirection::Right, 200, false);
+        command(issued, 1), NudgeDirection::Right, 200, false);
     assert(stopped.success && stopped.boundary_stop_planned);
     assert(stopped.resolved_step_deg == 30.0);
     assert(hardware.targets.back().first == 70.0);
 
     const auto pending = controller.nudge(
-        command(issued, 3), NudgeDirection::Right, 201, true);
+        command(issued, 2), NudgeDirection::Right, 201, true);
     assert(!pending.success && pending.boundary_paused);
     hardware.current.snapshot.settled = true;
     controller.maintain(session::Phase::Precheck, 300);
     const auto crossed = controller.nudge(
-        command(issued, 4), NudgeDirection::Right, 301, true);
+        command(issued, 3), NudgeDirection::Right, 301, true);
     assert(crossed.success && crossed.fine_tune);
     assert(crossed.resolved_step_deg == 10.0);
     assert(hardware.targets.back().first == 80.0);
@@ -345,12 +403,9 @@ void test_force_release_and_session_end_origin_policy() {
     GimbalPrecheckController controller(hardware, config());
     assert(controller.start("release", 0));
     assert(controller.skipAuto("release", 1, 50).success);
-    PrecheckStatus issued;
-    assert(controller.manualTakeover("release", "web", 1,
-                                     session::Phase::Precheck, 100,
-                                     &issued).success);
-    assert(controller.forceRelease(command(issued, 2),
-                                   session::Phase::Precheck, 200).success);
+    controller.holdForSession(75);
+    assert(controller.forceReleaseOperator(
+        "release", "web", 2, 200).success);
     assert(controller.snapshot().state == PrecheckState::Released);
     const auto released_targets = hardware.targets.size();
     controller.stop();
@@ -376,10 +431,13 @@ int main() {
     test_precheck_does_not_publish_searching_when_hold_fails();
     test_candidate_requires_distinct_stable_frames_and_no_implicit_lease();
     test_search_waits_for_verified_waypoints_then_returns_origin();
-    test_manual_lease_owner_ttl_and_idempotency();
+    test_precheck_direct_manual_and_session_lease_boundaries();
     test_authoritative_target_preserves_net_displacement();
     test_manual_boundary_stop_then_alternating_fine_crossing();
     test_fault_recovery_does_not_repeat_completed_search();
+    test_session_fault_recovers_saved_position_and_holding();
+    test_precheck_fault_does_not_recover_after_session_starts();
+    test_precheck_force_release_is_available_when_degraded_and_idempotent();
     test_nonrecoverable_motion_failure_does_not_restart_search();
     test_force_release_and_session_end_origin_policy();
     std::cout << "gimbal precheck tests passed\n";

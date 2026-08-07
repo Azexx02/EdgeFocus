@@ -477,6 +477,13 @@ void BleBandController::connectionThreadFunc() {
         reconnect_requested_.exchange(false);
     };
 
+    // The board uses one controller for both the phone-facing GATT peripheral
+    // and the bracelet central connection.  Give the GATT server a bounded
+    // startup window to register its advertisement before starting discovery;
+    // otherwise BlueZ can keep rejecting RegisterAdvertisement while discovery
+    // is continuously active.  An explicit App search wakes this wait early.
+    waitBeforeRetry(std::chrono::seconds(3));
+
     while (!stop_requested_.load()) {
         std::string target_name = envOrDefault("EDGEFOCUS_BAND_NAME", "EdgefocusBand");
         std::string mac = envOrDefault("EDGEFOCUS_BAND_MAC", "");
@@ -496,7 +503,9 @@ void BleBandController::connectionThreadFunc() {
 
         if (paths.device.empty()) {
             LOGW("BleBandController", "BLE band not found, retrying");
-            waitBeforeRetry(std::chrono::seconds(3));
+            // Leave a real idle window for phone advertising.  The operator's
+            // explicit scan/reconnect command still wakes this wait immediately.
+            waitBeforeRetry(std::chrono::seconds(15));
             continue;
         }
 

@@ -114,6 +114,11 @@ struct Event {
     std::optional<unsigned> operation_progress;
     std::string last_operation_status;
     std::optional<unsigned> uart_errors;
+    std::optional<unsigned> uart_overruns;
+    std::optional<unsigned> uart_framing_errors;
+    std::optional<unsigned> uart_noise_errors;
+    std::optional<unsigned> uart_parity_errors;
+    std::optional<unsigned> uart_rx_rearm_failures;
     std::optional<unsigned> rx_drops;
     std::optional<unsigned> tx_drops;
     std::optional<std::uint32_t> pitch_current_raw;

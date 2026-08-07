@@ -142,10 +142,16 @@ GimbalBoardConfig loadGimbalBoardConfig(const std::string& path) {
             result.tracking.target_y = tracking.value("target_y", result.tracking.target_y);
             result.tracking.deadband_x = tracking.value("deadband_x", result.tracking.deadband_x);
             result.tracking.deadband_y = tracking.value("deadband_y", result.tracking.deadband_y);
+            result.tracking.reentry_deadband_x = tracking.value("reentry_deadband_x", result.tracking.reentry_deadband_x);
+            result.tracking.reentry_deadband_y = tracking.value("reentry_deadband_y", result.tracking.reentry_deadband_y);
             result.tracking.yaw_gain_deg = tracking.value("yaw_gain_deg", result.tracking.yaw_gain_deg);
             result.tracking.pitch_gain_deg = tracking.value("pitch_gain_deg", result.tracking.pitch_gain_deg);
             result.tracking.maximum_step_deg = tracking.value("maximum_step_deg", result.tracking.maximum_step_deg);
             result.tracking.smoothing_alpha = tracking.value("smoothing_alpha", result.tracking.smoothing_alpha);
+            result.tracking.maximum_yaw_velocity_deg_s = tracking.value("maximum_yaw_velocity_deg_s", result.tracking.maximum_yaw_velocity_deg_s);
+            result.tracking.maximum_pitch_velocity_deg_s = tracking.value("maximum_pitch_velocity_deg_s", result.tracking.maximum_pitch_velocity_deg_s);
+            result.tracking.maximum_acceleration_deg_s2 = tracking.value("maximum_acceleration_deg_s2", result.tracking.maximum_acceleration_deg_s2);
+            result.tracking.minimum_target_delta_deg = tracking.value("minimum_target_delta_deg", result.tracking.minimum_target_delta_deg);
             result.tracking.yaw_direction = tracking.value("yaw_direction", result.tracking.yaw_direction);
             result.tracking.pitch_direction = tracking.value("pitch_direction", result.tracking.pitch_direction);
         }

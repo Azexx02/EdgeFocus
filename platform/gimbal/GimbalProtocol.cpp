@@ -182,6 +182,11 @@ void parseFields(const std::vector<std::string>& parts, std::size_t begin, Event
         event.last_operation_status = upper(*value);
     }
     if (const auto value = read_u32("UARTERR")) event.uart_errors = *value;
+    if (const auto value = read_u32("ORE")) event.uart_overruns = *value;
+    if (const auto value = read_u32("FE")) event.uart_framing_errors = *value;
+    if (const auto value = read_u32("NE")) event.uart_noise_errors = *value;
+    if (const auto value = read_u32("PE")) event.uart_parity_errors = *value;
+    if (const auto value = read_u32("RXREARM")) event.uart_rx_rearm_failures = *value;
     if (const auto value = read_u32("RXDROP")) event.rx_drops = *value;
     if (const auto value = read_u32("TXDROP")) event.tx_drops = *value;
     event.pitch_current_raw = read_u32("P_RAW");

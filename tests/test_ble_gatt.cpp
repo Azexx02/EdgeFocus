@@ -491,12 +491,17 @@ int main() {
         };
         std::mutex pushed_mutex;
         std::vector<json> pushed_results;
+        std::vector<json> pushed_gimbal_states;
         typed_store.setPushCallback([&](const std::string& payload) {
             const auto parsed = json::parse(payload, nullptr, false);
-            if (parsed.is_discarded() ||
-                parsed.value("cmd", "") != "push_gimbal_command_result") return;
+            if (parsed.is_discarded()) return;
             std::lock_guard<std::mutex> lock(pushed_mutex);
-            pushed_results.push_back(parsed["data"]);
+            if (parsed.value("cmd", "") == "push_gimbal_command_result") {
+                pushed_results.push_back(parsed["data"]);
+            } else if (parsed.value("cmd", "") ==
+                       "push_gimbal_precheck_state") {
+                pushed_gimbal_states.push_back(parsed["data"]);
+            }
         });
         const auto wait_for_result = [&](const std::string& command,
                                          std::uint64_t sequence,
@@ -517,6 +522,30 @@ int main() {
             return json::object();
         };
 
+        session::GimbalSnapshot degraded_snapshot;
+        degraded_snapshot.state = "degraded";
+        degraded_snapshot.health = {false, true, "recovering", "STALL", monotonic};
+        degraded_snapshot.fault_class = "motion";
+        degraded_snapshot.fault_code = "STALL";
+        degraded_snapshot.detail = "runtime_fault";
+        typed_snapshots.updateGimbal(degraded_snapshot, monotonic);
+        assert(wait_until([&] {
+            std::lock_guard<std::mutex> lock(pushed_mutex);
+            return pushed_gimbal_states.size() == 1;
+        }));
+        {
+            std::lock_guard<std::mutex> lock(pushed_mutex);
+            const auto& pushed = pushed_gimbal_states.back();
+            assert(pushed["degraded"] == true);
+            assert(!pushed["controls"].contains("stop_enabled"));
+            assert(pushed["controls"].size() == 2);
+        }
+        typed_snapshots.updateGimbal(degraded_snapshot, monotonic + 1);
+        {
+            std::lock_guard<std::mutex> lock(pushed_mutex);
+            assert(pushed_gimbal_states.size() == 1);
+        }
+
         const auto skip_payload = std::string(
             "{\"cmd\":\"precheck_skip_auto_adjust\",\"id\":48,\"data\":{"
             "\"session_id\":\"") + started.context->session_id +
@@ -530,48 +559,69 @@ int main() {
         const auto skip_result = wait_for_result("precheck_skip_auto_adjust", 1);
         assert(skip_result.value("accepted", false));
 
-        const auto takeover_payload = std::string(
-            "{\"cmd\":\"gimbal_manual_takeover\",\"id\":481,\"data\":{"
-            "\"session_id\":\"") + started.context->session_id +
-            "\",\"owner_id\":\"app-test\",\"sequence\":1}}";
-        json takeover = parseResponse(typed_server.handleCommand(takeover_payload));
-        assertSuccess(takeover, 481);
-        assert(takeover["data"]["queued"] == true);
-        assert(wait_until([&] { return controller.snapshot().manual_lease; }));
-        const auto takeover_result = wait_for_result("gimbal_manual_takeover", 1);
-        assert(takeover_result.value("accepted", false));
-        const auto lease_token = takeover_result.value("lease_token", "");
-        assert(!lease_token.empty());
-
         const auto nudge_payload = std::string(
             "{\"cmd\":\"gimbal_nudge\",\"id\":49,\"data\":{"
             "\"session_id\":\"") + started.context->session_id +
-            "\",\"owner_id\":\"app-test\",\"lease_token\":\"" + lease_token +
-            "\",\"sequence\":2,\"direction\":\"RIGHT\"}}";
+            "\",\"owner_id\":\"app-test\",\"sequence\":1,\"direction\":\"RIGHT\"}}";
         json nudged = parseResponse(typed_server.handleCommand(nudge_payload));
         assertSuccess(nudged, 49);
         assert(nudged["data"]["queued"] == true);
         assert(wait_until([&] { return hardware.state.yaw_deg == 2.0; }));
-        const auto nudge_result = wait_for_result("gimbal_nudge", 2);
+        const auto nudge_result = wait_for_result("gimbal_nudge", 1);
         assert(nudge_result.value("accepted", false));
         assert(nudge_result.value("firmware_accepted", false));
-        assert(nudge_result.value("acked_through_sequence", std::uint64_t{}) == 2);
+        assert(nudge_result.value("acked_through_sequence", std::uint64_t{}) == 1);
         assert(nudge_result["settled"] == false);
 
         assert(typed_orchestrator.confirmReady().success);
         controller.holdForSession(monotonic);
-        json wrong_phase = parseResponse(typed_server.handleCommand(nudge_payload));
-        assertSuccess(wrong_phase, 49);
-        assert(wrong_phase["data"]["queued"] == true);
-        const auto rejected_replay = wait_for_result("gimbal_nudge", 2, 2);
-        assert(!rejected_replay.value("accepted", true));
-        assert(rejected_replay.value("error", "") == "manual_lease_unavailable");
+        const auto takeover_payload = std::string(
+            "{\"cmd\":\"gimbal_manual_takeover\",\"id\":481,\"data\":{"
+            "\"session_id\":\"") + started.context->session_id +
+            "\",\"owner_id\":\"app-test\",\"sequence\":2}}";
+        json takeover = parseResponse(typed_server.handleCommand(takeover_payload));
+        assertSuccess(takeover, 481);
+        assert(takeover["data"]["queued"] == true);
+        assert(wait_until([&] { return controller.snapshot().manual_lease; }));
+        const auto takeover_result = wait_for_result("gimbal_manual_takeover", 2);
+        assert(takeover_result.value("accepted", false));
+        const auto lease_token = takeover_result.value("lease_token", "");
+        assert(!lease_token.empty());
+
+        const auto session_nudge_payload = std::string(
+            "{\"cmd\":\"gimbal_nudge\",\"id\":492,\"data\":{"
+            "\"session_id\":\"") + started.context->session_id +
+            "\",\"owner_id\":\"app-test\",\"lease_token\":\"" + lease_token +
+            "\",\"sequence\":3,\"direction\":\"LEFT\"}}";
+        json session_nudge =
+            parseResponse(typed_server.handleCommand(session_nudge_payload));
+        assertSuccess(session_nudge, 492);
+        assert(session_nudge["data"]["queued"] == true);
+        const auto session_nudge_result = wait_for_result("gimbal_nudge", 3);
+        assert(session_nudge_result.value("accepted", false));
 
         typed_orchestrator.end(session::StopReason::Cancelled);
         monotonic += 1000;
         const auto precheck_only = typed_orchestrator.start(
             {1500000, session::SourceMode::LiveCamera});
         assert(precheck_only.success);
+        controller.stop();
+        assert(controller.start(precheck_only.context->session_id, monotonic));
+
+        const auto force_stop_payload = std::string(
+            "{\"cmd\":\"gimbal_stop\",\"id\":493,\"data\":{"
+            "\"session_id\":\"") + precheck_only.context->session_id +
+            "\",\"owner_id\":\"app-test\",\"sequence\":1}}";
+        json force_stopped =
+            parseResponse(typed_server.handleCommand(force_stop_payload));
+        assertSuccess(force_stopped, 493);
+        assert(force_stopped["data"]["queued"] == true);
+        assert(wait_until([&] {
+            return controller.snapshot().state == gimbal::PrecheckState::Released;
+        }));
+        const auto force_stop_result = wait_for_result("gimbal_stop", 1);
+        assert(force_stop_result.value("accepted", false));
+        assert(hardware.state.state == gimbal::State::Disabled);
 
         json stale_cancel = parseResponse(typed_server.handleCommand(
             R"({"cmd":"session_control","id":490,"data":{"action":"end","session_id":"stale-session"}})"));

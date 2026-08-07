@@ -61,17 +61,32 @@ int main() {
 
     auto result = tracker.update(1000, visual(1, 1000, 0.8, 0.35));
     assert(result.success);
+    // The planner accelerates from rest instead of kicking by a fixed step.
+    assert(hardware.targets.empty());
+    result = tracker.update(1100, visual(1, 1000, 0.8, 0.35));
+    assert(result.success);
     assert(hardware.targets.size() == 1);
     assert(hardware.targets.back().first > 0.0);
     assert(tracker.status().tracking);
 
-    result = tracker.update(1050, visual(2, 1050, 0.8, 0.35));
-    assert(result.success && hardware.targets.size() == 1);
-    result = tracker.update(1200, visual(3, 1200, 0.5, 0.35));
+    const auto first_target = hardware.targets.back().first;
+    result = tracker.update(1200, visual(2, 1200, 0.8, 0.35));
     assert(result.success);
+    assert(hardware.targets.back().first > first_target);
+
+    // A single opposite observation only decelerates; it cannot immediately
+    // reverse the motor command.
+    result = tracker.update(1300, visual(3, 1300, 0.2, 0.35));
+    assert(result.success);
+    const auto before_confirmed_reversal = hardware.targets.back().first;
+    result = tracker.update(1400, visual(4, 1400, 0.2, 0.35));
+    assert(result.success);
+    result = tracker.update(1500, visual(4, 1400, 0.2, 0.35));
+    assert(result.success);
+    assert(hardware.targets.back().first <= before_confirmed_reversal + 1.0);
 
     session::VisualSnapshot missing;
-    missing.frame_id = 4;
+    missing.frame_id = 5;
     missing.evidence_timestamp_ms = 3000;
     missing.presence = 0.0;
     assert(tracker.update(3000, missing).success);

@@ -11,6 +11,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -55,6 +56,8 @@ public:
     static std::string makePush(const std::string& cmd, const json& data);
 
 private:
+    struct GimbalPushState;
+
     SystemStateStore& store_;
     SQLiteStore& sqlite_store_;
     ReminderPolicy& reminder_policy_;
@@ -67,6 +70,7 @@ private:
     power::WorkloadProfilePolicy* workload_policy_;
     gimbal::GimbalPrecheckController* gimbal_precheck_;
     DeviceManager* device_manager_;
+    std::shared_ptr<GimbalPushState> gimbal_push_state_;
     std::atomic<uint64_t> phone_sequence_{0};
 
     std::string handleGetDeviceStatus(int req_id);

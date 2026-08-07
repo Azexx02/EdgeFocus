@@ -196,6 +196,9 @@ bool CameraPipeline::openCamera() {
         }
         cap.set(cv::CAP_PROP_FRAME_WIDTH, 640);
         cap.set(cv::CAP_PROP_FRAME_HEIGHT, 480);
+        // Best-effort low-latency hint. Some V4L2 backends ignore this property,
+        // but camera open must not fail when they do.
+        (void)cap.set(cv::CAP_PROP_BUFFERSIZE, 1);
         impl_->capture = std::move(cap);
         impl_->active_index = index;
         CameraFrame probe;

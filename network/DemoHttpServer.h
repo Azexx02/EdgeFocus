@@ -4,6 +4,7 @@
 #include "app/SystemStateStore.h"
 #include "device/DeviceManager.h"
 #include "device/GimbalMonitor.h"
+#include "network/H264PreviewEncoder.h"
 #include "storage/SQLiteStore.h"
 
 #include <atomic>
@@ -185,6 +186,7 @@ private:
         int width{};
         int height{};
         double stream_fps{};
+        std::int64_t encoded_at_ms{};
         std::vector<std::uint8_t> jpeg;
     };
 
@@ -196,6 +198,16 @@ private:
     struct StreamClient {
         std::shared_ptr<StreamClientState> state;
         std::thread worker;
+    };
+
+    struct H264PreviewRuntime {
+        bool compiled{};
+        bool healthy{};
+        bool active{};
+        int consecutive_failures{};
+        double encode_ms{};
+        double stream_fps{};
+        std::string error;
     };
 
     void serveLoop();
@@ -221,8 +233,11 @@ private:
     std::string nextMaintenanceNonce();
     PreviewSourceSelection previewSourceSelection() const;
     void previewEncoderLoop();
+    void h264EncoderLoop();
     bool startPreviewStreamClient(int client_fd);
+    bool startH264StreamClient(int client_fd);
     void previewStreamClientLoop(const std::shared_ptr<StreamClientState>& state);
+    void h264StreamClientLoop(const std::shared_ptr<StreamClientState>& state);
     void reapFinishedStreamClients();
     void stopStreamClients();
     std::string previewFrameResponse() const;
@@ -244,9 +259,16 @@ private:
     std::atomic<bool> running_{false};
     std::thread server_thread_;
     std::thread preview_encoder_thread_;
+    std::thread h264_encoder_thread_;
     mutable std::mutex encoded_preview_mutex_;
     std::condition_variable encoded_preview_changed_;
     std::shared_ptr<const EncodedPreviewFrame> encoded_preview_;
+    H264PreviewEncoder h264_encoder_;
+    mutable std::mutex encoded_h264_mutex_;
+    std::condition_variable encoded_h264_changed_;
+    std::shared_ptr<const H264PreviewPacket> encoded_h264_;
+    H264PreviewRuntime h264_runtime_;
+    std::atomic<bool> h264_force_keyframe_{false};
     std::mutex stream_clients_mutex_;
     std::vector<StreamClient> stream_clients_;
     mutable std::mutex maintenance_mutex_;

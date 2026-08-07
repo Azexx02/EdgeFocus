@@ -416,3 +416,147 @@
 - AArch64 `gimbal_bringup` SHA-256:
   `120fc5fb33c00573e9a369281e3cb6cc2e5232401e80f2653774b54e5f2c05b6`;
   installed to `/opt/edgefocus/tools/gimbal_bringup-current`, main service remained active.
+
+## 2026-07-22 Preview/tracking/UART stabilization
+
+- Started a bounded stabilization task covering three connected runtime paths.
+- Read the brainstorming and planning-with-files skill instructions.
+- Checked existing planning state and recent commits; no implementation changes made yet.
+- Began source indexing for preview/evidence, tracking control, and UART health probes.
+- User clarified the target: approximately 15 FPS live preview, 3-4 FPS inference,
+  and reuse the latest evidence between inference frames. Current preview lags reality;
+  evidence geometry itself is accurate.
+- Inspected the latest-only preview store, camera publishing cadence, MJPEG encoder,
+  and evidence snapshot publisher. No code changed.
+- Inspected the browser MJPEG client, bounded inference queue, tracking controller and
+  configured gains, plus the 500 ms synchronous UART health-probe loop. No code changed.
+- Read-only board metrics showed the session had ended; deferred active-stream measurement.
+- Verified Linux serial setup and noted production config currently uses UART-only mode.
+- User approved approach B and waived further approval gates for this task.
+- Wrote `docs/superpowers/specs/2026-07-22-preview-tracking-uart-stabilization.md`.
+
+## 2026-07-22 H.264 preview and manual takeover completion
+
+- Added a dynamically loaded OpenH264 encoder and fragmented-MP4 muxer. The demo page now
+  prefers MSE AVC and automatically falls back to latest-frame JPEG when AVC is unavailable
+  or genuinely stalled; old overlay evidence is reused between 3-4 FPS inference updates.
+- Bounded the preview to 384 px wide, 15 FPS and 650 kbps target so it does not starve the
+  NPU path. Board loopback verification reported H.264 healthy at about 13.6 FPS and 103 ms.
+- Fixed H.264 reconnect callback accumulation, allowed short retiring/new stream overlap,
+  and kept only one active client generation so reconnects do not progressively degrade.
+- Web manual controls can now acquire the lease on the first click even while PRECHECK is
+  searching. Board verification acquired a lease two seconds after session start, executed
+  STOP, and ended the test session successfully.
+- App BLE commands now carry stable owner identity, lease token, sequence and `fine_tune`;
+  the controller performs skip-search -> takeover -> command, keeps the lease alive, and
+  waits for the matching asynchronous host result instead of treating transport ACK as motion completion.
+- Focused Android protocol/precheck tests passed and `assembleDebug` completed successfully.
+  APK: `C:/Users/Aze/Desktop/APP/EdgeFocusApp/app/build/outputs/apk/debug/app-debug.apk`.
+- Cross-built host binary was stripped, checksum-verified and installed on the board;
+  installed SHA-256 is `bb2f4c1f935861b47a62b3c3c7f159bd9ad42e5578887b9d3367df0fbd56a012`.
+- During external-browser QA, the board EHCI hub repeatedly reported USB disconnect / `-71`
+  and removed Wi-Fi/Bluetooth plus the camera together. This is below the HTTP/application
+  layer; COM19 and EHCI rebind restored devices, but the physical shared USB path needs a
+  separate power/signal-integrity or kernel-driver investigation.
+# 2026-07-22 National MJPEG/lease regression repair
+
+- User clarified that the initial continuous MJPEG presentation was accurate;
+  only the later AVC and single-JPEG/Canvas paths exhibit the overlay problem.
+- Confirmed the target is `code/focus_app_national`; the onsite runtime is only
+  a known-good implementation reference.
+- Design approved: restore direct MJPEG plus its verified overlay geometry,
+  retain but do not auto-select the H.264 backend, and require explicit Web
+  manual lease acquisition.
+- Added the approved repair specification and began implementation.
+- National Web page now uses direct multipart MJPEG and keeps the AVC backend
+  compiled but unselected. Explicit Web takeover gates direction, fine-tune,
+  center, and stop without disabling automatic search or session tracking.
+- App Skip now bypasses the not-yet-READY gate, sends only the skip command,
+  waits up to three seconds for a non-automatic authoritative PRECHECK state,
+  and applies it to both Home and Control Panel state.
+- Host build succeeded and all 33 CTest targets passed.
+- App focused tests, full `testDebugUnitTest`, and `assembleDebug` passed under
+  the repository's verified JBR 17.0.14.
+- Cross-build on `hu@192.168.10.6` completed and the release was atomically
+  deployed to `root@192.168.10.173`; the service and `/api/demo/state` health
+  checks passed without rollback.
+- Read-only board verification confirmed that the served page selects the direct
+  `/api/demo/stream.mjpg` transport and includes the explicit Web takeover gate.
+- Android APK SHA-256 is
+  `63D2A09097C2F1B33C7714359D1B5028BB3B600C9986AA1C11FB6FF0C4E1A431`.
+- Board logs exposed a stuck BlueZ discovery session that prevented the phone
+  advertisement from registering (`ActiveInstances=0`). The bracelet controller
+  now gives phone GATT a three-second startup priority window and leaves a
+  fifteen-second idle interval after unsuccessful background scans; an explicit
+  App band-search command still wakes the wait immediately.
+- Restarting only `bluetooth.service` cleared the pre-existing stuck discovery
+  owner. Verification after a full bracelet scan cycle showed
+  `ActiveInstances=1`, `Discovering=no`, the EdgeFocus advertisement remained
+  registered, and the HTTP health endpoint remained available.
+
+## 2026-07-22 Exact original MJPEG restoration completion
+
+- Restored the served page to one static `img#frame` using the direct multipart
+  `/api/demo/stream.mjpg` endpoint. Removed page-side H.264, MediaSource,
+  Canvas/latest-JPEG fetch loops, dynamic MJPEG elements, and duplicate timers.
+- Disabled the unused H.264 encoder worker so it can no longer suspend the
+  authoritative JPEG encoder. Evidence overlay and media share the original
+  display rectangle and JPEG production stays current between NPU results.
+- Board pre-recorded-NPU acceptance observed five distinct MJPEG sequence values
+  in one bounded sample, 15.34 reported stream FPS, 134 ms encoded-frame age,
+  3.72 FPS NPU inference, and `h264.active=false`; mode was restored to live.
+- Served HTML contract and JavaScript syntax checks passed on port 18080.
+- The deployment tool now builds only installed runtime executables and resets
+  BlueZ while `focus_app` is stopped. Final board state has both services active,
+  `ActiveInstances=1`, and the phone-facing EdgeFocus advertisement registered.
+# 2026-07-23 Phase-scoped gimbal control progress
+
+- Updated `GimbalPrecheckController` so `ManualAvailable` accepts direct, sequence-checked adjustment without a lease.
+- Restricted `manualTakeover` to FOCUSING and retained lease enforcement for keepalive, release, and force release.
+- Updated Web and App command handlers so PRECHECK nudge/center/stop/confirm do not require a token.
+- Added `skip_search_enabled`, `manual_requires_lease`, and `stop_enabled` alongside the existing control flags.
+- Updated the Web PRECHECK action to “跳过自动搜索”; FOCUSING keeps “接管微调”.
+- Cross-compiled `focus_app`, `test_gimbal_precheck`, and `test_ble_gatt` successfully.
+- Local targeted tests passed: 2/2.
+- Deployed board binary SHA-256 `81a57e5f6cc779248465a513de6bc48f947909d8af5dab7c098deec7f980d6f1`.
+- Board acceptance passed: PRECHECK search exposed skip/stop only; `manual_available` accepted a direct 10-degree nudge without a lease; FOCUSING exposed takeover; after takeover the takeover control disabled and release enabled; release restored tracking controls; the test session ended cleanly.
+
+# 2026-07-23 PRECHECK gimbal fault containment
+
+- Implemented immediate host-side stop-and-disable on the first degraded
+  transition.
+- Added fault-origin-aware recovery and saved-position session restoration.
+- Added PRECHECK gimbal state push notifications and idempotent force release.
+- Updated App handoff and current architecture documentation.
+- Focused `test_gimbal_precheck`, `test_ble_gatt`, and `test_demo_http` pass on
+  the Windows host build.
+- ARM release built on `192.168.10.6` and atomically installed on
+  `192.168.10.173`; service, HTTP API, GATT registration, and EdgeFocus
+  advertisement are healthy. Board binary SHA-256:
+  `a72ee96f77b1b6fd601e1af0160f457fd307d7c829e040218994b600c86f2b06`.
+- Deployment command timed out only while rechecking unchanged demo assets
+  after the new binary had passed the service/API health gate.
+
+# 2026-07-23 Web gimbal stop/force-release visibility correction
+
+- User approved making Stop and Force Release independent of Web manual
+  takeover in both PRECHECK and FOCUSING.
+- Began a focused correction in `network/DemoHttpServer.cpp`; backend command
+  semantics and automatic tracking/search state machines remain unchanged.
+- Final requirement removed ordinary Web Stop. Force Release is now the sole
+  hard-stop control in the page and is tokenless in PRECHECK and FOCUSING.
+- Windows host build passed. `test_gimbal_precheck` and `test_demo_http` pass;
+  the source contract confirms no Web Stop button and no Force Release lease
+  gate.
+- Removed stop capability negotiation from both App and Demo runtime JSON.
+  The App-facing control object now contains only manual and skip-search
+  gating; the `gimbal_stop` safety command remains tokenless and idempotent.
+- `test_ble_gatt`, `test_gimbal_precheck`, and `test_demo_http` pass after the
+  protocol-field removal.
+- ARM release `20260723-135847` was atomically deployed to
+  `192.168.10.173`. Board acceptance confirms the Demo/App runtime state has
+  no stop capability field, the page has no ordinary Stop button, Force
+  Release remains present, `focus_app` and Bluetooth are active, one process
+  is running, and BlueZ reports one active advertisement.
+- Installed board binary SHA-256:
+  `518ddcfebfac40aa6866bff6e0bf62a9772c2c79da8ba95e46cd7d81597240f3`.

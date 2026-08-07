@@ -144,10 +144,10 @@ flowchart LR
    - 居中后再次冻结并在 1.2 秒内采集三帧构图分数；至少两帧合格才 HOLD 并交出手动租约。超时或无目标时验证回参考中位后进入手动。
    - FOCUSING 内根据 Pose 上半身目标执行闭环跟踪；PAUSED 只 HOLD 并清空旧追踪目标；Resume 从新视觉帧重新建立连续性。
    - 健康结束时先验证回参考中位，再执行 `STOP → OK,STOP → motion_off` 校验并禁用；停止操作幂等，Ending/feature stop/析构不会重复发命令。故障结束跳过回中，安全停机优先。
-   - UART、PD6、对齐或运行状态任一失败，PRECHECK 运动与后续跟踪能力共同降级；硬件服务维持 PD7 安全态并低频探测。连续健康后重新对齐，再按当前 phase 恢复搜索或 HOLD。
+   - UART、PD6、对齐或运行状态任一失败，主机立即 `stopAndDisable`，PRECHECK 运动与后续跟踪能力共同降级。恢复策略记录故障发生阶段：PRECHECK 故障只允许在仍处于 PRECHECK 时低频恢复；若带着该降级状态进入正式会话则不再恢复。正式会话内发生的故障可低频恢复到停机前保存位置，进入 HOLD 后恢复视觉自动追踪。用户强制释放进入 `RELEASED` 后不自动恢复。
    - App 命令必须携带当前 `session_id` 与严格递增 `sequence`，且只在 PRECHECK 生效。
 
-云台 feature prepare/运行失败只使会话进入 degraded；G431 本地先停驱动，A35 撤销 Enable 并停止目标下发，主视觉/Fusion/BLE 继续运行。健康检查恢复后重新对齐，再按当前 phase 恢复 PRECHECK、HOLD 或跟踪。
+云台 feature prepare/运行失败只使会话进入 degraded；G431 本地先停驱动，A35 撤销 Enable 并停止目标下发，主视觉/Fusion/BLE 继续运行。恢复由“故障发生阶段”而不是恢复时的当前 phase 决定：PRECHECK 故障不会跨入正式会话恢复；正式会话故障恢复后回到保存位置、HOLD 并继续自动追踪，不重放 PRECHECK 搜索。
 
 required feature prepare 失败会终止会话启动；optional feature 失败只进入 degraded list。
 

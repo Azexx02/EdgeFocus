@@ -1339,7 +1339,12 @@ void GimbalHardwareService::pollHardwareLocked() {
     const auto now_ms = clock_();
     if (snapshot_.compatibility == ProtocolCompatibility::Protocol3Control &&
         (next_health_probe_ms_ == 0 || now_ms >= next_health_probe_ms_)) {
-        next_health_probe_ms_ = now_ms + 500;
+        // UART-only boards still need a bounded FAULT query. During active
+        // tracking, halve probe traffic so health reads cannot repeatedly
+        // contend with target updates on the same serialized link.
+        const auto motion_state = machine_.status().state;
+        next_health_probe_ms_ = now_ms +
+            (motion_state == State::Moving ? 2000 : 1000);
         Event fault;
         auto health = sendAndWaitLocked(
             "FAULT", [](const Event& event) { return event.kind == EventKind::FaultStatus; },
@@ -1350,6 +1355,14 @@ void GimbalHardwareService::pollHardwareLocked() {
                 *fault.uart_errors > *last_uart_errors_) {
                 LOGW("GimbalHardwareService", "G431 UARTERR increased: %u -> %u",
                      *last_uart_errors_, *fault.uart_errors);
+                LOGW("GimbalHardwareService",
+                     "G431 UART categories ORE=%u FE=%u NE=%u PE=%u RXREARM=%u RXDROP=%u TXDROP=%u",
+                     fault.uart_overruns.value_or(0),
+                     fault.uart_framing_errors.value_or(0),
+                     fault.uart_noise_errors.value_or(0),
+                     fault.uart_parity_errors.value_or(0),
+                     fault.uart_rx_rearm_failures.value_or(0),
+                     fault.rx_drops.value_or(0), fault.tx_drops.value_or(0));
             }
             if (fault.uart_errors) last_uart_errors_ = fault.uart_errors;
         } else if (++consecutive_health_failures_ >= 3) {
