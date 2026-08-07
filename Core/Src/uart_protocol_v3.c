@@ -20,6 +20,11 @@ static volatile uint16_t deferred_rx_read;
 static volatile uint16_t deferred_rx_write;
 static volatile bool emergency_pending;
 static uint32_t uart_error_count;
+static uint32_t uart_overrun_count;
+static uint32_t uart_framing_count;
+static uint32_t uart_noise_count;
+static uint32_t uart_parity_count;
+static uint32_t uart_rx_rearm_fail_count;
 static uint32_t uart_rx_drop_count;
 static uint32_t uart_tx_drop_count;
 static uint8_t uart_tx_buffer[UART_TX_BUFFER_SIZE];
@@ -31,6 +36,18 @@ static volatile uint32_t uart_tx_start_tick;
 static volatile uint8_t protocol_busy;
 static uint8_t uart_rx_irq_byte;
 static bool hello_complete;
+static volatile bool uart_rx_rearm_pending;
+
+static bool uart_rx_rearm(void)
+{
+  if (HAL_UART_Receive_IT(&huart4, &uart_rx_irq_byte, 1U) == HAL_OK) {
+    uart_rx_rearm_pending = false;
+    return true;
+  }
+  uart_rx_rearm_pending = true;
+  ++uart_rx_rearm_fail_count;
+  return false;
+}
 
 static void uart_tx_start(void)
 {
@@ -291,12 +308,17 @@ static void execute(const char *line, size_t length)
     break;
   case GIMBAL_CMD_FAULT:
     snprintf(response, sizeof(response),
-             "FAULT,STATE=%s,ACTIVE=%u,BOOST=%u,MOTOR=%u,HOLD=%u,UARTERR=%lu,RXDROP=%lu,TXDROP=%lu\r\n",
+             "FAULT,STATE=%s,ACTIVE=%u,BOOST=%u,MOTOR=%u,HOLD=%u,UARTERR=%lu,ORE=%lu,FE=%lu,NE=%lu,PE=%lu,RXREARM=%lu,RXDROP=%lu,TXDROP=%lu\r\n",
              gimbal_protocol_state_name(app_gimbal_state()),
              board_get_fault() ? 1U : 0U, board_get_boost() ? 1U : 0U,
              motor_pwm_is_enabled() ? 1U : 0U,
              motor_pwm_hold_is_enabled() ? 1U : 0U,
              (unsigned long)uart_error_count,
+             (unsigned long)uart_overrun_count,
+             (unsigned long)uart_framing_count,
+             (unsigned long)uart_noise_count,
+             (unsigned long)uart_parity_count,
+             (unsigned long)uart_rx_rearm_fail_count,
              (unsigned long)uart_rx_drop_count,
              (unsigned long)uart_tx_drop_count);
     uart_protocol_send(response);
@@ -407,6 +429,11 @@ void uart_protocol_init(void)
   deferred_rx_write = 0U;
   emergency_pending = false;
   uart_error_count = 0U;
+  uart_overrun_count = 0U;
+  uart_framing_count = 0U;
+  uart_noise_count = 0U;
+  uart_parity_count = 0U;
+  uart_rx_rearm_fail_count = 0U;
   uart_rx_drop_count = 0U;
   uart_tx_drop_count = 0U;
   uart_tx_read = 0U;
@@ -416,14 +443,15 @@ void uart_protocol_init(void)
   uart_tx_start_tick = 0U;
   protocol_busy = 0U;
   hello_complete = false;
-  (void)HAL_UART_Receive_IT(&huart4, &uart_rx_irq_byte, 1U);
+  uart_rx_rearm_pending = false;
+  (void)uart_rx_rearm();
 }
 
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
   if (huart->Instance != UART4) return;
   uart_protocol_queue_rx_byte(uart_rx_irq_byte);
-  (void)HAL_UART_Receive_IT(&huart4, &uart_rx_irq_byte, 1U);
+  (void)uart_rx_rearm();
 }
 
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
@@ -434,11 +462,16 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
   uart_tx_active_length = 0U;
   uart_tx_active = false;
   uart_tx_start_tick = 0U;
+  uart_tx_start();
 }
 
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
   if (huart->Instance != UART4) return;
+  if ((huart->ErrorCode & HAL_UART_ERROR_ORE) != 0U) ++uart_overrun_count;
+  if ((huart->ErrorCode & HAL_UART_ERROR_FE) != 0U) ++uart_framing_count;
+  if ((huart->ErrorCode & HAL_UART_ERROR_NE) != 0U) ++uart_noise_count;
+  if ((huart->ErrorCode & HAL_UART_ERROR_PE) != 0U) ++uart_parity_count;
   ++uart_error_count;
   __HAL_UART_CLEAR_OREFLAG(huart);
   __HAL_UART_CLEAR_FEFLAG(huart);
@@ -446,9 +479,9 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
   __HAL_UART_CLEAR_PEFLAG(huart);
   huart->ErrorCode = HAL_UART_ERROR_NONE;
   huart->RxState = HAL_UART_STATE_READY;
+  deferred_rx_read = deferred_rx_write;
   gimbal_rx_init(&rx_framer);
-  hello_complete = false;
-  (void)HAL_UART_Receive_IT(&huart4, &uart_rx_irq_byte, 1U);
+  (void)uart_rx_rearm();
 }
 
 void uart_protocol_queue_rx_byte(uint8_t byte)
@@ -505,17 +538,23 @@ void uart_protocol_process(void)
   }
   if (__HAL_UART_GET_FLAG(&huart4, UART_FLAG_ORE) ||
       __HAL_UART_GET_FLAG(&huart4, UART_FLAG_FE) ||
-      __HAL_UART_GET_FLAG(&huart4, UART_FLAG_NE)) {
+      __HAL_UART_GET_FLAG(&huart4, UART_FLAG_NE) ||
+      __HAL_UART_GET_FLAG(&huart4, UART_FLAG_PE)) {
     ++uart_error_count;
+    if (__HAL_UART_GET_FLAG(&huart4, UART_FLAG_ORE)) ++uart_overrun_count;
+    if (__HAL_UART_GET_FLAG(&huart4, UART_FLAG_FE)) ++uart_framing_count;
+    if (__HAL_UART_GET_FLAG(&huart4, UART_FLAG_NE)) ++uart_noise_count;
+    if (__HAL_UART_GET_FLAG(&huart4, UART_FLAG_PE)) ++uart_parity_count;
     __HAL_UART_CLEAR_OREFLAG(&huart4);
     __HAL_UART_CLEAR_FEFLAG(&huart4);
     __HAL_UART_CLEAR_NEFLAG(&huart4);
+    __HAL_UART_CLEAR_PEFLAG(&huart4);
     huart4.ErrorCode = HAL_UART_ERROR_NONE;
     huart4.RxState = HAL_UART_STATE_READY;
+    deferred_rx_read = deferred_rx_write;
     gimbal_rx_init(&rx_framer);
-    hello_complete = false;
-    (void)HAL_UART_Receive_IT(&huart4, &uart_rx_irq_byte, 1U);
-  } else if (huart4.RxState == HAL_UART_STATE_READY) {
-    (void)HAL_UART_Receive_IT(&huart4, &uart_rx_irq_byte, 1U);
+    (void)uart_rx_rearm();
+  } else if (uart_rx_rearm_pending || huart4.RxState == HAL_UART_STATE_READY) {
+    (void)uart_rx_rearm();
   }
 }
