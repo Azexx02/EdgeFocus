@@ -1,0 +1,30 @@
+* text=auto
+
+*.md        text eol=lf
+*.txt       text eol=lf
+*.json      text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+*.c         text eol=lf
+*.h         text eol=lf
+*.cpp       text eol=lf
+*.hpp       text eol=lf
+*.py        text eol=lf
+*.kt        text eol=lf
+*.kts       text eol=lf
+*.sh        text eol=lf
+*.ps1       text eol=crlf
+*.s         text eol=lf
+*.ld        text eol=lf
+
+*.png       binary
+*.jpg       binary
+*.jpeg      binary
+*.pdf       binary
+*.eprj      binary
+*.eprj2     binary
+*.eprj_backup binary
+*.nb        binary
+*.jar       binary
+*.dtb       binary
+*.tel       binary

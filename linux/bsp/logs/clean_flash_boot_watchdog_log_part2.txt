@@ -1,0 +1,248 @@
+[    1.804815] stm32-dwmac 482d0000.eth2: Using 32/32 bits DMA host/device width
+[    2.012107] usb-stm32-dwc3 42080000.bus:usb@48300000: configured in usb2 mode
+[    2.014430] platform 48300000.usb: Fixed dependency cycle(s) with /soc@0/bus@42080000/i2c@40150000/fusb302@22/connector
+[    2.025642] usb-stm32-dwc3 42080000.bus:usb@48300000: Enabling runtime PM for inactive device with active children
+[    2.038666] ehci-platform 482f0000.usb: EHCI Host Controller
+[    2.039148] stm32_rtc 46000000.rtc: registered as rtc0
+[    2.040508] ehci-platform 482f0000.usb: new USB bus registered, assigned bus number 1
+[    2.045706] stm32_rtc 46000000.rtc: setting system clock to 2000-01-01T00:01:38 UTC (946684898)
+[    2.054422] ehci-platform 482f0000.usb: irq 69, io mem 0x482f0000
+[    2.062419] stm32_rtc 46000000.rtc: Date/Time must be initialized
+[    2.074485] stm32_rtc 46000000.rtc: registered rev:3.4
+[    2.081333] ehci-platform 482f0000.usb: USB 2.0 started, EHCI 1.00
+[    2.086617] hub 1-0:1.0: USB hub found
+[    2.089639] hub 1-0:1.0: 1 port detected
+[    2.091330] rtc-pcf8563 0-0051: low voltage detected, date/time is not reliable.
+[    2.101087] rtc-pcf8563 0-0051: registered as rtc1
+[    2.106938] stm32f7-i2c 40140000.i2c: STM32F7 I2C-0 bus adapter
+[    2.151680] platform 48020000.csi: Fixed dependency cycle(s) with /soc@0/bus@42080000/i2c@40150000/imx335@1a
+[    2.156654] i2c 1-001a: Fixed dependency cycle(s) with /soc@0/bus@42080000/csi@48020000
+[    2.164534] i2c 1-0011: Fixed dependency cycle(s) with /soc@0/bus@42080000/sai@40290000/audio-controller@40290004
+[    2.174327] i2c 1-0011: Fixed dependency cycle(s) with /soc@0/bus@42080000/sai@40290000/audio-controller@40290024
+[    2.186106] stm32f7-i2c 40150000.i2c: STM32F7 I2C-1 bus adapter
+[    2.197710] stm32f7-i2c 46040000.i2c: STM32F7 I2C-2 bus adapter
+[    2.203198] mmci-pl18x 48220000.mmc: Got CD GPIO
+[    2.203763] mmci-pl18x 48230000.mmc: mmc1: PL180 manf 53 rev3 at 0x48230000 irq 74,0 (pio)
+[    2.204750] stm32-rproc 0.m33: wdg irq registered
+[    2.211330] mmci-pl18x 48220000.mmc: mmc0: PL180 manf 53 rev3 at 0x48220000 irq 75,0 (pio)
+[    2.215695] stm32-rproc 0.m33: pdds sys config not defined
+[    2.229619] stm32-rproc 0.m33: rsc tbl syscon not supported
+[    2.235281] stm32-rproc 0.m33: mbox_request_channel_byname() could not locate channel named "detach"
+[    2.244230] remoteproc remoteproc0: cannot get detach mbox
+[    2.249805] remoteproc remoteproc0: m33 is available
+[    2.255732] remoteproc remoteproc1: cannot get rx mbox
+[    2.259951] remoteproc remoteproc1: m0 is available
+[    2.266842] i2c 1-0011: Fixed dependency cycle(s) with /soc@0/bus@42080000/sai@40290000/audio-controller@40290004
+[    2.275190] platform 40290004.audio-controller: Fixed dependency cycle(s) with /soc@0/bus@42080000/i2c@40150000/es8388@11
+[    2.286117] platform 40290004.audio-controller: Fixed dependency cycle(s) with /soc@0/bus@42080000/sai@40290000/audio-controller@40290024
+[    2.299603] platform 40290004.audio-controller: Fixed dependency cycle(s) with /soc@0/bus@42080000/sai@40290000/audio-controller@40290024
+[    2.310945] i2c 1-0011: Fixed dependency cycle(s) with /soc@0/bus@42080000/sai@40290000/audio-controller@40290024
+[    2.321288] platform 40290024.audio-controller: Fixed dependency cycle(s) with /soc@0/bus@42080000/i2c@40150000/es8388@11
+[    2.326783] mmc1: new DDR MMC card at address 0001
+[    2.337968] mmcblk1: mmc1:0001 MK016D 14.7 GiB
+[    2.339404] stm32-usart 400e0000.serial: Wakeup might not be available: No autonomous clock
+[    2.344853]  mmcblk1: p1 p2 p3 p4 p5 p6
+[    2.349942] stm32-usart 400e0000.serial: interrupt mode for rx (no dma)
+[    2.354731] mmcblk1boot0: mmc1:0001 MK016D 4.00 MiB
+[    2.360337] stm32-usart 400e0000.serial: interrupt mode for tx (no dma)
+[    2.365223] usb 1-1: new high-speed USB device number 2 using ehci-platform
+[    2.378859] 400e0000.serial: ttySTM0 at MMIO 0x400e0000 (irq = 80, base_baud = 4000000) is a stm32-usart
+[    2.380177] mmcblk1boot1: mmc1:0001 MK016D 4.00 MiB
+[    2.394469] mmcblk1rpmb: mmc1:0001 MK016D 4.00 MiB, chardev (238:0)
+[    2.399651] printk: console [ttySTM0] enabled
+[    2.399651] printk: console [ttySTM0] enabled
+[    2.408372] printk: bootconsole [stm32] disabled
+[    2.408372] printk: bootconsole [stm32] disabled
+[    2.425767] ES8388 1-0011: ASoC: error at soc_component_write_no_lock on ES8388.1-0011 for register: [0x00000000] -6
+[    2.430919] ES8388 1-0011: ASoC: error at soc_component_write_no_lock on ES8388.1-0011 for register: [0x00000000] -6
+[    2.441317] ES8388 1-0011: Failed to issue reset
+[    2.445998] ES8388 1-0011: ASoC: error at snd_soc_component_probe on ES8388.1-0011: -6
+[    2.454135] asoc-audio-graph-card sound: ASoC: failed to instantiate card -6
+[    2.461360] asoc-audio-graph-card sound: error -ENXIO: parse error
+[    2.468347] input: gpio-keys as /devices/platform/gpio-keys/input/input0
+[    2.474478] clk: Disabling unused clocks
+[    2.478588] ALSA device list:
+[    2.480810]   No soundcards found.
+[    2.491159] Freeing unused kernel memory: 4032K
+[    2.491250] Run /init as init process
+[    2.551779] hub 1-1:1.0: USB hub found
+[    2.552030] hub 1-1:1.0: 4 ports detected
+Starting systemd-udevd version 255.4^
+[    2.845324] usb 1-1.1: new high-speed USB device number 3 using ehci-platform
+[    3.037260] usb 1-1.3: new high-speed USB device number 4 using ehci-platform
+[    3.258814] stm32-dwmac 482c0000.eth1 end1: renamed from eth0
+[    3.276281] stm32-dwmac 482d0000.eth2 end0: renamed from eth1
+[    3.531342] EXT4-fs (mmcblk1p6): recovery complete
+[    3.531953] EXT4-fs (mmcblk1p6): mounted filesystem 9b182710-9bcb-44b6-8dfa-ac1b2b9cc378 r/w with ordered data mode. Quota mode: none.
+ln: /etc/mtab: File exists
+[    3.863493] systemd[1]: System time before build time, advancing clock.
+[    3.911407] systemd[1]: systemd 255.4^ running in system mode (+PAM -AUDIT -SELINUX -APPARMOR +IMA -SMACK -SECCOMP -GCRYPT -GNUTLS -OPENSSL -ACL +BLKID -CURL -ELFUTILS -FIDO2 -IDN2 -IDN +IPTC +KMOD -LIBCRYPTSETUP +LIBFDISK -PCRE2 -PWQUALITY -P11KIT -QRENCODE -TPM2 -BZIP2 -LZ4 -XZ -ZLIB +ZSTD -BPF_FRAMEWORK -XKBCOMMON +UTMP +SYSVINIT default-hierarchy=unified)
+[    3.937868] systemd[1]: Detected architecture arm64.
+
+Welcome to ST OpenSTLinux - Weston - (A Yocto Project Based Distro) 5.0.3-snapshot-20241210 (scarthgap)!
+
+[    3.965932] systemd[1]: Hostname set to <ATK-DLMP257>.
+[    4.022672] systemd[1]: Using hardware watchdog 'arm_smc_wdt', version 0, device /dev/watchdog0
+[    4.026150] systemd[1]: Watchdog running with a timeout of 32s.
+[    4.302841] systemd[1]: Configuration file /usr/lib/systemd/system/st-tsn.service is marked executable. Please remove executable permission bits. Proceeding anyway.
+[    4.321507] systemd[1]: Binding to IPv6 address not available since kernel does not support IPv6.
+[    4.324887] systemd[1]: Binding to IPv6 address not available since kernel does not support IPv6.
+[    4.523071] systemd[1]: Queued start job for default target Multi-User System.
+[    4.559477] systemd[1]: Created slice Slice /system/modprobe.
+[  OK  ] Created slice Slice /system/modprobe.
+[    4.583358] systemd[1]: Created slice Slice /system/serial-getty.
+[  OK  ] Created slice Slice /system/serial-getty.
+[    4.606862] systemd[1]: Created slice User and Session Slice.
+[  OK  ] Created slice User and Session Slice.
+[    4.625777] systemd[1]: Started Dispatch Password Requests to Console Directory Watch.
+[  OK  ] Started Dispatch Password Requests to Console Directory Watch.
+[    4.645640] systemd[1]: Started Forward Password Requests to Wall Directory Watch.
+[  OK  ] Started Forward Password Requests to Wall Directory Watch.
+[    4.665523] systemd[1]: Expecting device /dev/dri/card0...
+         Expecting device /dev/dri/card0...
+[    4.681359] systemd[1]: Expecting device /dev/tee0...
+         Expecting device /dev/tee0...
+[    4.697516] systemd[1]: Reached target Host and Network Name Lookups.
+[  OK  ] Reached target Host and Network Name Lookups.
+[    4.717424] systemd[1]: Reached target Path Units.
+[  OK  ] Reached target Path Units.
+[    4.733436] systemd[1]: Reached target Remote File Systems.
+[  OK  ] Reached target Remote File Systems.
+[    4.753427] systemd[1]: Reached target Slice Units.
+[  OK  ] Reached target Slice Units.
+[    4.769438] systemd[1]: Reached target Swaps.
+[  OK  ] Reached target Swaps.
+[    4.815395] systemd[1]: Listening on RPCbind Server Activation Socket.
+[  OK  ] Listening on RPCbind Server Activation Socket.
+[    4.833618] systemd[1]: Reached target RPC Port Mapper.
+[  OK  ] Reached target RPC Port Mapper.
+[    4.851056] systemd[1]: Listening on Syslog Socket.
+[  OK  ] Listening on Syslog Socket.
+[    4.865922] systemd[1]: Listening on initctl Compatibility Named Pipe.
+[  OK  ] Listening on initctl Compatibility Named Pipe.
+[    4.891985] systemd[1]: Journal Audit Socket was skipped because of an unmet condition check (ConditionSecurity=audit).
+[    4.898174] systemd[1]: Listening on Journal Socket (/dev/log).
+[  OK  ] Listening on Journal Socket (/dev/log).
+[    4.922264] systemd[1]: Listening on Journal Socket.
+[  OK  ] Listening on Journal Socket.
+[    4.938407] systemd[1]: Listening on Network Service Netlink Socket.
+[  OK  ] Listening on Network Service Netlink Socket.
+[    4.961183] systemd[1]: Listening on udev Control Socket.
+[  OK  ] Listening on udev Control Socket.
+[    4.978105] systemd[1]: Listening on udev Kernel Socket.
+[  OK  ] Listening on udev Kernel Socket.
+[    5.013649] systemd[1]: Mounting Huge Pages File System...
+         Mounting Huge Pages File System...
+[    5.034336] systemd[1]: Mounting POSIX Message Queue File System...
+         Mounting POSIX Message Queue File System...
+[    5.081503] systemd[1]: Mounting Kernel Debug File System...
+         Mounting Kernel Debug File System...
+[    5.101923] systemd[1]: Kernel Trace File System was skipped because of an unmet condition check (ConditionPathExists=/sys/kernel/tracing).
+[    5.129689] systemd[1]: Mounting Temporary Directory /tmp...
+         Mounting Temporary Directory /tmp...
+[    5.150024] systemd[1]: Create List of Static Device Nodes was skipped because of an unmet condition check (ConditionFileNotEmpty=/lib/modules/6.6.48/modules.devname).
+[    5.164453] systemd[1]: Starting Load Kernel Module configfs...
+         Starting Load Kernel Module configfs...
+[    5.197989] systemd[1]: Starting Load Kernel Module drm...
+         Starting Load Kernel Module drm...
+[    5.222771] systemd[1]: Starting Load Kernel Module fuse...
+         Starting Load Kernel Module fuse...
+[    5.249762] systemd[1]: Starting Mount partitions...
+         Starting Mount partitions...
+[    5.271726] systemd[1]: Starting RPC Bind...
+         Starting RPC Bind...
+[    5.286162] systemd[1]: File System Check on Root Device was skipped because of an unmet condition check (ConditionPathIsReadWrite=!/).
+[    5.323141] systemd[1]: Starting Journal Service...
+         Starting Journal Service...
+[    5.362729] systemd-journald[267]: Collecting audit messages is disabled.
+[    5.366004] systemd[1]: Starting Load Kernel Modules...
+         Starting Load Kernel Modules...
+[    5.428478] systemd[1]: Starting Generate network units from Kernel command line...
+         Starting Generate network units from Kernel command line...
+[    5.486186] systemd[1]: Starting Remount Root and Kernel File Systems...
+         Starting Remount Root and Kernel File Systems...
+[    5.539679] systemd[1]: Starting Create Static Device Nodes in /dev gracefully...
+         Starting Create Static Device Nodes in /dev gracefully...
+[    5.559922] EXT4-fs (mmcblk1p6): re-mounted 9b182710-9bcb-44b6-8dfa-ac1b2b9cc378 r/w. Quota mode: none.
+[    5.595891] systemd[1]: Starting Coldplug All udev Devices...
+         Starting Coldplug All udev Devices...
+[    5.604314] EXT4-fs (mmcblk1p5): recovery complete
+[    5.606474] EXT4-fs (mmcblk1p5): mounted filesystem a7bcf5f5-5741-4c93-8725-20a7157904bc r/w with ordered data mode. Quota mode: none.
+[    5.646995] systemd[1]: Started RPC Bind.
+[  OK  ] Started RPC Bind.
+[    5.662569] systemd[1]: Started Journal Service.
+[  OK  ] Started Journal Service.
+[  OK  ] Mounted Huge Pages File System.
+[  OK  ] Mounted POSIX Message Queue File System.
+[  OK  ] Mounted Kernel Debug File System.
+[  OK  ] Mounted Temporary Directory /tmp.
+[  OK  ] Finished Load Kernel Module configfs.
+[  OK  ] Finished Load Kernel Module drm.
+[  OK  ] Finished Load Kernel Module fuse.
+[  OK  ] Finished Mount partitions.
+[  OK  ] Finished Load Kernel Modules.
+[  OK  ] Finished Generate network units from Kernel command line.
+[  OK  ] Finished Remount Root and Kernel File Systems.
+[  OK  ] Finished Create Static Device Nodes in /dev gracefully.
+         Mounting FUSE Control File System...
+         Mounting Kernel Configuration File System...
+         Starting Link Linux Kernel Modules...
+         Starting Resize root filesystem to fit available disk space...
+         Starting Flush Journal to Persistent Storage...
+[    6.042940] systemd-journald[267]: Received client request to flush runtime journal.
+         Starting Apply Kernel Variables...
+         Starting Create System Users...
+[  OK  ] Mounted FUSE Control File System.
+[  OK  ] Mounted Kernel Configuration File System.
+[  OK  ] Finished Flush Journal to Persistent Storage.
+[  OK  ] Finished Apply Kernel Variables.
+[  OK  ] Finished Create System Users.
+         Starting Create Static Device Nodes in /dev...
+[  OK  ] Finished Create Static Device Nodes in /dev.
+[  OK  ] Reached target Preparation for Local File Systems.
+         Mounting /var/volatile...
+         Starting Rule-based Manager for Device Events and Files...
+[  OK  ] Mounted /var/volatile.
+         Starting Load/Save OS Random Seed...
+[  OK  ] Finished Load/Save OS Random Seed.
+[  OK  ] Finished Coldplug All udev Devices.
+         Starting Wait for udev To Complete Device Initialization...
+[  OK  ] Started Rule-based Manager for Device Events and Files.
+[  OK  ] Finished Link Linux Kernel Modules.
+[    8.054548] dht11 dht11: dht11 device and driver matched successfully!
+[    8.056363] ds18b20 ds18b20: ds18b20 device and driver matched successfully!
+[    8.077181] ds18b20 ds18b20: Failed to request gpio
+[    8.077225] ds18b20: probe of ds18b20 failed with error -16
+[    8.192937] CAN device driver interface
+[    8.234249] m_can_platform 402d0000.can: m_can device registered (irq=83, version=32)
+[    8.242764] m_can_platform 402e0000.can: m_can device registered (irq=84, version=32)
+[    8.248569] m_can_platform 402f0000.can: m_can device registered (irq=85, version=32)
+[    8.257303] fusb302 1-0022: Can't get property of role, set role to default DRP
+[    8.281382] fusb302 1-0022: port 0 probe success with role ROLE_MODE_DRP, try_role ROLE_MODE_NONE
+[    8.366598] mc: Linux media interface: v0.10
+[    8.368673] stm32-crc32 404c0000.crc: Initialized
+[    8.414709] stm32-deip 42080000.bus:ttt-sw@4c000000: No phy clock provided...
+[    8.431095] videodev: Linux video capture interface: v2.00
+[  OK  ] Reached target Hardware activated USB gadget.
+[ ***  ] (4 of 4) A start jo[   18.525269] psci-cpuidle-domain psci: sync_state() pending due to 46020000.spi
+[   18.526914] psci-cpuidle-domain psci: sync_state() pending due to 48030000.dcmipp
+[   18.536086] psci-cpuidle-domain psci: sync_state() pending due to 48400000.pcie
+[   18.542437] psci-cpuidle-domain psci: sync_state() pending due to 480d0000.vdec
+[   18.549150] psci-cpuidle-domain psci: sync_state() pending due to 480e0000.venc
+[   18.557620] psci-cpuidle-domain psci: sync_state() pending due to 48280000.gpu
+[**    ] (2 of 4) A start job is ru[   29.481080] rcu: INFO: rcu_preempt detected stalls on CPUs/tasks:
+[   29.483417] rcu:     0-...0: (1 GPs behind) idle=47a4/1/0x4000000000000000 softirq=9682/9683 fqs=2625
+[   29.492471] rcu:     (detected by 1, t=5252 jiffies, g=2301, q=2258 ncpus=2)
+[   29.499309] Task dump for CPU 0:
+[   29.502529] task:(udev-worker)   state:R  running task     stack:0     pid:363   ppid:351    flags:0x0000000e
+[   29.512489] Call trace:
+[   29.514905]  __switch_to+0xe8/0x164
+[   29.518441]  rt_sched_class+0x0/0xd0
+[    **] (1 of 4) A start job is runnin[   33.885191] vddio3: disabling
+[   33.885242] vddio4: disabling
+[   33.885594] vdda18adc: disabling
+[   33.888738] vddcore: disabling
+[   33.892301] v1v8: disabling
+[   33.894668] v3v3: disabling
+[    **] (3 of 4) A start job is runnin
+

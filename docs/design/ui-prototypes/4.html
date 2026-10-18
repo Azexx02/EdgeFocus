@@ -1,0 +1,271 @@
+<!DOCTYPE html><html class="light" lang="en" style=""><head>
+<meta charset="utf-8">
+<meta content="width=device-width, initial-scale=1.0" name="viewport">
+<title>Distraction App Settings - EdgeFocus</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@500;600;700&amp;display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet">
+<script id="tailwind-config">
+        tailwind.config = {
+          darkMode: "class",
+          theme: {
+            extend: {
+              "colors": {
+                      "on-primary": "#ffffff",
+                      "surface": "#fbf9f7",
+                      "error": "#ba1a1a",
+                      "on-secondary-fixed-variant": "#005313",
+                      "primary": "#b51925",
+                      "tertiary-fixed-dim": "#ffb954",
+                      "on-error": "#ffffff",
+                      "on-background": "#1b1c1b",
+                      "background": "#fbf9f7",
+                      "inverse-on-surface": "#f2f0ee",
+                      "primary-fixed": "#ffdad7",
+                      "tertiary-fixed": "#ffddb4",
+                      "surface-dim": "#dbdad8",
+                      "on-secondary": "#ffffff",
+                      "on-secondary-fixed": "#002204",
+                      "on-tertiary-container": "#fffbff",
+                      "secondary": "#006e1c",
+                      "on-error-container": "#93000a",
+                      "surface-container-lowest": "#ffffff",
+                      "on-surface": "#1b1c1b",
+                      "surface-container-highest": "#e4e2e0",
+                      "surface-variant": "#e4e2e0",
+                      "tertiary": "#805200",
+                      "surface-tint": "#b81d27",
+                      "on-primary-container": "#fffbff",
+                      "surface-bright": "#fbf9f7",
+                      "secondary-fixed-dim": "#78dc77",
+                      "on-tertiary": "#ffffff",
+                      "primary-fixed-dim": "#ffb3ae",
+                      "tertiary-container": "#a06900",
+                      "surface-container-low": "#f5f3f1",
+                      "secondary-fixed": "#94f990",
+                      "surface-container": "#efedec",
+                      "surface-container-high": "#e9e8e6",
+                      "secondary-container": "#91f78e",
+                      "primary-container": "#d8363a",
+                      "on-primary-fixed": "#410004",
+                      "error-container": "#ffdad6",
+                      "inverse-surface": "#30302f",
+                      "on-secondary-container": "#00731e",
+                      "on-primary-fixed-variant": "#930015",
+                      "outline-variant": "#e3bebb",
+                      "outline": "#8f706d",
+                      "on-surface-variant": "#5b403e",
+                      "inverse-primary": "#ffb3ae",
+                      "on-tertiary-fixed-variant": "#633f00",
+                      "on-tertiary-fixed": "#291800"
+              },
+              "borderRadius": {
+                      "DEFAULT": "1rem",
+                      "lg": "2rem",
+                      "xl": "3rem",
+                      "full": "9999px"
+              },
+              "spacing": {
+                      "unit": "8px",
+                      "section-margin": "40px",
+                      "container-padding-desktop": "48px",
+                      "card-padding": "24px",
+                      "container-padding-mobile": "24px",
+                      "stack-gap": "16px"
+              },
+              "fontFamily": {
+                      "display-timer": ["Quicksand"],
+                      "body-md": ["Quicksand"],
+                      "headline-lg-mobile": ["Quicksand"],
+                      "headline-md": ["Quicksand"],
+                      "body-lg": ["Quicksand"],
+                      "label-sm": ["Quicksand"],
+                      "headline-lg": ["Quicksand"],
+                      "label-md": ["Quicksand"]
+              },
+              "fontSize": {
+                      "display-timer": ["80px", {"lineHeight": "90px", "letterSpacing": "-0.02em", "fontWeight": "700"}],
+                      "body-md": ["16px", {"lineHeight": "24px", "fontWeight": "500"}],
+                      "headline-lg-mobile": ["28px", {"lineHeight": "36px", "fontWeight": "700"}],
+                      "headline-md": ["24px", {"lineHeight": "32px", "fontWeight": "600"}],
+                      "body-lg": ["18px", {"lineHeight": "28px", "fontWeight": "500"}],
+                      "label-sm": ["12px", {"lineHeight": "16px", "fontWeight": "700"}],
+                      "headline-lg": ["32px", {"lineHeight": "40px", "fontWeight": "700"}],
+                      "label-md": ["14px", {"lineHeight": "20px", "letterSpacing": "0.01em", "fontWeight": "600"}]
+              }
+            }
+          }
+        }
+    </script>
+<style>
+        .bouncy-press {
+            transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.2s ease-out;
+        }
+        .bouncy-press:active {
+            transform: scale(0.95);
+            box-shadow: none !important;
+        }
+        .ambient-shadow {
+            box-shadow: 0 12px 30px -8px rgba(181, 25, 37, 0.08);
+        }
+        .app-icon {
+            box-shadow: inset 0 2px 4px rgba(255,255,255,0.8), 0 4px 12px rgba(0,0,0,0.05);
+        }
+        
+        /* Category Badge Transitions */
+        .badge-transition {
+            transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+</head>
+<body class="bg-background text-on-background min-h-screen font-body-md overflow-x-hidden">
+<!-- Top Navigation (Task-focused, so no global navs) -->
+<header class="w-full top-0 sticky bg-background dark:bg-background z-50">
+<div class="flex justify-between items-center px-container-padding-mobile py-4 max-w-[600px] mx-auto">
+<button class="bouncy-press text-primary w-12 h-12 flex items-center justify-center rounded-full bg-surface hover:bg-surface-container transition-colors">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 0;">arrow_back</span>
+</button>
+<h1 class="font-headline-md text-headline-md text-primary tracking-tight">App Settings</h1>
+<div class="w-12 h-12"></div> <!-- Spacer for centering -->
+</div>
+</header>
+<main class="max-w-[600px] mx-auto px-container-padding-mobile pb-section-margin pt-2">
+<!-- Explanation Card -->
+<section class="bg-primary-fixed rounded-xl p-4 mb-6">
+<h2 class="font-label-md text-label-md text-on-primary-fixed mb-2">Distraction Level Description</h2>
+<ul class="space-y-1 text-label-sm text-on-primary-fixed opacity-90">
+<li class="flex items-center gap-2">· Strong: Short videos, games (High frequency)</li>
+<li class="flex items-center gap-2">· Weak: Social media (Periodic reminders)</li>
+<li class="flex items-center gap-2">· Learning: No reminders</li>
+<li class="flex items-center gap-2">· Unselected: Default background processing</li>
+</ul>
+</section>
+<!-- Summary Row -->
+<div class="mb-4 px-2">
+<p class="font-label-md text-label-md text-on-surface-variant">
+Strong: <span class="text-primary">2</span> | Weak: <span class="text-tertiary">1</span> | Learn: <span class="text-secondary">1</span> | Unselected: 1
+</p>
+</div>
+<!-- App List -->
+<section class="space-y-4"><h3 class="font-headline-md text-headline-md text-on-surface mb-4">Installed Apps</h3>
+<!-- WeChat -->
+<div class="bg-surface-container rounded-lg p-4 flex items-center justify-between mb-3">
+  <div class="flex items-center gap-4">
+    
+    <div>
+      <h4 class="font-body-lg text-body-lg text-on-surface">WeChat</h4>
+      <p class="font-label-sm text-label-sm text-on-surface-variant">com.tencent.mm</p>
+    </div>
+  </div>
+  <div class="text-right">
+    <p class="font-label-md text-label-md text-primary">Strong Distraction</p>
+    <p class="font-label-sm text-label-sm text-on-surface-variant">Rec: Social Media</p>
+  </div>
+</div>
+<!-- TikTok -->
+<div class="bg-primary-fixed rounded-lg p-4 flex items-center justify-between mb-3">
+  <div class="flex items-center gap-4">
+    
+    <div>
+      <h4 class="font-body-lg text-body-lg text-on-surface">TikTok</h4>
+      <p class="font-label-sm text-label-sm text-on-surface-variant">com.ss.android.ugc.aweme</p>
+    </div>
+  </div>
+  <div class="text-right">
+    <p class="font-label-md text-label-md text-primary">Strong Distraction</p>
+    <p class="font-label-sm text-label-sm text-on-surface-variant">Rec: Short Video</p>
+  </div>
+</div>
+<!-- YouTube -->
+<div class="bg-surface-container rounded-lg p-4 flex items-center justify-between mb-3">
+  <div class="flex items-center gap-4">
+    
+    <div>
+      <h4 class="font-body-lg text-body-lg text-on-surface">YouTube</h4>
+      <p class="font-label-sm text-label-sm text-on-surface-variant">com.google.android.youtube</p>
+    </div>
+  </div>
+  <div class="text-right">
+    <p class="font-label-md text-label-md text-primary">Strong Distraction</p>
+    <p class="font-label-sm text-label-sm text-on-surface-variant">Rec: Long Video</p>
+  </div>
+</div>
+<!-- Kindle -->
+<div class="bg-surface-container rounded-lg p-4 flex items-center justify-between mb-3">
+  <div class="flex items-center gap-4">
+    
+    <div>
+      <h4 class="font-body-lg text-body-lg text-on-surface">Kindle</h4>
+      <p class="font-label-sm text-label-sm text-on-surface-variant">com.amazon.kindle</p>
+    </div>
+  </div>
+  <div class="text-right">
+    <p class="font-label-md text-label-md text-secondary">Learning App</p>
+    <p class="font-label-sm text-label-sm text-on-surface-variant">No reminders</p>
+  </div>
+</div>
+<!-- Spotify -->
+<div class="bg-surface-container rounded-lg p-4 flex items-center justify-between mb-3">
+  <div class="flex items-center gap-4">
+    
+    <div>
+      <h4 class="font-body-lg text-body-lg text-on-surface">Spotify</h4>
+      <p class="font-label-sm text-label-sm text-on-surface-variant">com.spotify.music</p>
+    </div>
+  </div>
+  <div class="text-right">
+    <p class="font-label-md text-label-md text-tertiary">Weak Distraction</p>
+    <p class="font-label-sm text-label-sm text-on-surface-variant">Rec: Audio Only</p>
+  </div>
+</div>
+<!-- Maps -->
+<div class="bg-surface-container rounded-lg p-4 flex items-center justify-between mb-3">
+  <div class="flex items-center gap-4">
+    
+    <div>
+      <h4 class="font-body-lg text-body-lg text-on-surface">Maps</h4>
+      <p class="font-label-sm text-label-sm text-on-surface-variant">com.google.android.apps.maps</p>
+    </div>
+  </div>
+  <div class="text-right">
+    <p class="font-label-md text-label-md text-on-surface-variant">Background</p>
+    <p class="font-label-sm text-label-sm text-on-surface-variant">Default state</p>
+  </div>
+</div>
+<!-- Genshin Impact -->
+<div class="bg-surface-container rounded-lg p-4 flex items-center justify-between mb-3">
+  <div class="flex items-center gap-4">
+    
+    <div>
+      <h4 class="font-body-lg text-body-lg text-on-surface">Genshin Impact</h4>
+      <p class="font-label-sm text-label-sm text-on-surface-variant">com.miHoYo.GenshinImpact</p>
+    </div>
+  </div>
+  <div class="text-right">
+    <p class="font-label-md text-label-md text-primary">Strong Distraction</p>
+    <p class="font-label-sm text-label-sm text-on-surface-variant">Rec: Gaming</p>
+  </div>
+</div></section>
+</main>
+<nav class="fixed bottom-0 left-0 right-0 bg-surface border-t border-outline-variant flex justify-around py-3 max-w-[600px] mx-auto">
+<div class="flex flex-col items-center text-on-surface-variant">
+<span class="material-symbols-outlined">home</span>
+<span class="text-label-sm">Home</span>
+</div>
+<div class="flex flex-col items-center text-on-surface-variant">
+<span class="material-symbols-outlined">bar_chart</span>
+<span class="text-label-sm">Data</span>
+</div>
+<div class="flex flex-col items-center text-primary">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">settings</span>
+<span class="text-label-sm">Settings</span>
+</div>
+</nav>
+
+</body></html>

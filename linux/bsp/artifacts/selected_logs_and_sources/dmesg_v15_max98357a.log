@@ -1,0 +1,8 @@
+[  147.774089] st,stm32-i2s 40230000.audio-controller: Rate [50000000] not accurate
+[  147.774711] st,stm32-i2s 40230000.audio-controller: Rate [50000000] not accurate
+[  147.775240] st,stm32-i2s 40230000.audio-controller: Rate [24489795] not accurate
+[  147.775770] st,stm32-i2s 40230000.audio-controller: Rate [16216216] not accurate
+[  147.776446] st,stm32-i2s 40230000.audio-controller: Rate [12244897] not accurate
+[  147.778076] st,stm32-i2s 40230000.audio-controller: Divider: 2*1(div)+1(odd) = 3
+[  147.778090] st,stm32-i2s 40230000.audio-controller: Wrong divider setting
+[  147.779322] st,stm32-i2s 40230000.audio-controller: ASoC: error at snd_soc_dai_hw_params on 40230000.audio-controller: -22

@@ -1,0 +1,20 @@
+[  199.367638] st,stm32-i2s 40230000.audio-controller: Divider: 2*3(div)+0(odd) = 6
+[  199.367666] st,stm32-i2s 40230000.audio-controller: Rate not accurate. requested (1536000), actual (1639344)
+[  199.368868] st,stm32-i2s 40230000.audio-controller: start I2S playback
+[  200.628414] RTW: Turbo EDCA =0x5ea42b
+[  202.643907] RTW: rtw_set_ps_mode(wlan0) Enter 802.11 power save - WIFI-TRAFFIC_IDLE
+[  202.647168] RTW: rtl8723d_set_FwPwrMode_cmd(): FW LPS mode = 2, SmartPS=2
+[  202.653414] RTW: Turbo EDCA =0xa42b
+[  204.359208] st,stm32-i2s 40230000.audio-controller: stop I2S playback
+[  204.374889] st,stm32-i2s 40230000.audio-controller: Rate [9836065] not accurate
+[  204.374923] st,stm32-i2s 40230000.audio-controller: Rate [9836065] not accurate
+[  204.374933] st,stm32-i2s 40230000.audio-controller: Rate [9836065] not accurate
+[  204.374942] st,stm32-i2s 40230000.audio-controller: Rate [9836065] not accurate
+[  204.374952] st,stm32-i2s 40230000.audio-controller: Rate [9836065] not accurate
+[  204.374961] st,stm32-i2s 40230000.audio-controller: Rate [9836065] not accurate
+[  204.374970] st,stm32-i2s 40230000.audio-controller: Rate [9836065] not accurate
+[  204.374980] st,stm32-i2s 40230000.audio-controller: Rate [9836065] not accurate
+[  204.374989] st,stm32-i2s 40230000.audio-controller: Rate [9836065] not accurate
+[  204.374998] st,stm32-i2s 40230000.audio-controller: Rate [9836065] not accurate
+[  204.375533] st,stm32-i2s 40230000.audio-controller: Failed to find an accurate rate
+[  204.379922] st,stm32-i2s 40230000.audio-controller: ASoC: error at snd_soc_dai_hw_params on 40230000.audio-controller: -22

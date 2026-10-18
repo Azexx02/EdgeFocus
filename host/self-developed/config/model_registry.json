@@ -1,0 +1,15 @@
+{
+  "pose": {
+    "name": "edgefocus_pose_v1",
+    "runtime": "stai_mpu",
+    "model_path": "./models/edgefocus_pose_v1/edgefocus_pose_v1_1.nb",
+    "onnx_path": "./models/edgefocus_pose_v1/edgefocus_pose_v1.onnx",
+    "labels_path": "./models/pose/labels.json",
+    "preprocess_path": "./models/pose/preprocess.json",
+    "postprocess_path": "./models/pose/postprocess.json",
+    "runtime_config_path": "./models/pose/runtime.yaml",
+    "checksum": "edgefocus_v1",
+    "confidence_threshold": 0.65,
+    "iou_threshold": 0.50
+  }
+}

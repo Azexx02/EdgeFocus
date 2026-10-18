@@ -1,0 +1,34 @@
+flowchart LR
+    USER["使用者"]:::external
+    CAM["摄像头<br/>人物与姿态输入"]:::device
+    APP["手机 App<br/>会话 · PhoneFact · 提醒 · 报告"]:::external
+    BAND["蓝牙手环<br/>三级振动"]:::external
+    WEB["现场展示页<br/>证据叠加 · 30 s 时间线"]:::external
+    POWER["STUSB4500<br/>外部供电事实"]:::device
+
+    subgraph MP2["STM32MP257 边缘主机"]
+        NPU["NPU<br/>YOLO11n Pose"]:::ai
+        A35["A35 / Linux<br/>权威会话 · Temporal Fusion<br/>BLE · SQLite · 设备策略"]:::host
+        M33["Cortex-M33<br/>100 ms 风扇安全闭环"]:::realtime
+    end
+
+    G431["STM32G431<br/>云台实时控制"]:::realtime
+    GIMBAL["双轴云台"]:::device
+    FAN["PWM 风扇"]:::device
+
+    USER --> CAM
+    USER <--> APP
+    CAM -->|"CameraFrame"| NPU -->|"17 keypoints"| A35
+    APP <-->|"会话命令 · PhoneFact<br/>权威状态 · Alert"| A35
+    POWER -->|"Home / Go"| A35
+    A35 --> BAND
+    A35 --> WEB
+    A35 <-->|"RPMsg"| M33 --> FAN
+    A35 <-->|"UART4 + GPIO"| G431 --> GIMBAL
+
+    classDef external fill:#E8F3FF,stroke:#1677FF,color:#10243E,stroke-width:1.5px;
+    classDef host fill:#E6FFFB,stroke:#08979C,color:#103B3D,stroke-width:1.5px;
+    classDef ai fill:#F3E8FF,stroke:#7C3AED,color:#2E1065,stroke-width:1.5px;
+    classDef realtime fill:#FFF3E0,stroke:#F97316,color:#431407,stroke-width:1.5px;
+    classDef device fill:#ECFDF3,stroke:#16A34A,color:#052E16,stroke-width:1.5px;
+

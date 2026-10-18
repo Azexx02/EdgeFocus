@@ -1,0 +1,247 @@
+# STM32MP257 NPU/Galcore Progress
+
+## 2026-07-08 focus_app autostart check
+- Checked the board over COM3 because SSH was unreachable.
+- `focus_app.service` was `enabled` and had the expected symlink under `multi-user.target.wants`, but it was not running during this boot.
+- Root cause: `focus_app.service` had `After=network-online.target` and `Wants=network-online.target`; `systemd-networkd-wait-online.service` was stuck until timeout, so the `focus_app.service` start job stayed waiting.
+- Backed up `/etc/systemd/system/focus_app.service` on the board and changed the service to `After=network.target bluetooth.service`, removing the `Wants=network-online.target` line.
+- Ran `systemctl daemon-reload` and restarted the service. Result:
+  - `systemctl is-enabled focus_app.service` -> `enabled`
+  - `systemctl is-active focus_app.service` -> `active`
+  - `systemctl show focus_app.service` reports `ActiveState=active`, `SubState=running`, `UnitFileState=enabled`
+- Current service mode remains `EDGEFOCUS_VISION_MODE=real`.
+- Separate issue observed: Wi-Fi is currently unavailable over serial diagnostics. `/sys/class/net` has no `wlan0`, `lsusb` only shows the USB 2.0 root hub, and `wifi-105-wpa.service` fails at `ip link set wlan0 up`. This explains why SSH to previous board IPs failed, but it is separate from the `focus_app` autostart dependency issue.
+
+## 2026-07-05
+- Created focused plan for NPU/galcore recovery.
+- Next: collect current board state and locate original DTB/module references.
+- Collected current board evidence over COM3. Key result: no `/dev/galcore`, no apparent galcore module file under current `/lib/modules/6.6.48`, and no visible runtime DT node matching gpu/npu/galcore/viv.
+- Corrected earlier module search: the board stores modules under `/boot/6.6.48`; `galcore.ko` exists there and aliases `vivante,gc`.
+- Compared original ATK and selfcarrier DT sources. Root cause was selfcarrier DTB disabling `gpu@48280000`.
+- Built and installed `stm32mp257d-atk-ddr-2GB-selfcarrier-safe-v9-gpu-okay.dtb`.
+- Reboot verification succeeded: GPU DT status is `okay`, `galcore` loads, `/dev/galcore` exists.
+- NPU smoke test succeeded with model input `1x3x256x256`, output `1x56x1344`, exit code `0`.
+- Set `focus_app.service` to `EDGEFOCUS_VISION_MODE=real`; service remains active and HTTP returns `200`.
+- Function check after NPU fix:
+  - `focus_app.service` active; recent health logs OK.
+  - HTTP `/demo/snapshot` returns `200`.
+  - Demo HTTP POST command `force_precheck_guidance` returned success; test override was cleared afterwards.
+  - WiFi `wlan0` connected to SSID `105`, IP `192.168.10.171`, SSH port reachable.
+  - Bluetooth `hci0` powered/discoverable; `EdgeFocus` GATT UUID `0000ff00...` advertised by app. BLE band scan reports no `EdgefocusBand`, expected unless that peripheral is present.
+  - NPU `galcore` module loaded and `/dev/galcore` present; `npu_smoke` model load succeeds.
+  - USB camera enumerates as `USB 2.0 Camera: HD USB Camera`, `/dev/video0` and `/dev/video1`; `v4l2-ctl` captured 20 MJPG frames to `/tmp/cam_test.mjpg` (~1012 KiB).
+  - Remaining failed systemd unit: `systemd-networkd-wait-online.service`; network is usable, but boot status still reports this failure.
+
+## 2026-07-05 MAX98357A playback attempt
+- Added implementation plan: `docs/superpowers/plans/2026-07-05-max98357a-playback-dtb.md`.
+- Based audio DTB work on the NPU-fixed `selfcarrier-safe-v9-gpu-okay` DTS, preserving the `gpu@48280000` `status = "okay"` fix.
+- v10 attempted MAX98357A with `sdmode-gpios = <GPIOD PD3 GPIO_ACTIVE_HIGH>`. Result: codec probe failed with `max98357a: probe ... error -22`.
+- Confirmed the v10 runtime DT property was encoded as `<0x2f 0x03 0x00>`, but direct user-space request of PD3 also failed with `Invalid argument`. Conclusion: PD3/AMP_EN is not currently usable as a normal Linux GPIO in this DT/security/pinctrl state.
+- v11 removed `sdmode-gpios` so the codec driver no longer requests PD3. Result: ALSA card registers:
+  - card: `stm32mp25-max98357a`
+  - playback device: `40230000.audio-controller-HiFi HiFi-0`
+- v11 `speaker-test` opens/configures the PCM but write fails with `Input/output error`. Dynamic debug shows I2S playback starts/stops, DMA channels are allocated (`dma0chan8` tx, `dma0chan9` rx), but `ck_ker_spi1` can fall to an unusable `55803 Hz` rate.
+- v12 added I2S1 `#clock-cells` and `simple-audio-card,mclk-fs = <256>`. Result: card registers, but hw_params fails because I2S cannot derive accurate 12.288 MHz MCLK from the current 50 MHz clock.
+- v13 tried `assigned-clocks = <RCC CK_KER_SPI1>` with `49147748` Hz. Result: no improvement; clock remained 50 MHz and hw_params still failed.
+- v14 tried assigning `CK_FLEXGEN_16` directly. Result: I2S probe failed (`couldn't get clock 0`), so this variant was rolled back.
+- v15 was based on v11 and applied the Pro suggestion without re-adding `sdmode-gpios` or `simple-audio-card,mclk-fs`:
+  - I2S1 `#clock-cells = <0>`.
+  - `assigned-clocks = <RCC CK_KER_SPI1>`, `assigned-clock-rates = <49152000>`.
+  - CPU DAI slots set to 2 slots x 32 bits.
+- v15 result:
+  - ALSA card still registers.
+  - `speaker-test -D hw:0,0 -c 2 -r 48000 -F S16_LE -t sine -l 1` runs and starts/stops I2S playback.
+  - `S32_LE`, `S24_LE`, and `44100/S16_LE` fail during hw_params with `Invalid argument`.
+  - Dynamic debug for the working 48k/S16 case reports requested bit clock `1536000`, actual `1639344`, so the clock is usable but inaccurate.
+  - `clk_summary` still shows `ck_flexgen_16 -> ck_ker_spi1` at about `9836065 Hz`, not the requested `49152000 Hz`; the clock is marked protected.
+- Follow-up evidence for missing audible output:
+  - The suspected `AMP_EN` line is PD3.
+  - v15 DTS has `serial@40370000` enabled with `pinctrl-0 = <0x3e>`.
+  - `uart7-0` uses `pinmux = <0x3307>`, and GPIOD pin range starts at `0x30`, so `0x33` maps to PD3.
+  - Runtime pinmux confirms `pin 51 (PD3): device 40370000.serial function af6 group PD3`.
+  - Runtime pinmux also confirms `pin 56 (PD8): GPIO GPIOD:566`, so GPIOD as a bank is usable; the PD3 failure is a per-pin mux/owner conflict.
+  - This explains why the earlier `sdmode-gpios = <0x2f 0x03 0x00>` variant failed and why `gpioset` on PD3 returned `Invalid argument`.
+- Board is currently left on v15 (`stm32mp257d-atk-ddr-2GB-selfcarrier-safe-v15-max98357a-i2s1-49152k.dtb`): 48k/S16 playback path is kernel-accepted, but audible output still depends on hardware gain/AMP_EN/format constraints and the I2S1 clock is not correctly assigned.
+- v16B test disabled `serial@40370000` and re-added `sdmode-gpios = <0x2f 0x03 0x00>` plus `sdmode-delay = <0x05>` to MAX98357A.
+  - Board booted successfully.
+  - ALSA card still registers.
+  - `speaker-test -D hw:0,0 -c 2 -r 48000 -F S16_LE -t sine -l 2` runs.
+  - Runtime pinmux changed from `pin 51 (PD3): device 40370000.serial function af6 group PD3` to `pin 51 (PD3): GPIO GPIOD:561`, confirming UART7 was the PD3 conflict.
+  - WiFi `wlan0` still has `192.168.10.171`.
+  - Bluetooth `hci0` is still up over USB, so disabling UART7 did not break the Realtek USB Bluetooth path in this board state.
+  - NPU device `/dev/galcore` remains present.
+  - `focus_app.service` was inactive immediately after this reboot, with no prior journal entries; starting it manually succeeded and BLE GATT/advertising came up. This needs a later boot-order/service check if it repeats.
+- Board is currently left on v16B (`stm32mp257d-atk-ddr-2GB-selfcarrier-safe-v16b-disable-uart7-pd3-sdmode.dtb`).
+- Backups written on board during this sequence:
+  - `/boot/stm32mp257d-atk-ddr-2GB.dtb.before-max98357a-20260705-.bak`
+  - `/boot/stm32mp257d-atk-ddr-2GB.dtb.before-max98357a-v11.bak`
+  - `/boot/stm32mp257d-atk-ddr-2GB.dtb.before-max98357a-v12.bak`
+  - `/boot/stm32mp257d-atk-ddr-2GB.dtb.before-max98357a-v13.bak`
+  - `/boot/stm32mp257d-atk-ddr-2GB.dtb.before-max98357a-v14.bak`
+  - `/boot/stm32mp257d-atk-ddr-2GB.dtb.before-rollback-from-v14.bak`
+  - `/boot/stm32mp257d-atk-ddr-2GB.dtb.before-max98357a-v15.bak`
+  - `/boot/stm32mp257d-atk-ddr-2GB.dtb.before-max98357a-v16b.bak`
+- Next audio work should focus on two separate blockers:
+  - Make `AMP_EN`/PD3 usable, or confirm the hardware/secure configuration that blocks it as a GPIO.
+  - Fix I2S1 kernel clock parent/rate. The broken path is `ck_flexgen_16 -> ck_ker_spi1`; v14 showed direct CK_FLEXGEN assignment is not accepted in this decompiled DTB form, and v15 showed assigning `CK_KER_SPI1` only lands at about 9.836 MHz on this system.
+
+## 2026-07-08 Wi-Fi/BT USB hub regression check
+- Symptom: `wlan0` disappeared and Bluetooth was unavailable. Serial diagnostics showed only `can0 can1 can2 lo` in `/sys/class/net`; `lsusb` showed only `Bus 001 Device 001: ID 1d6b:0002 Linux Foundation 2.0 root hub`.
+- Important distinction: this is not currently a Wi-Fi driver or firmware failure. The CH334R downstream USB hub itself does not enumerate, so the RTL8723DU Wi-Fi/BT USB module is absent from the bus.
+- One earlier reboot did briefly enumerate the hub and RTL8723DU, then the hub/module disconnected during Realtek Wi-Fi/BT initialization:
+  - `usb 1-1: new high-speed USB device number 2 using ehci-platform`
+  - `hub 1-1:1.0: USB hub found`
+  - `usb 1-1.1: new high-speed USB device number 3 using ehci-platform`
+  - later: `usb 1-1: USB disconnect`, Wi-Fi firmware download failed, BT patch download failed with `-71`.
+- Software mitigations installed on the board and intentionally left in place:
+  - `/etc/modprobe.d/rtl8723du.conf`: `options 8723du rtw_power_mgnt=0 rtw_enusbss=0 rtw_btcoex_enable=1`
+  - `/etc/modprobe.d/blacklist-rtk-btusb-test.conf`: blacklists automatic `rtk_btusb` load.
+  - `/etc/systemd/system/rtk-btusb-delayed.service` and `/usr/local/sbin/load-rtk-btusb-delayed.sh`: delay Realtek BT driver/service startup to avoid racing Wi-Fi firmware download if the USB module enumerates.
+  - `bluetooth.service` and `bluealsa.service` are disabled for direct boot startup; delayed service is enabled.
+- DTB A/B test:
+  - Current v16B DTB hash before rollback was `fd1d98259beec067142e8465751a22e828ff4ddf83cf055b8213caab5e4e9310`.
+  - Temporarily rolled back to early selfcarrier v3 DTB hash `ffbf5d70d924dfeb459026bfcf837773c62d71ae9b38952401a0c2c30d6020f5`, which predates MIPI/audio changes.
+  - With v3, both warm restart and user-performed cold power cycle still showed only the EHCI root hub; CH334R did not enumerate.
+  - Conclusion: current disappearance is unlikely to be caused by later MIPI/audio DTB edits.
+- Restored `/boot/stm32mp257d-atk-ddr-2GB.dtb` back to v16B hash `fd1d98259beec067142e8465751a22e828ff4ddf83cf055b8213caab5e4e9310`.
+- Netlist evidence:
+  - CH334R upstream USB: `USBH_D_N/P` from `U1.C5/C6` to `U16.10/11`.
+  - CH334R downstream to RTL8723DU: `HUB_D1_N/P` from `U16.7/8` to `U14.12/13`.
+  - CH334R power/config around netlist: `U16.12` through `L6` to `5V_SYS`, `U16.9` through `R70` to `3V_SYS`, crystal on `U16.15/16`, ground on `U16.14`.
+  - No direct MP257 GPIO control was found for CH334R reset or `WIFI_BT_EN`; `WIFI_BT_EN` is tied within the Wi-Fi module side through `R68`, not exposed as a SoC GPIO in the netlist excerpt.
+- Hardware-facing conclusion: if CH334R remains absent after correct input voltage and cold power cycle, next checks should be board-side voltages and signals rather than Linux driver changes:
+  - `5V_SYS` at CH334R supply path / `L6`.
+  - `3V_SYS` at `R70.2` and `R70.1` / CH334R config or reset-related pin.
+  - CH334R 12 MHz crystal pins `X2`/`U16.15/16`.
+  - USB differential continuity/signals on `USBH_D_N/P` and `HUB_D1_N/P`.
+  - RTL8723DU module power/enable nets around `U14`, including `WIFI_BT_EN`.
+
+## 2026-07-12 Project workspace split
+- New total project workspace selected by user:
+  `C:\Users\Aze\Desktop\self_developed`
+- Code repository location for future standalone Git setup:
+  `C:\Users\Aze\Desktop\self_developed\code\focus_app`
+- Workspace boundary:
+  - `D:\Aze\Documents\developMP257` remains the low-level self-developed hardware exploration and bring-up workspace.
+  - `C:\Users\Aze\Desktop\self_developed` becomes the main project workspace.
+  - `C:\Users\Aze\Desktop\self_developed\code\focus_app` is the application code area and future independent Git repository.
+  - `C:\Users\Aze\Desktop\self_developed\code\focus_app\_workspace` is only the code-side local workspace and is excluded by `.gitignore`.
+- Copied/organized hardware bring-up materials into:
+  `C:\Users\Aze\Desktop\self_developed\hardware_bringup`
+- The hardware bring-up pack contains 157 files, about 18.92 MB. It includes selected docs, netlist/hardware notes, logs, scripts, tools, DTB/DTS backups, and kernel/driver analysis snippets.
+- The code copy at `C:\Users\Aze\Desktop\self_developed\code\focus_app` currently contains 572 files, about 211.04 MB after moving hardware资料 out of `focus_app/_workspace`.
+- `focus_app/.gitignore` in the new workspace now contains:
+  - `build*/`
+  - `Testing/`
+  - `*.db`
+  - `_workspace/`
+- No Git repository was initialized yet; user intends to set up `focus_app` as a standalone repo later.
+- Follow-up guardrails added for code-development agents:
+  - `C:\Users\Aze\Desktop\self_developed\hardware_bringup\CODE_AGENT_ENTRY.md`
+  - `C:\Users\Aze\Desktop\self_developed\hardware_bringup\MATERIAL_AUDIT.md`
+- `CODE_AGENT_ENTRY.md` is now the required first read for any code agent that needs board context. It points app work toward status summaries and concise board notes, and explicitly marks DTB/kernel/raw-log folders as deep references only.
+- `MATERIAL_AUDIT.md` records that the current hardware reference pack is acceptable for app development context: about 19 MB, no large vendor trees or raw archives, and useful mainly for runtime assumptions, feature gating, NPU/Galcore context, Wi-Fi/BT failure boundaries, and deployment/service notes.
+- Updated `C:\Users\Aze\Desktop\self_developed\hardware_bringup\README.md` with deployment-facing hardware notes:
+  - Board access expectations: serial `COM3` at `115200`, root auto-login observed, SSH/IP not guaranteed.
+  - App runtime path/service notes: `/opt/edgefocus`, `focus_app.service`, demo HTTP port `18080`, and `/dev/galcore` requirement for real inference.
+  - Hardware capability table for NPU/GPU, Wi-Fi, Bluetooth, USB camera, local display, speaker/audio, and Ethernet.
+  - Boundary notes explaining that the current Wi-Fi/BT blocker is CH334R hub enumeration, not Wi-Fi credentials or Realtek firmware.
+  - Runtime check commands for app service, Galcore, network links, and USB topology.
+- Added a maintenance note to `hardware_bringup\README.md`: the README is intentionally editable and should be updated when board status, deployment paths, service behavior, hardware availability, or known failure boundaries change.
+
+## 2026-07-12 Wi-Fi/BT after suspected power-chip removal
+- User removed a suspected power chip that might have affected Wi-Fi/Bluetooth startup, then booted the self-developed board again.
+- Board was reachable over serial `COM3`; runtime DTB remained v16B:
+  `fd1d98259beec067142e8465751a22e828ff4ddf83cf055b8213caab5e4e9310`.
+- Evidence after boot:
+  - `lsusb` still showed only `Bus 001 Device 001: ID 1d6b:0002 Linux Foundation 2.0 root hub`.
+  - `lsusb -t` still showed only EHCI root hub, no CH334R downstream hub.
+  - `/sys/class/net` still showed only `can0 can1 can2 lo`; no `wlan0`.
+  - `hciconfig -a` showed no HCI adapter.
+  - `focus_app.service` was active, but BLE logs still failed because BlueZ/HCI was absent.
+- Performed EHCI unbind/rebind:
+  - `echo 482f0000.usb > /sys/bus/platform/drivers/ehci-platform/unbind`
+  - `echo 482f0000.usb > /sys/bus/platform/drivers/ehci-platform/bind`
+  - EHCI root hub returned, but CH334R still did not enumerate.
+- USB controller/DT evidence:
+  - `/proc/device-tree/soc@0/bus@42080000/usb@482e0000/status = okay`
+  - `/proc/device-tree/soc@0/bus@42080000/usb@48300000/status = okay`
+  - EHCI platform driver remained bound to `482f0000.usb`.
+- Regulator summary still reported named supplies such as `vdd_3v3`, `vdd_5v`, and `vdd3v3_usb` present from Linux's view, but this does not prove CH334R local pins are correctly powered after the hardware modification.
+- Conclusion: removing the suspected power chip did not restore Wi-Fi/Bluetooth enumeration in this boot. The failure remains below the RTL8723DU driver layer: CH334R USB hub is absent from USB enumeration. Next hardware checks should focus on CH334R local power/reset/clock and the upstream USB pair.
+
+## 2026-07-12 Wi-Fi/BT software mitigation rollback
+- User asked to roll back the two temporary software-side Wi-Fi/BT protections:
+  - RTL8723DU USB power-saving options: `rtw_power_mgnt=0 rtw_enusbss=0`.
+  - Delayed `rtk_btusb` Bluetooth driver loading.
+- Board-side rollback performed over serial without deleting files:
+  - `/etc/modprobe.d/rtl8723du.conf` -> `/etc/modprobe.d/rtl8723du.conf.disabled-20240229-165957`
+  - `/etc/modprobe.d/blacklist-rtk-btusb-test.conf` -> `/etc/modprobe.d/blacklist-rtk-btusb-test.conf.disabled-20240229-165957`
+  - `/etc/systemd/system/rtk-btusb-delayed.service` -> `/etc/systemd/system/rtk-btusb-delayed.service.disabled-20240229-165957`
+  - Matching `.rollback-backup-20240229-165957` copies were left next to each file.
+- `bluetooth.service` and `bluealsa.service` were re-enabled directly:
+  - `systemctl is-enabled bluetooth.service` -> `enabled`
+  - `systemctl is-enabled bluealsa.service` -> `enabled`
+  - `systemctl is-enabled rtk-btusb-delayed.service` -> `not-found`
+- Note: this rollback removes the temporary software mitigations, but it does not change the current root cause evidence. CH334R still must enumerate before RTL8723DU Wi-Fi/Bluetooth can appear.
+
+## 2026-07-13 Wi-Fi/BT hardware recovery
+- CH334R hub-level disappearance was recovered after cleaning the core-board/carrier connector area. This points to connector/contact contamination or upstream `USBH_D_N/P` contact path rather than Linux service order, Wi-Fi credentials, or Realtek firmware.
+- After RTL8723DU was soldered back, USB topology recovered:
+  - `lsusb`: `1a86:8091 QinHeng Electronics USB HUB` and `0bda:d723 Realtek Semiconductor Corp. 802.11n WLAN Adapter`.
+  - `lsusb -t`: Realtek interface 0/1 bound to `rtk_btusb`, interface 2 bound to `rtl8723du`.
+  - `/sys/class/net` contained `wlan0`; `hci0` was `UP RUNNING`.
+- Initial Wi-Fi connection still failed because RSSI was weak, about `-80` to `-82 dBm`, and WPA group handshake repeatedly timed out.
+- After antenna re-solder, Wi-Fi recovered:
+  - `wlan0 UP 192.168.10.174/24`.
+  - SSID `105`, AP `80:af:ca:8c:58:31`.
+  - Signal about `-66` / `-67 dBm`, tx bitrate `150.0 MBit/s`.
+  - WPA key negotiation completed and DHCP obtained lease `192.168.10.174` from `192.168.10.1`.
+  - `ping 192.168.10.1` and `ping 223.5.5.5` both passed 3/3 with 0% packet loss.
+- Bluetooth remained functional after recovery: `hci0` stayed `UP RUNNING` through `rtk_btusb`.
+- Current code-facing conclusion: Wi-Fi/BT are available in the latest verified state, but application code should still detect `wlan0`, IP address, and Bluetooth adapter at runtime because the proven failure modes were physical connector/contact and antenna/RF path issues.
+- Detailed record synced to `docs/ch334r_enumeration_regression_audit.md`.
+
+## 2026-07-15 Fan PWM/tach bring-up
+- User identified fan pins:
+  - `PB10` = fan PWM speed control.
+  - `PB11` = fan tach speed feedback.
+- Netlist context:
+  - PB10 drives the fan PWM net through the Q2/R104/R105/R106 driver/pull-up network.
+  - PB11 reads the fan tach net through R102 with R103 pull-up, C95 filtering, and D14 clamp.
+- Runtime discovery before DTB fix:
+  - `/sys/class/pwm/pwmchip0` exists and maps to `40270000.timer:pwm`.
+  - PB10 pinmux was already `device 40270000.timer:pwm function af7 group PB10`.
+  - PB11 was incorrectly claimed by `402d0000.can function af7 group PB11`, so `gpioget` initially failed.
+- Temporary test:
+  - Unbound `/sys/bus/platform/drivers/m_can_platform/402d0000.can`, after which PB11 became readable as GPIOB line 11.
+  - PB11 tach produced regular rising/falling edges.
+  - PB10 PWM was configured at 25 kHz (`period = 40000 ns`).
+  - Measured inverse PWM behavior:
+    - `duty_cycle = 36000 ns` -> about 520 RPM in the first test, later service logs settled around 540 RPM at low temperature.
+    - `duty_cycle = 20000 ns` -> about 3610 RPM.
+    - `duty_cycle = 8000 ns` -> about 5620 RPM.
+  - Conclusion: fan PWM and tach hardware paths are functional. Lower duty means faster fan on this board because of the external driver path.
+- Solidified DTB:
+  - Created `artifacts/dtb/stm32mp257d-atk-ddr-2GB-selfcarrier-safe-v17-fan-pb10-pwm-pb11-tach.dtb`.
+  - SHA256: `9a6404656a6ed354f22d16d1cb1ea800ef064bbb876a0274feee08eb426e99e5`.
+  - Method: patched only `can@402d0000/status` from `okay` to `fail`, preserving DTB layout because no local/board `dtc` tool was available.
+  - Patch helper copied to `tools/patch_dtb_status.py`.
+  - Board-side backup was created before replacement as `/boot/stm32mp257d-atk-ddr-2GB.dtb.before-fan-v17-<timestamp>.bak`.
+- Verified after reboot:
+  - `/boot/stm32mp257d-atk-ddr-2GB.dtb` hash matched v17.
+  - `/proc/device-tree/soc@0/bus@42080000/can@402d0000/status` read `fail`.
+  - `/sys/class/net` showed `can0 can1 lo wlan0`; one CAN interface is intentionally gone.
+  - `gpioinfo -c gpiochip1 10 11` showed PB10 consumed by kernel/PWM and PB11 free input.
+  - pinctrl showed PB10 on `40270000.timer:pwm` and PB11 `UNCLAIMED`.
+- Fan temperature example:
+  - Local source: `scripts/fan_temp_control.py`.
+  - Board install path: `/usr/local/bin/fan_temp_control.py`.
+  - systemd unit: `scripts/fan-temp-control.service`, installed to `/etc/systemd/system/fan-temp-control.service`.
+  - Service is enabled and active.
+  - The script reads `cpu-thermal` (`thermal_zone1`) by default and adjusts PB10 PWM by temperature bands.
+  - Example verified output after v17 reboot:
+    `zone=thermal_zone1 temp_c=40.7 duty_ns=36000 rpm=540`.
+- Important trade-off:
+  - v17 intentionally disables `can@402d0000` to release PB11 tach.
+  - If the project later needs that CAN controller, fan tach and CAN pinmux must be redesigned or moved.

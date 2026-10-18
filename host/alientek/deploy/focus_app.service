@@ -1,0 +1,28 @@
+[Unit]
+Description=EdgeFocus MVP-0 Core Application
+Wants=network-online.target bluetooth.service
+After=network-online.target bluetooth.service weston-graphical-session.service
+Requires=weston-graphical-session.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/edgefocus
+# Require the MIPI display environment for Weston UI
+Environment="WAYLAND_DISPLAY=wayland-1"
+Environment="XDG_RUNTIME_DIR=/run/user/0"
+Environment="EDGEFOCUS_BAND_NAME=EdgefocusBand"
+Environment="EDGEFOCUS_BAND_MAC=03:A6:40:00:13:B0"
+Environment="EDGEFOCUS_CAMERA_CANDIDATES=7"
+Environment="EDGEFOCUS_VISION_MODE=real"
+
+ExecStart=/opt/edgefocus/focus_app
+Restart=on-failure
+RestartSec=3
+
+# Logging
+StandardOutput=append:/var/log/edgefocus.log
+StandardError=append:/var/log/edgefocus.err
+
+[Install]
+WantedBy=multi-user.target

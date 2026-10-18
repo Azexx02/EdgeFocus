@@ -1,0 +1,56 @@
+﻿[    0.289259] platform 48000000.dsi: Fixed dependency cycle(s) with /soc@0/bus@42080000/dsi@48000000/panel@0
+[    0.298885] platform 48000000.dsi: Fixed dependency cycle(s) with /soc@0/bus@42080000/display-controller@48010000
+[    0.309287] platform 48000000.dsi: Fixed dependency cycle(s) with /soc@0/clock-controller@44200000
+[    0.319933] platform 48000000.dsi: Fixed dependency cycle(s) with /soc@0/clock-controller@44200000
+[    1.456877] stm32-display-dsi 48000000.dsi: Fixed dependency cycle(s) with /soc@0/bus@42080000/dsi@48000000/panel@0
+[    1.466316] mipi-dsi 48000000.dsi.0: Fixed dependency cycle(s) with /soc@0/bus@42080000/dsi@48000000
+[    4.272425] systemd[1]: Starting Load Kernel Module drm...
+[    7.176373] panel_sitronix_st7701: loading out-of-tree module taints kernel.
+[    7.215250] st7701 48000000.dsi.0: probe: v12 observable no-eot lanes=2 format=0 mode_flags=0xa03
+[    7.243016] [drm] Initialized stm 1.0.0 20170330 for 48010000.display-controller on minor 0
+[    7.367666] st7701 48000000.dsi.0: prepare: lanes=2 format=0 mode_flags=0xa03
+[    7.367684] st7701 48000000.dsi.0: reset step: drive inactive before power
+[    7.383603] st7701 48000000.dsi.0: reset step: regulators enabled
+[    7.411527] st7701 48000000.dsi.0: reset step: release panel reset
+[    7.619538] st7701 48000000.dsi.0: prepare: using vendor sequence only
+[    7.620609] st7701 48000000.dsi.0: DSI write ok: cmd=0xff len=6 ret=10
+[    7.621663] st7701 48000000.dsi.0: DSI write ok: cmd=0xef len=2 ret=4
+[    7.622710] st7701 48000000.dsi.0: DSI write ok: cmd=0xff len=6 ret=10
+[    7.623500] st7701 48000000.dsi.0: DSI write ok: cmd=0xc0 len=3 ret=7
+[    7.624556] st7701 48000000.dsi.0: DSI write ok: cmd=0xc1 len=3 ret=7
+[    7.625600] st7701 48000000.dsi.0: DSI write ok: cmd=0xc2 len=3 ret=7
+[    7.626656] st7701 48000000.dsi.0: DSI write ok: cmd=0xcc len=2 ret=4
+[    7.627899] st7701 48000000.dsi.0: DSI write ok: cmd=0xb0 len=17 ret=21
+[    7.628960] st7701 48000000.dsi.0: DSI write ok: cmd=0xb1 len=17 ret=21
+[    7.630020] st7701 48000000.dsi.0: DSI write ok: cmd=0xff len=6 ret=10
+[    7.631077] st7701 48000000.dsi.0: DSI write ok: cmd=0xb0 len=2 ret=4
+[    7.631493] st7701 48000000.dsi.0: DSI write ok: cmd=0xb1 len=2 ret=4
+[    7.632555] st7701 48000000.dsi.0: DSI write ok: cmd=0xb2 len=2 ret=4
+[    7.633614] st7701 48000000.dsi.0: DSI write ok: cmd=0xb3 len=2 ret=4
+[    7.634655] st7701 48000000.dsi.0: DSI write ok: cmd=0xb5 len=2 ret=4
+[    7.635487] st7701 48000000.dsi.0: DSI write ok: cmd=0xb7 len=2 ret=4
+[    7.636543] st7701 48000000.dsi.0: DSI write ok: cmd=0xb8 len=2 ret=4
+[    7.637591] st7701 48000000.dsi.0: DSI write ok: cmd=0xc1 len=2 ret=4
+[    7.638637] st7701 48000000.dsi.0: DSI write ok: cmd=0xc2 len=2 ret=4
+[    7.639915] st7701 48000000.dsi.0: DSI write ok: cmd=0xd0 len=2 ret=4
+[    7.748649] st7701 48000000.dsi.0: DSI write ok: cmd=0xe0 len=4 ret=8
+[    7.749702] st7701 48000000.dsi.0: DSI write ok: cmd=0xe1 len=12 ret=16
+[    7.750739] st7701 48000000.dsi.0: DSI write ok: cmd=0xe2 len=13 ret=17
+[    7.751503] st7701 48000000.dsi.0: DSI write ok: cmd=0xe3 len=5 ret=9
+[    7.752549] st7701 48000000.dsi.0: DSI write ok: cmd=0xe4 len=3 ret=7
+[    7.753607] st7701 48000000.dsi.0: DSI write ok: cmd=0xe5 len=17 ret=21
+[    7.754667] st7701 48000000.dsi.0: DSI write ok: cmd=0xe6 len=5 ret=9
+[    7.756137] st7701 48000000.dsi.0: DSI write ok: cmd=0xe7 len=3 ret=7
+[    7.757205] st7701 48000000.dsi.0: DSI write ok: cmd=0xe8 len=17 ret=21
+[    7.758260] st7701 48000000.dsi.0: DSI write ok: cmd=0xe9 len=3 ret=7
+[    7.759322] st7701 48000000.dsi.0: DSI write ok: cmd=0xeb len=8 ret=12
+[    7.760383] st7701 48000000.dsi.0: DSI write ok: cmd=0xed len=17 ret=21
+[    7.761439] st7701 48000000.dsi.0: DSI write ok: cmd=0xef len=7 ret=11
+[    7.762491] st7701 48000000.dsi.0: DSI write ok: cmd=0xff len=6 ret=10
+[    7.763522] st7701 48000000.dsi.0: DSI write ok: cmd=0x36 len=2 ret=4
+[    7.764574] st7701 48000000.dsi.0: DSI write ok: cmd=0x3a len=2 ret=4
+[    7.765631] st7701 48000000.dsi.0: DSI write ok: cmd=0x11 len=1 ret=4
+[    7.892552] st7701 48000000.dsi.0: DSI write ok: cmd=0x29 len=1 ret=4
+[    7.919695] st7701 48000000.dsi.0: prepare complete: DSI init sequence sent
+[    7.919719] st7701 48000000.dsi.0: enable display on
+[    8.282638] stm32-display 48010000.display-controller: [drm] fb0: stmdrmfb frame buffer device

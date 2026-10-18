@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "bucket_ms": 250,
+  "thresholds": {
+    "presence_agreement_min": 0.95,
+    "prone_agreement_min": 0.95,
+    "level_agreement_min": 0.95,
+    "transition_count_delta_max": 1,
+    "go_extra_stable_delay_ms_max": 750,
+    "go_inference_fps_min": 2.8,
+    "inference_interval_p99_ms_max": 450,
+    "inference_interval_max_ms_max": 500
+  },
+  "inputs": [
+    {
+      "path": "assets/demo/p01.mp4",
+      "sha256": "648658fc07b1c0692ad3d7353b2372e605f56b23951563a6d5e702304f0c60ab",
+      "duration_ms": 30067,
+      "coverage": ["present_normal", "prone", "not_present"]
+    },
+    {
+      "path": "assets/demo/p02.mp4",
+      "sha256": "9af185fb8cab4940ba49a568e8e6897af3c16bd2025c7d2dc55b78a5b32cdd83",
+      "duration_ms": 30133,
+      "coverage": ["supplemental_recorded_input"]
+    },
+    {
+      "path": "assets/demo/p03.mp4",
+      "sha256": "b2b4cca2f731792b9b21b6d835e50351861d6ced27b3dfd539f185e4fcc5e54b",
+      "duration_ms": 30067,
+      "coverage": ["supplemental_recorded_input"]
+    },
+    {
+      "path": "assets/demo/p04.mp4",
+      "sha256": "d43e62ed002b2ac67ce7e44dffed0342c5281c00bedc2abff739de0adbe660ed",
+      "duration_ms": 30067,
+      "coverage": ["replacement_recorded_input"]
+    }
+  ]
+}

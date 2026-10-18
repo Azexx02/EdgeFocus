@@ -1,0 +1,258 @@
+﻿diff --git "a/D:\\Aze\\Documents\\developMP257\\clean_dtb_backup_20260630_214811\\stm32mp257d-atk-ddr-2GB.dts" "b/D:\\Aze\\Documents\\developMP257\\artifacts\\dtb\\stm32mp257d-atk-ddr-2GB-selfcarrier-safe-v9-gpu-okay.dts"
+index 78fe70b..681982a 100644
+--- "a/D:\\Aze\\Documents\\developMP257\\clean_dtb_backup_20260630_214811\\stm32mp257d-atk-ddr-2GB.dts"
++++ "b/D:\\Aze\\Documents\\developMP257\\artifacts\\dtb\\stm32mp257d-atk-ddr-2GB-selfcarrier-safe-v9-gpu-okay.dts"
+@@ -1123,10 +1123,10 @@
+ 
+ 				fusb302@22 {
+ 					compatible = "fcs,fusb302\0fairchild,fusb302";
+-					reg = <0x22>;
+-					int-n-gpios = <0x27 0x06 0x00>;
+-					vbus-5v-gpios = <0x27 0x05 0x00>;
+-					status = "okay";
++				reg = <0x22>;
++				int-n-gpios = <0x27 0x06 0x00>;
++				vbus-5v-gpios = <0x27 0x05 0x00>;
++				status = "disabled";
+ 
+ 					connector {
+ 						compatible = "usb-c-connector";
+@@ -1157,7 +1157,7 @@
+ 					dvdd-supply = <0x2c>;
+ 					reset-gpios = <0x2d 0x04 0x00>;
+ 					powerdown-gpios = <0x2d 0x03 0x00>;
+-					status = "okay";
++					status = "disabled";
+ 					phandle = <0xd2>;
+ 
+ 					port {
+@@ -1184,7 +1184,7 @@
+ 					PVDD-supply = <0x26>;
+ 					AVDD-supply = <0x26>;
+ 					HPVDD-supply = <0x26>;
+-					status = "okay";
++					status = "disabled";
+ 					phandle = <0xd3>;
+ 
+ 					port {
+@@ -1620,7 +1620,7 @@
+ 				interrupts = <0x00 0x9d 0x04>;
+ 				resets = <0x16 0x32>;
+ 				access-controllers = <0x1b 0x31>;
+-				status = "okay";
++				status = "disabled";
+ 				pinctrl-names = "default\0sleep";
+ 				pinctrl-0 = <0x35 0x36>;
+ 				pinctrl-1 = <0x37 0x38>;
+@@ -2315,7 +2315,7 @@
+ 				dma-names = "rx\0tx";
+ 				access-controllers = <0x1b 0x1d>;
+ 				power-domains = <0x0c>;
+-				status = "okay";
++				status = "disabled";
+ 				pinctrl-names = "default\0sleep";
+ 				pinctrl-0 = <0x48>;
+ 				pinctrl-1 = <0x49>;
+@@ -2326,7 +2326,7 @@
+ 					compatible = "jedec,spi-nor";
+ 					reg = <0x00>;
+ 					spi-max-frequency = <0x2faf080>;
+-					status = "okay";
++					status = "disabled";
+ 					phandle = <0x114>;
+ 				};
+ 			};
+@@ -2493,7 +2493,7 @@
+ 				clock-names = "bus\0ref\0lcd\0lvds";
+ 				resets = <0x16 0x4c>;
+ 				power-domains = <0x0c>;
+-				status = "disabled";
++				status = "okay";
+ 				access-controllers = <0x1b 0x50>;
+ 				access-controller-names = "cmn";
+ 				phandle = <0x11b>;
+@@ -2512,6 +2512,17 @@
+ 					access-controllers = <0x1b 0x79>;
+ 					access-controller-names = "rot";
+ 				};
++
++				port {
++					#address-cells = <0x01>;
++					#size-cells = <0x00>;
++
++					endpoint@0 {
++						reg = <0x00>;
++						remote-endpoint = <0x205>;
++						phandle = <0x204>;
++					};
++				};
+ 			};
+ 
+ 			csi@48020000 {
+@@ -2522,7 +2533,7 @@
+ 				clocks = <0x16 0x122 0x16 0x123 0x16 0x124>;
+ 				clock-names = "pclk\0txesc\0csi2phy";
+ 				access-controllers = <0x1b 0x56>;
+-				status = "okay";
++				status = "disabled";
+ 				vdd-supply = <0x4e>;
+ 				vdda18-supply = <0x4f>;
+ 				phandle = <0x11c>;
+@@ -2562,7 +2573,7 @@
+ 				clock-names = "kclk\0mclk";
+ 				access-controllers = <0x1b 0x57>;
+ 				power-domains = <0x0c>;
+-				status = "okay";
++				status = "disabled";
+ 				phandle = <0x11d>;
+ 
+ 				port {
+@@ -2689,7 +2700,7 @@
+ 				access-controllers = <0x1b 0x3c>;
+ 				power-domains = <0x0c>;
+ 				wakeup-source;
+-				status = "okay";
++				status = "disabled";
+ 				snps,mtl-rx-config = <0x62>;
+ 				snps,mtl-tx-config = <0x63>;
+ 				pinctrl-0 = <0x64>;
+@@ -2887,7 +2898,7 @@
+ 				msi-parent = <0x6d>;
+ 				access-controllers = <0x1b 0x44>;
+ 				power-domains = <0x0c>;
+-				status = "okay";
++				status = "disabled";
+ 				pinctrl-names = "default";
+ 				pinctrl-0 = <0x6b>;
+ 				reset-gpios = <0x6c 0x0c 0x01>;
+@@ -2966,7 +2977,7 @@
+ 				access-controllers = <0x1b 0x3d>;
+ 				power-domains = <0x0c>;
+ 				wakeup-source;
+-				status = "okay";
++				status = "disabled";
+ 				snps,mtl-rx-config = <0x75>;
+ 				snps,mtl-tx-config = <0x76>;
+ 				pinctrl-0 = <0x77>;
+@@ -3039,9 +3050,55 @@
+ 				reset-names = "apb";
+ 				access-controllers = <0x1b 0x51>;
+ 				power-domains = <0x0c>;
+-				status = "disabled";
+-				phandle = <0x81>;
++			status = "okay";
++			vdd-supply = <0x4e>;
++			vdda18-supply = <0x4f>;
++			#address-cells = <0x01>;
++			#size-cells = <0x00>;
++			phandle = <0x81>;
++
++			ports {
++				#address-cells = <0x01>;
++				#size-cells = <0x00>;
++
++				port@0 {
++					reg = <0x00>;
++
++					endpoint {
++						remote-endpoint = <0x204>;
++						phandle = <0x205>;
++					};
++				};
++
++				port@1 {
++					reg = <0x01>;
++
++					endpoint {
++						remote-endpoint = <0x207>;
++						phandle = <0x206>;
++					};
++				};
++			};
++
++			panel@0 {
++				compatible = "nanshou,d300t9307v1\0sitronix,st7701";
++				reg = <0x00>;
++				reset-gpios = <0x6c 0x01 0x00>;
++				VCC-supply = <0x16c>;
++				IOVCC-supply = <0x26>;
++				backlight = <0x209>;
++				status = "okay";
++				phandle = <0x208>;
++
++				port {
++
++					endpoint {
++						remote-endpoint = <0x206>;
++						phandle = <0x207>;
++					};
++				};
+ 			};
++		};
+ 
+ 			lvds@48060000 {
+ 				#clock-cells = <0x00>;
+@@ -3065,6 +3122,7 @@
+ 				access-controllers = <0x1b 0x59>;
+ 				power-domains = <0x0c>;
+ 				phandle = <0x12f>;
++				status = "disabled";
+ 			};
+ 
+ 			venc@480e0000 {
+@@ -3076,6 +3134,7 @@
+ 				access-controllers = <0x1b 0x5a>;
+ 				power-domains = <0x0c>;
+ 				phandle = <0x130>;
++				status = "disabled";
+ 			};
+ 
+ 			gpu@48280000 {
+@@ -3104,7 +3163,7 @@
+ 				ranges = <0x4c000000 0x4c000000 0x2000000 0x4b000000 0x4b000000 0xc0000>;
+ 				access-controllers = <0x1b 0x46>;
+ 				power-domains = <0x0c>;
+-				status = "okay";
++				status = "disabled";
+ 				pinctrl-0 = <0x7c 0x7d>;
+ 				pinctrl-1 = <0x7e 0x7f>;
+ 				pinctrl-names = "default\0sleep";
+@@ -4894,13 +4953,13 @@
+ 	dht11 {
+ 		compatible = "alientek,dht11";
+ 		dht11-gpio = <0x27 0x08 0x01>;
+-		status = "okay";
++		status = "disabled";
+ 	};
+ 
+ 	ds18b20 {
+ 		compatible = "alientek,ds18b20";
+ 		ds18b20-gpio = <0x27 0x08 0x01>;
+-		status = "okay";
++		status = "disabled";
+ 	};
+ 
+ 	sound {
+@@ -4909,6 +4968,7 @@
+ 		dais = <0xa7 0xa8>;
+ 		widgets = "Headphone\0Headphone Jack\0Speaker\0Ext Spk\0Microphone\0Mic Jack";
+ 		routing = "Playback\0MCLK\0Capture\0MCLK\0Headphone Jack\0LOUT1\0Headphone Jack\0ROUT1\0Ext Spk\0LOUT2\0Ext Spk\0ROUT2\0LINPUT1\0Mic Jack\0LINPUT2\0Mic Jack\0RINPUT2\0Mic Jack\0Mic Jack\0Mic Bias";
++		status = "disabled";
+ 	};
+ 
+ 	regulator-vdda-1v8 {
+@@ -4951,6 +5011,14 @@
+ 		phandle = <0x16c>;
+ 	};
+ 
++	panel-dsi-backlight {
++		compatible = "gpio-backlight";
++		gpios = <0x2f 0x08 0x00>;
++		default-on;
++		status = "okay";
++		phandle = <0x209>;
++	};
++
+ 	imx335-2v9 {
+ 		compatible = "regulator-fixed";
+ 		regulator-name = "imx335-avdd";

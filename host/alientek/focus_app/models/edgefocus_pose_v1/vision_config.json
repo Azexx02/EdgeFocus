@@ -1,0 +1,24 @@
+{
+  "version": "1.0",
+  "task": "离位检测 + 趴桌低头检测",
+  "thresholds": {
+    "presence_conf_below_away": 0.10,
+    "presence_conf_below_uncertain": 0.20,
+    "head_down_score_above": 0.70,
+    "keypoints_min_visible": 2
+  },
+  "window_ms": {
+    "away_confirm_ms": 3000,
+    "head_down_confirm_ms": 10000,
+    "state_hysteresis_ms": 3000
+  },
+  "feature_formulas": {
+    "presence_conf": "person_conf * visible_keypoints / 5",
+    "head_down_score": "1 - (shoulder_y - nose_y) / (bbox_h * 0.30)"
+  },
+  "scene_calibration": {
+    "normal": {"presence_conf_mean": 0.64, "head_down_p50": 0.61, "head_down_p80": 0.77},
+    "away": {"presence_conf_mean": 0.23, "head_down_p50": 0.42, "head_down_p80": 0.67},
+    "head_down": {"presence_conf_mean": 0.51, "head_down_p50": 0.53, "head_down_p80": 1.00}
+  }
+}

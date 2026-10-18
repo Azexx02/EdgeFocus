@@ -1,0 +1,313 @@
+<!DOCTYPE html><html class="dark" lang="en" style=""><head>
+<meta charset="utf-8">
+<meta content="width=device-width, initial-scale=1.0" name="viewport">
+<title>EdgeFocus Control Panel</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@500;600;700&amp;display=swap" rel="stylesheet">
+<script id="tailwind-config">
+        tailwind.config = {
+          darkMode: "class",
+          theme: {
+            extend: {
+              "colors": {
+                      "on-primary": "#ffffff",
+                      "surface": "#fbf9f7",
+                      "error": "#ba1a1a",
+                      "on-secondary-fixed-variant": "#005313",
+                      "primary": "#b51925",
+                      "tertiary-fixed-dim": "#ffb954",
+                      "on-error": "#ffffff",
+                      "on-background": "#1b1c1b",
+                      "background": "#fbf9f7",
+                      "inverse-on-surface": "#f2f0ee",
+                      "primary-fixed": "#ffdad7",
+                      "tertiary-fixed": "#ffddb4",
+                      "surface-dim": "#dbdad8",
+                      "on-secondary": "#ffffff",
+                      "on-secondary-fixed": "#002204",
+                      "on-tertiary-container": "#fffbff",
+                      "secondary": "#006e1c",
+                      "on-error-container": "#93000a",
+                      "surface-container-lowest": "#ffffff",
+                      "on-surface": "#1b1c1b",
+                      "surface-container-highest": "#e4e2e0",
+                      "surface-variant": "#e4e2e0",
+                      "tertiary": "#805200",
+                      "surface-tint": "#b81d27",
+                      "on-primary-container": "#fffbff",
+                      "surface-bright": "#fbf9f7",
+                      "secondary-fixed-dim": "#78dc77",
+                      "on-tertiary": "#ffffff",
+                      "primary-fixed-dim": "#ffb3ae",
+                      "tertiary-container": "#a06900",
+                      "surface-container-low": "#f5f3f1",
+                      "secondary-fixed": "#94f990",
+                      "surface-container": "#efedec",
+                      "surface-container-high": "#e9e8e6",
+                      "secondary-container": "#91f78e",
+                      "primary-container": "#d8363a",
+                      "on-primary-fixed": "#410004",
+                      "error-container": "#ffdad6",
+                      "inverse-surface": "#30302f",
+                      "on-secondary-container": "#00731e",
+                      "on-primary-fixed-variant": "#930015",
+                      "outline-variant": "#e3bebb",
+                      "outline": "#8f706d",
+                      "on-surface-variant": "#5b403e",
+                      "inverse-primary": "#ffb3ae",
+                      "on-tertiary-fixed-variant": "#633f00",
+                      "on-tertiary-fixed": "#291800"
+              },
+              "borderRadius": {
+                      "DEFAULT": "1rem",
+                      "lg": "2rem",
+                      "xl": "3rem",
+                      "full": "9999px"
+              },
+              "spacing": {
+                      "unit": "8px",
+                      "section-margin": "40px",
+                      "container-padding-desktop": "48px",
+                      "card-padding": "24px",
+                      "container-padding-mobile": "24px",
+                      "stack-gap": "16px"
+              },
+              "fontFamily": {
+                      "display-timer": ["Quicksand"],
+                      "body-md": ["Quicksand"],
+                      "headline-lg-mobile": ["Quicksand"],
+                      "headline-md": ["Quicksand"],
+                      "body-lg": ["Quicksand"],
+                      "label-sm": ["Quicksand"],
+                      "headline-lg": ["Quicksand"],
+                      "label-md": ["Quicksand"]
+              },
+              "fontSize": {
+                      "display-timer": ["80px", {"lineHeight": "90px", "letterSpacing": "-0.02em", "fontWeight": "700"}],
+                      "body-md": ["16px", {"lineHeight": "24px", "fontWeight": "500"}],
+                      "headline-lg-mobile": ["28px", {"lineHeight": "36px", "fontWeight": "700"}],
+                      "headline-md": ["24px", {"lineHeight": "32px", "fontWeight": "600"}],
+                      "body-lg": ["18px", {"lineHeight": "28px", "fontWeight": "500"}],
+                      "label-sm": ["12px", {"lineHeight": "16px", "fontWeight": "700"}],
+                      "headline-lg": ["32px", {"lineHeight": "40px", "fontWeight": "700"}],
+                      "label-md": ["14px", {"lineHeight": "20px", "letterSpacing": "0.01em", "fontWeight": "600"}]
+              }
+            }
+          }
+        }
+    </script>
+<style>
+        body {
+            /* Landscape constraints */
+            max-width: 896px;
+            max-height: 428px;
+            margin: auto;
+            overflow: hidden;
+            background-color: theme('colors.background');
+            color: theme('colors.on-background');
+            box-shadow: 0 0 40px rgba(0,0,0,0.05);
+            /* Center vertically on larger screens */
+            position: absolute;
+            top: 0; bottom: 0; left: 0; right: 0;
+        }
+        
+        /* Custom scrollbar for horizontal pager */
+        .pager-container::-webkit-scrollbar {
+            display: none;
+        }
+        .pager-container {
+            -ms-overflow-style: none;  /* IE and Edge */
+            scrollbar-width: none;  /* Firefox */
+            scroll-snap-type: x mandatory;
+        }
+        .page-section {
+            scroll-snap-align: start;
+        }
+
+        /* Tactile UI Shadows */
+        .tactile-card {
+            box-shadow: 0 10px 30px -5px rgba(181, 25, 37, 0.08);
+            transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+        .tactile-button {
+            box-shadow: 0 8px 20px -4px rgba(181, 25, 37, 0.2);
+            transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+            position: relative;
+        }
+        .tactile-button::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 2px;
+            background: linear-gradient(180deg, rgba(255,255,255,0.4) 0%, rgba(255,255,255,0) 100%);
+            border-radius: inherit;
+            pointer-events: none;
+        }
+        .tactile-button:active {
+            transform: scale(0.95);
+            box-shadow: 0 0 0 0 rgba(181, 25, 37, 0);
+        }
+
+        /* Circular Progress */
+        .progress-ring__circle {
+            transition: stroke-dashoffset 0.35s;
+            transform: rotate(-90deg);
+            transform-origin: 50% 50%;
+        }
+    </style>
+</head>
+<body class="bg-background h-screen flex flex-col font-body-md text-on-background relative rounded-3xl">
+<!-- TopAppBar -->
+<header class="w-full top-0 sticky bg-background z-50">
+<div class="flex justify-between items-center px-8 py-3 w-full">
+<div class="flex items-center gap-2 text-primary">
+<span class="material-symbols-outlined hover:opacity-80 transition-opacity cursor-pointer active:scale-95 duration-200 ease-[cubic-bezier(0.34,1.56,0.64,1)]">timer</span>
+</div>
+<h1 class="font-headline-lg-mobile text-headline-md text-primary tracking-tight">EdgeFocus</h1>
+<div class="flex items-center gap-2 text-primary">
+<span class="material-symbols-outlined hover:opacity-80 transition-opacity cursor-pointer active:scale-95 duration-200 ease-[cubic-bezier(0.34,1.56,0.64,1)]">bluetooth_connected</span>
+</div>
+</div>
+</header>
+<!-- Main Content - Horizontal Pager -->
+<main class="flex-1 overflow-hidden relative">
+<div class="pager-container flex h-full overflow-x-auto w-full" id="pager">
+<!-- PAGE 1: Timer Page -->
+<section class="page-section min-w-full h-full flex flex-row items-center justify-evenly py-4 px-12"><div class="absolute top-8 left-1/2 -translate-x-1/2 z-10">
+<span class="font-body-lg text-body-md text-on-surface-variant bg-surface-container-lowest px-6 py-2 rounded-full tactile-card whitespace-nowrap">Deep Focus Session</span>
+</div>
+<!-- Left Side: Timer & Status -->
+<div class="flex flex-col items-center justify-center gap-6 w-1/2">
+<div class="relative flex items-center justify-center w-[220px] h-[220px]"><svg class="absolute inset-0 w-full h-full drop-shadow-xl" viewBox="0 0 100 100">
+<circle class="text-surface-variant stroke-current" cx="50" cy="50" fill="transparent" r="45" stroke-width="6"></circle>
+<circle class="text-primary stroke-current progress-ring__circle" cx="50" cy="50" fill="transparent" r="45" stroke-dasharray="282.7" stroke-dashoffset="70.6" stroke-linecap="round" stroke-width="6"></circle>
+</svg>
+<div class="flex flex-col items-center justify-center z-10 text-center pointer-events-none">
+<div class="font-display-timer text-display-timer text-primary text-[40px] leading-none" style="font-size: 48px;">25:00</div>
+<div class="font-label-sm text-label-sm text-on-surface-variant tracking-widest uppercase mt-2">Remaining</div>
+</div></div>
+</div>
+<!-- Right Side: Controls -->
+<div class="flex gap-8 items-center justify-center w-1/2">
+<button class="w-16 h-16 rounded-full bg-surface-container flex items-center justify-center tactile-button text-on-surface hover:bg-surface-container-highest transition-colors">
+<span class="material-symbols-outlined text-[32px]">stop</span>
+</button>
+<button class="w-24 h-24 rounded-full bg-primary flex items-center justify-center tactile-button text-on-primary">
+<span class="material-symbols-outlined text-[48px]" style="font-variation-settings: &quot;FILL&quot; 1;">play_arrow</span>
+</button>
+<button class="w-16 h-16 rounded-full bg-surface-container flex items-center justify-center tactile-button text-on-surface hover:bg-surface-container-highest transition-colors">
+<span class="material-symbols-outlined text-[32px]">pause</span>
+</button>
+</div>
+</section>
+<!-- PAGE 2: Config Page -->
+<section class="page-section min-w-full h-full flex flex-col py-4 px-12 overflow-y-auto">
+<h2 class="font-headline-md text-headline-md text-primary mb-4 text-center">Session Config</h2>
+<div class="flex flex-row gap-8 w-full max-w-4xl mx-auto flex-1 pb-4">
+<!-- Durations -->
+<div class="bg-surface rounded-xl p-6 tactile-card flex flex-col gap-6 flex-1">
+<h3 class="font-headline-md text-body-lg text-on-surface border-b-2 border-surface-container pb-2">Durations</h3>
+<div class="space-y-4">
+<div class="flex justify-between items-center">
+<span class="font-body-lg text-body-md">Focus Time</span>
+<div class="flex items-center gap-4 bg-surface-container rounded-full px-4 py-2">
+<span class="material-symbols-outlined cursor-pointer text-primary hover:scale-110 transition-transform">remove</span>
+<span class="font-headline-md text-body-lg w-10 text-center">25</span>
+<span class="material-symbols-outlined cursor-pointer text-primary hover:scale-110 transition-transform">add</span>
+</div>
+</div>
+<div class="flex justify-between items-center">
+<span class="font-body-lg text-body-md">Short Break</span>
+<div class="flex items-center gap-4 bg-surface-container rounded-full px-4 py-2">
+<span class="material-symbols-outlined cursor-pointer text-secondary hover:scale-110 transition-transform">remove</span>
+<span class="font-headline-md text-body-lg w-10 text-center text-secondary">5</span>
+<span class="material-symbols-outlined cursor-pointer text-secondary hover:scale-110 transition-transform">add</span>
+</div>
+</div>
+</div>
+</div>
+<!-- Environment -->
+<div class="bg-surface rounded-xl p-6 tactile-card flex flex-col gap-6 flex-1">
+<h3 class="font-headline-md text-body-lg text-on-surface border-b-2 border-surface-container pb-2">Environment</h3>
+<div class="grid grid-cols-2 gap-4">
+<button class="bg-primary-container text-on-primary-container rounded-lg p-3 flex flex-col items-center gap-2 tactile-button">
+<span class="material-symbols-outlined">volume_up</span>
+<span class="font-label-md text-label-sm text-center">Brown Noise</span>
+</button>
+<button class="bg-surface-container text-on-surface-variant rounded-lg p-3 flex flex-col items-center gap-2 hover:bg-surface-container-highest transition-colors">
+<span class="material-symbols-outlined">nature</span>
+<span class="font-label-md text-label-sm">Forest</span>
+</button>
+<button class="bg-surface-container text-on-surface-variant rounded-lg p-3 flex flex-col items-center gap-2 hover:bg-surface-container-highest transition-colors">
+<span class="material-symbols-outlined">water_drop</span>
+<span class="font-label-md text-label-sm">Rain</span>
+</button>
+<button class="bg-surface-container text-on-surface-variant rounded-lg p-3 flex flex-col items-center gap-2 hover:bg-surface-container-highest transition-colors">
+<span class="material-symbols-outlined">notifications_off</span>
+<span class="font-label-md text-label-sm">Silent</span>
+</button>
+</div>
+</div>
+</div>
+</section>
+<!-- PAGE 3: Stats Page -->
+<section class="page-section min-w-full h-full flex flex-col py-4 px-12 overflow-y-auto">
+<h2 class="font-headline-md text-headline-md text-primary mb-6 text-center">Daily Statistics</h2>
+<div class="flex flex-row gap-6 w-full max-w-4xl mx-auto pb-4">
+<!-- Total Time -->
+<div class="bg-primary-container text-on-primary-container rounded-xl p-6 tactile-card flex flex-col justify-between h-32 flex-1">
+<span class="material-symbols-outlined text-3xl opacity-80">schedule</span>
+<div>
+<div class="font-headline-lg-mobile text-headline-md">4h 20m</div>
+<div class="font-label-md text-label-sm opacity-80 mt-1">Total Focus Time</div>
+</div>
+</div>
+<!-- Sessions -->
+<div class="bg-surface rounded-xl p-6 tactile-card flex flex-col justify-between h-32 flex-1">
+<span class="material-symbols-outlined text-3xl text-primary opacity-80">check_circle</span>
+<div>
+<div class="font-headline-lg-mobile text-headline-md text-on-surface">8</div>
+<div class="font-label-md text-label-sm text-on-surface-variant mt-1">Completed Tomatoes</div>
+</div>
+</div>
+<!-- Device Info -->
+<div class="bg-surface rounded-xl p-6 tactile-card flex flex-col justify-between h-32 flex-1 border border-surface-variant">
+<div class="flex justify-between items-start">
+<span class="material-symbols-outlined text-3xl text-secondary opacity-80">battery_5_bar</span>
+<span class="bg-secondary-container text-on-secondary-container font-label-sm px-3 py-1 rounded-full">Connected</span>
+</div>
+<div>
+<div class="font-headline-md text-body-md text-on-surface font-bold">Edge Device 04</div>
+<div class="font-label-md text-label-sm text-on-surface-variant mt-1">Battery: 85%</div>
+</div>
+</div>
+</div>
+</section>
+</div>
+</main>
+<!-- Bottom Indicator Bar -->
+<footer class="w-full bg-background pb-4 pt-3 flex justify-between items-center px-12">
+<div class="w-20"></div> <!-- Spacer for centering -->
+<!-- Pager Dots -->
+<div class="flex gap-3">
+<div class="w-2.5 h-2.5 rounded-full bg-primary transition-all duration-300"></div>
+<div class="w-2.5 h-2.5 rounded-full bg-surface-variant transition-all duration-300 hover:bg-surface-dim cursor-pointer"></div>
+<div class="w-2.5 h-2.5 rounded-full bg-surface-variant transition-all duration-300 hover:bg-surface-dim cursor-pointer"></div>
+</div>
+<!-- BLE Status -->
+<div class="w-20 flex justify-end items-center gap-2 text-secondary font-label-sm text-label-sm">
+<span class="relative flex h-2.5 w-2.5">
+<span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-secondary opacity-75"></span>
+<span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-secondary"></span>
+</span>
+            BLE Sync
+        </div>
+</footer>
+
+
+
+
+</body></html>

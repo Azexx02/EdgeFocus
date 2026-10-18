@@ -1,0 +1,926 @@
+inear)
+[    0.181933] pinctrl core: initialized pinctrl subsystem
+[    0.182934] DMI not present or invalid.
+[    0.186135] NET: Registered PF_NETLINK/PF_ROUTE protocol family
+[    0.192223] DMA: preallocated 256 KiB GFP_KERNEL pool for atomic allocations
+[    0.198491] DMA: preallocated 256 KiB GFP_KERNEL|GFP_DMA pool for atomic allocations
+[    0.206291] DMA: preallocated 256 KiB GFP_KERNEL|GFP_DMA32 pool for atomic allocations
+[    0.214658] thermal_sys: Registered thermal governor 'step_wise'
+[    0.214665] thermal_sys: Registered thermal governor 'power_allocator'
+[    0.220159] cpuidle: using governor menu
+[    0.230778] hw-breakpoint: found 6 breakpoint and 4 watchpoint registers.
+[    0.237451] ASID allocator initialised with 65536 entries
+[    0.243050] Serial: AMBA PL011 UART driver
+[    0.266274] platform 48020000.csi: Fixed dependency cycle(s) with /soc@0/bus@42080000/dcmipp@48030000
+[    0.269926] platform 48020000.csi: Fixed dependency cycle(s) with /soc@0/bus@42080000/i2c@40150000/imx335@1a
+[    0.279968] platform 48020000.csi: Fixed dependency cycle(s) with /soc@0/bus@42080000/dcmipp@48030000
+[    0.289076] platform 48030000.dcmipp: Fixed dependency cycle(s) with /soc@0/bus@42080000/csi@48020000
+[    0.310709] Modules: 25472 pages in range for non-PLT usage
+[    0.310725] Modules: 516992 pages in range for PLT usage
+[    0.311707] HugeTLB: registered 1.00 GiB page size, pre-allocated 0 pages
+[    0.322784] HugeTLB: 0 KiB vmemmap can be freed for a 1.00 GiB page
+[    0.329068] HugeTLB: registered 32.0 MiB page size, pre-allocated 0 pages
+[    0.335873] HugeTLB: 0 KiB vmemmap can be freed for a 32.0 MiB page
+[    0.342161] HugeTLB: registered 2.00 MiB page size, pre-allocated 0 pages
+[    0.348967] HugeTLB: 0 KiB vmemmap can be freed for a 2.00 MiB page
+[    0.355252] HugeTLB: registered 64.0 KiB page size, pre-allocated 0 pages
+[    0.362056] HugeTLB: 0 KiB vmemmap can be freed for a 64.0 KiB page
+[    0.370212] ACPI: Interpreter disabled.
+[    0.373245] iommu: Default domain type: Translated
+[    0.376997] iommu: DMA domain TLB invalidation policy: strict mode
+[    0.383470] SCSI subsystem initialized
+[    0.387351] usbcore: registered new interface driver usbfs
+[    0.392457] usbcore: registered new interface driver hub
+[    0.397783] usbcore: registered new device driver usb
+[    0.403335] pps_core: LinuxPPS API ver. 1 registered
+[    0.407783] pps_core: Software ver. 5.3.6 - Copyright 2005-2007 Rodolfo Giometti <giometti@linux.it>
+[    0.416956] PTP clock support registered
+[    0.421102] EDAC MC: Ver: 3.0.0
+[    0.424439] CPUidle PSCI: Initialized CPU PM domain topology using OSI mode
+[    0.433046] scmi_core: SCMI protocol bus registered
+[    0.436408] FPGA manager framework
+[    0.439411] Advanced Linux Sound Architecture Driver Initialized.
+[    0.446449] vgaarb: loaded
+[    0.448455] clocksource: Switched to clocksource arch_sys_counter
+[    0.454527] VFS: Disk quotas dquot_6.6.0
+[    0.458185] VFS: Dquot-cache hash table entries: 512 (order 0, 4096 bytes)
+[    0.465271] pnp: PnP ACPI: disabled
+[    0.477212] NET: Registered PF_INET protocol family
+[    0.477425] IP idents hash table entries: 32768 (order: 6, 262144 bytes, linear)
+[    0.486671] tcp_listen_portaddr_hash hash table entries: 1024 (order: 2, 16384 bytes, linear)
+[    0.492436] Table-perturb hash table entries: 65536 (order: 6, 262144 bytes, linear)
+[    0.500185] TCP established hash table entries: 16384 (order: 5, 131072 bytes, linear)
+[    0.508232] TCP bind hash table entries: 16384 (order: 7, 524288 bytes, linear)
+[    0.515873] TCP: Hash tables configured (established 16384 bind 16384)
+[    0.522085] UDP hash table entries: 1024 (order: 3, 32768 bytes, linear)
+[    0.528752] UDP-Lite hash table entries: 1024 (order: 3, 32768 bytes, linear)
+[    0.536063] NET: Registered PF_UNIX/PF_LOCAL protocol family
+[    0.541987] RPC: Registered named UNIX socket transport module.
+[    0.547476] RPC: Registered udp transport module.
+[    0.552179] RPC: Registered tcp transport module.
+[    0.556890] RPC: Registered tcp-with-tls transport module.
+[    0.562389] RPC: Registered tcp NFSv4.1 backchannel transport module.
+[    0.568861] PCI: CLS 0 bytes, default 64
+[    0.573001] Unpacking initramfs...
+[    0.576552] kvm [1]: HYP mode not available
+[    0.581555] Initialise system trusted keyrings
+[    0.585214] workingset: timestamp_bits=42 max_order=19 bucket_order=0
+[    0.591766] squashfs: version 4.0 (2009/01/31) Phillip Lougher
+[    0.597610] NFS: Registering the id_resolver key type
+[    0.602297] Key type id_resolver registered
+[    0.606404] Key type id_legacy registered
+[    0.610449] nfs4filelayout_init: NFSv4 File Layout Driver Registering...
+[    0.617099] nfs4flexfilelayout_init: NFSv4 Flexfile Layout Driver Registering...
+[    0.624577] jffs2: version 2.2. (NAND) © 2001-2006 Red Hat, Inc.
+[    0.630997] fuse: init (API version 7.39)
+[    0.634915] 9p: Installing v9fs 9p2000 file system support
+[    0.691788] NET: Registered PF_ALG protocol family
+[    0.691836] Key type asymmetric registered
+[    0.695124] Asymmetric key parser 'x509' registered
+[    0.700045] Block layer SCSI generic (bsg) driver version 0.4 loaded (major 244)
+[    0.707369] io scheduler mq-deadline registered
+[    0.711899] io scheduler kyber registered
+[    0.715983] io scheduler bfq registered
+[    0.720279] /soc@0/interrupt-controller@44220000: bank0
+[    0.725024] /soc@0/interrupt-controller@44220000: bank1
+[    0.730238] /soc@0/interrupt-controller@44220000: bank2
+[    0.735774] /soc@0/interrupt-controller@46230000: bank0
+[    0.740773] /soc@0/interrupt-controller@46230000: bank1
+[    0.745952] /soc@0/interrupt-controller@46230000: bank2
+[    0.751985] Registering stm32-rifsc firewall controller
+[    0.763789] EINJ: ACPI disabled.
+[    0.771920] Serial: 8250/16550 driver, 4 ports, IRQ sharing enabled
+[    0.775792] STM32 USART driver initialized
+[    0.787216] loop: module loaded
+[    0.788804] megasas: 07.725.01.00-rc1
+[    0.795040] thunder_xcv, ver 1.0
+[    0.795105] thunder_bgx, ver 1.0
+[    0.795874] nicpf, ver 1.0
+[    0.799269] hns3: Hisilicon Ethernet Network Driver for Hip08 Family - version
+[    0.805817] hns3: Copyright (c) 2017 Huawei Corporation.
+[    0.811218] hclge is initializing
+[    0.814492] e1000: Intel(R) PRO/1000 Network Driver
+[    0.819334] e1000: Copyright (c) 1999-2006 Intel Corporation.
+[    0.825154] e1000e: Intel(R) PRO/1000 Network Driver
+[    0.830067] e1000e: Copyright(c) 1999 - 2015 Intel Corporation.
+[    0.836061] igb: Intel(R) Gigabit Ethernet Network Driver
+[    0.841420] igb: Copyright (c) 2007-2014 Intel Corporation.
+[    0.847103] igbvf: Intel(R) Gigabit Virtual Function Network Driver
+[    0.853291] igbvf: Copyright (c) 2009 - 2012 Intel Corporation.
+[    0.859558] sky2: driver version 1.30
+[    0.863940] PPP generic driver version 2.4.2
+[    0.867457] PPP BSD Compression module registered
+[    0.871922] PPP Deflate Compression module registered
+[    0.876966] PPP MPPE Compression module registered
+[    0.881736] NET: Registered PF_PPPOX protocol family
+[    0.887337] VFIO - User Level meta-driver version: 0.3
+[    0.897057] usbcore: registered new interface driver usb-storage
+[    0.898163] usbcore: registered new device driver onboard-usb-hub
+[    0.907241] i2c_dev: i2c /dev entries driver
+[    0.910870] arm_smc_wdt watchdog: Watchdog registered (timeout=32 sec, nowayout=0)
+[    0.917784] sdhci: Secure Digital Host Controller Interface driver
+[    0.922089] sdhci: Copyright(c) Pierre Ossman
+[    0.927139] Synopsys Designware Multimedia Card Interface Driver
+[    0.933209] sdhci-pltfm: SDHCI platform and OF driver helper
+[    0.939614] ledtrig-cpu: registered to indicate activity on CPUs
+[    0.945380] SMCCC: SOC_ID: ID = jep106:0020:0505 Revision = 0x00000011
+[    0.951539] usbcore: registered new interface driver usbhid
+[    0.956280] usbhid: USB HID core driver
+[    0.963744] hw perfevents: enabled with armv8_cortex_a35 PMU driver, 7 counters available
+[    0.970164]  cs_system_cfg: CoreSight Configuration manager initialised
+[    0.977101] optee: probing for conduit method.
+I/TC: Reserved shared memory is disabled
+I/TC: Dynamic shared memory is enabled
+I/TC: Normal World virtualization support is disabled
+I/TC: Asynchronous notifications are enabled
+[    0.979396] optee: revision 4.0 (d0675411)
+[    1.001845] optee: Asynchronous notifications enabled
+[    1.005443] optee: dynamic shared memory is enabled
+[    1.011395] random: crng init done
+[    1.014263] optee: initialized driver
+[    1.021691] NET: Registered PF_PACKET protocol family
+[    1.022728] 9pnet: Installing 9P2000 support
+[    1.026839] Key type dns_resolver registered
+[    1.044025] registered taskstats version 1
+[    1.044313] Loading compiled-in X.509 certificates
+[    1.049319] Freeing initrd memory: 8180K
+[    1.068297] scmi_protocol scmi_dev.1: Enabled polling mode TX channel - prot_id:16
+[    1.070460] arm-scmi firmware:scmi: SCMI Notifications - Core Enabled.
+[    1.076916] arm-scmi firmware:scmi: SCMI Protocol v2.0 'STMicroelectron:STMicroelectron' Firmware version 0x20d0000
+[    1.088483] cpu cpu0: EM: created perf domain
+[    1.112413] scmi-regulator scmi_dev.6: Regulator vddio1 registered for domain [0]
+[    1.114487] scmi-regulator scmi_dev.6: Regulator vddio2 registered for domain [1]
+[    1.121936] scmi-regulator scmi_dev.6: Regulator vddio3 registered for domain [2]
+[    1.129428] scmi-regulator scmi_dev.6: Regulator vddio4 registered for domain [3]
+[    1.136952] scmi-regulator scmi_dev.6: Regulator reserved registered for domain [5]
+[    1.144639] scmi-regulator scmi_dev.6: Regulator vdda18adc registered for domain [7]
+[    1.152405] scmi-regulator scmi_dev.6: Regulator vddcore registered for domain [11]
+[    1.160099] scmi-regulator scmi_dev.6: Regulator v1v8 registered for domain [14]
+[    1.167516] scmi-regulator scmi_dev.6: Regulator v3v3 registered for domain [16]
+[    1.174938] scmi-regulator scmi_dev.6: Regulator vdd_emmc registered for domain [18]
+[    1.182718] scmi-regulator scmi_dev.6: Regulator vdd3v3_usb registered for domain [20]
+[    1.190657] scmi-regulator scmi_dev.6: Regulator vdd_sdcard registered for domain [23]
+[    1.203206] stm32-ipcc 40490000.mailbox: ipcc rev:2.0 enabled, 16 chans, proc 0
+[    1.229947] Registering stm32mp25_rcc firewall controller
+[    1.231806] stm32-ipcc 46250000.mailbox: ipcc rev:2.0 enabled, 4 chans, proc 1
+[    1.237406] stm32-dma3 40400000.dma-controller: created LLI gen_pool at 0x000000000a020000, size 60KiB
+[    1.248352] stm32-dma3 40400000.dma-controller: STM32 DMA3 registered rev:1.3
+[    1.253838] stm32-dma3 40410000.dma-controller: LLI gen_pool truncated (56KiB instead of 60KiB)
+[    1.262272] stm32-dma3 40410000.dma-controller: created LLI gen_pool at 0x000000000a030000, size 56KiB
+[    1.273606] stm32-dma3 40410000.dma-controller: STM32 DMA3 registered rev:1.3
+[    1.279118] stm32-dma3 40420000.dma-controller: created LLI gen_pool at 0x000000000a03e1e0, size 7KiB
+[    1.288395] stm32-dma3 40420000.dma-controller: STM32 DMA3 registered rev:1.3
+[    1.299114] stm32mp257-pinctrl soc@0:pinctrl@44240000: GPIOA bank added
+[    1.302351] stm32mp257-pinctrl soc@0:pinctrl@44240000: GPIOB bank added
+[    1.309480] stm32mp257-pinctrl soc@0:pinctrl@44240000: GPIOC bank added
+[    1.315469] stm32mp257-pinctrl soc@0:pinctrl@44240000: GPIOD bank added
+[    1.322071] stm32mp257-pinctrl soc@0:pinctrl@44240000: GPIOE bank added
+[    1.328840] stm32mp257-pinctrl soc@0:pinctrl@44240000: GPIOF bank added
+[    1.335416] stm32mp257-pinctrl soc@0:pinctrl@44240000: GPIOG bank added
+[    1.342104] stm32mp257-pinctrl soc@0:pinctrl@44240000: GPIOH bank added
+[    1.348720] stm32mp257-pinctrl soc@0:pinctrl@44240000: GPIOI bank added
+[    1.354995] stm32mp257-pinctrl soc@0:pinctrl@44240000: Pinctrl STM32 initialized
+[    1.364512] stm32mp257-pinctrl soc@0:pinctrl@46200000: GPIOZ bank added
+[    1.369010] stm32mp257-pinctrl soc@0:pinctrl@46200000: Pinctrl STM32 initialized
+[    1.378396] stm32-combophy 480c0000.phy: timeout, cannot lock PLL
+[    1.382614] phy phy-480c0000.phy.0: phy init failed --> -110
+[    1.388271] stm32-pcie: probe of 48400000.pcie failed with error -110
+[    1.397456] stm32-usart 40330000.serial: Wakeup might not be available: No autonomous clock
+[    1.403403] 40330000.serial: ttySTM1 at MMIO 0x40330000 (irq = 59, base_baud = 1000000) is a stm32-usart
+[    1.413662] stm32-usart 40370000.serial: Wakeup might not be available: No autonomous clock
+[    1.421326] 40370000.serial: ttySTM2 at MMIO 0x40370000 (irq = 60, base_baud = 4000000) is a stm32-usart
+[    1.434018] stm32-dwmac 482c0000.eth1: IRQ eth_lpi not found
+[    1.436889] stm32-dwmac 482c0000.eth1: User ID: 0x1a, Synopsys ID: 0x53
+[    1.442929] stm32-dwmac 482c0000.eth1:       DWMAC4/5
+[    1.447552] stm32-dwmac 482c0000.eth1: DMA HW capability register supported
+[    1.454536] stm32-dwmac 482c0000.eth1: RX Checksum Offload Engine supported
+[    1.461526] stm32-dwmac 482c0000.eth1: TX Checksum insertion supported
+[    1.468077] stm32-dwmac 482c0000.eth1: Wake-Up On Lan supported
+[    1.474084] stm32-dwmac 482c0000.eth1: TSO supported
+[    1.479003] stm32-dwmac 482c0000.eth1: Enable RX Mitigation via HW Watchdog Timer
+[    1.486522] stm32-dwmac 482c0000.eth1: device MAC address b2:e1:43:ba:55:44
+[    1.493511] stm32-dwmac 482c0000.eth1: Enabled L3L4 Flow TC (entries=2)
+[    1.500161] stm32-dwmac 482c0000.eth1: Enabled RFS Flow TC (entries=10)
+[    1.506794] stm32-dwmac 482c0000.eth1: TSO feature enabled
+[    1.512302] stm32-dwmac 482c0000.eth1: Using 32/32 bits DMA host/device width
+[    1.723304] stm32-dwmac 482d0000.eth2: IRQ eth_lpi not found
+[    1.723877] stm32-dwmac 482d0000.eth2: User ID: 0x1a, Synopsys ID: 0x53
+[    1.729985] stm32-dwmac 482d0000.eth2:       DWMAC4/5
+[    1.735280] stm32-dwmac 482d0000.eth2: DMA HW capability register supported
+[    1.741595] stm32-dwmac 482d0000.eth2: RX Checksum Offload Engine supported
+[    1.748585] stm32-dwmac 482d0000.eth2: TX Checksum insertion supported
+[    1.755140] stm32-dwmac 482d0000.eth2: Wake-Up On Lan supported
+[    1.761162] stm32-dwmac 482d0000.eth2: TSO supported
+[    1.766066] stm32-dwmac 482d0000.eth2: Enable RX Mitigation via HW Watchdog Timer
+[    1.773582] stm32-dwmac 482d0000.eth2: device MAC address 42:3f:67:51:b9:b4
+[    1.781198] stm32-dwmac 482d0000.eth2: Enabled L3L4 Flow TC (entries=2)
+[    1.787209] stm32-dwmac 482d0000.eth2: Enabled RFS Flow TC (entries=10)
+[    1.793856] stm32-dwmac 482d0000.eth2: TSO feature enabled
+[    1.799356] stm32-dwmac 482d0000.eth2: Using 32/32 bits DMA host/device width
+[    2.007496] usb-stm32-dwc3 42080000.bus:usb@48300000: configured in usb2 mode
+[    2.009780] platform 48300000.usb: Fixed dependency cycle(s) with /soc@0/bus@42080000/i2c@40150000/fusb302@22/connector
+[    2.021052] usb-stm32-dwc3 42080000.bus:usb@48300000: Enabling runtime PM for inactive device with active children
+[    2.034022] ehci-platform 482f0000.usb: EHCI Host Controller
+[    2.034474] stm32_rtc 46000000.rtc: registered as rtc0
+[    2.035910] ehci-platform 482f0000.usb: new USB bus registered, assigned bus number 1
+[    2.041117] stm32_rtc 46000000.rtc: setting system clock to 2000-01-01T00:07:58 UTC (946685278)
+[    2.049713] ehci-platform 482f0000.usb: irq 69, io mem 0x482f0000
+[    2.057940] stm32_rtc 46000000.rtc: Date/Time must be initialized
+[    2.069891] stm32_rtc 46000000.rtc: registered rev:3.4
+[    2.076725] ehci-platform 482f0000.usb: USB 2.0 started, EHCI 1.00
+[    2.081975] hub 1-0:1.0: USB hub found
+[    2.085007] hub 1-0:1.0: 1 port detected
+[    2.091128] rtc-pcf8563 0-0051: low voltage detected, date/time is not reliable.
+[    2.096474] rtc-pcf8563 0-0051: registered as rtc1
+[    2.103015] stm32f7-i2c 40140000.i2c: STM32F7 I2C-0 bus adapter
+[    2.143657] platform 48020000.csi: Fixed dependency cycle(s) with /soc@0/bus@42080000/i2c@40150000/imx335@1a
+[    2.147993] i2c 1-001a: Fixed dependency cycle(s) with /soc@0/bus@42080000/csi@48020000
+[    2.156563] i2c 1-0011: Fixed dependency cycle(s) with /soc@0/bus@42080000/sai@40290000/audio-controller@40290004
+[    2.166331] i2c 1-0011: Fixed dependency cycle(s) with /soc@0/bus@42080000/sai@40290000/audio-controller@40290024
+[    2.177451] stm32f7-i2c 40150000.i2c: STM32F7 I2C-1 bus adapter
+[    2.189587] stm32f7-i2c 46040000.i2c: STM32F7 I2C-2 bus adapter
+[    2.193784] mmci-pl18x 48220000.mmc: Got CD GPIO
+[    2.195241] mmci-pl18x 48220000.mmc: mmc0: PL180 manf 53 rev3 at 0x48220000 irq 74,0 (pio)
+[    2.197588] stm32-rproc 0.m33: wdg irq registered
+[    2.205335] mmci-pl18x 48230000.mmc: mmc1: PL180 manf 53 rev3 at 0x48230000 irq 75,0 (pio)
+[    2.207573] stm32-rproc 0.m33: pdds sys config not defined
+[    2.221575] stm32-rproc 0.m33: rsc tbl syscon not supported
+[    2.227189] stm32-rproc 0.m33: mbox_request_channel_byname() could not locate channel named "detach"
+[    2.236097] remoteproc remoteproc0: cannot get detach mbox
+[    2.241690] remoteproc remoteproc0: m33 is available
+[    2.247616] remoteproc remoteproc1: cannot get rx mbox
+[    2.251825] remoteproc remoteproc1: m0 is available
+[    2.258713] i2c 1-0011: Fixed dependency cycle(s) with /soc@0/bus@42080000/sai@40290000/audio-controller@40290004
+[    2.267091] platform 40290004.audio-controller: Fixed dependency cycle(s) with /soc@0/bus@42080000/i2c@40150000/es8388@11
+[    2.277988] platform 40290004.audio-controller: Fixed dependency cycle(s) with /soc@0/bus@42080000/sai@40290000/audio-controller@40290024
+[    2.291436] platform 40290004.audio-controller: Fixed dependency cycle(s) with /soc@0/bus@42080000/sai@40290000/audio-controller@40290024
+[    2.302820] i2c 1-0011: Fixed dependency cycle(s) with /soc@0/bus@42080000/sai@40290000/audio-controller@40290024
+[    2.313140] platform 40290024.audio-controller: Fixed dependency cycle(s) with /soc@0/bus@42080000/i2c@40150000/es8388@11
+[    2.326309] stm32-usart 400e0000.serial: Wakeup might not be available: No autonomous clock
+[    2.332506] stm32-usart 400e0000.serial: interrupt mode for rx (no dma)
+[    2.339045] stm32-usart 400e0000.serial: interrupt mode for tx (no dma)
+[    2.345881] 400e0000.serial: ttySTM0 at MMIO 0x400e0000 (irq = 80, base_baud = 4000000) is a stm32-usart
+[    2.360883] printk: console [ttySTM0] enabled
+[    2.360883] printk: console [ttySTM0] enabled
+[    2.360883] usb 1-1: new high-speed USB device number 2 using ehci-platform
+[    2.360883] usb 1-1: new high-speed USB device number 2 using ehci-platform
+[    2.377970] printk: bootconsole [stm32] disabled
+[    2.377970] printk: bootconsole [stm32] disabled
+[    2.396619] ES8388 1-0011: ASoC: error at soc_component_write_no_lock on ES8388.1-0011 for register: [0x00000000] -6
+[    2.403485] mmc1: new DDR MMC card at address 0001
+[    2.403541] ES8388 1-0011: ASoC: error at soc_component_write_no_lock on ES8388.1-0011 for register: [0x00000000] -6
+[    2.407173] mmcblk1: mmc1:0001 MK016D 14.7 GiB
+[    2.417027] ES8388 1-0011: Failed to issue reset
+[    2.426006] ES8388 1-0011: ASoC: error at snd_soc_component_probe on ES8388.1-0011: -6
+[    2.434087] asoc-audio-graph-card sound: ASoC: failed to instantiate card -6
+[    2.441255] asoc-audio-graph-card sound: error -ENXIO: parse error
+[    2.448583] input: gpio-keys as /devices/platform/gpio-keys/input/input0
+[    2.454027]  mmcblk1: p1 p2 p3 p4 p5 p6
+[    2.454642] clk: Disabling unused clocks
+[    2.458866] mmcblk1boot0: mmc1:0001 MK016D 4.00 MiB
+[    2.462516] ALSA device list:
+[    2.467917] mmcblk1boot1: mmc1:0001 MK016D 4.00 MiB
+[    2.469668]   No soundcards found.
+[    2.475542] mmcblk1rpmb: mmc1:0001 MK016D 4.00 MiB, chardev (238:0)
+[    2.491022] Freeing unused kernel memory: 4032K
+[    2.491090] Run /init as init process
+[    2.517960] hub 1-1:1.0: USB hub found
+[    2.518165] hub 1-1:1.0: 4 ports detected
+Starting systemd-udevd version 255.4^
+[    2.808682] usb 1-1.1: new high-speed USB device number 3 using ehci-platform
+[    3.004675] usb 1-1.3: new high-speed USB device number 4 using ehci-platform
+[    3.096597] usb 1-1.3: device descriptor read/64, error -71
+[    3.195272] stm32-dwmac 482d0000.eth2 end0: renamed from eth1
+[    3.217602] stm32-dwmac 482c0000.eth1 end1: renamed from eth0
+[    3.296584] usb 1-1.3: device descriptor read/64, error -71
+[    3.484646] usb 1-1.3: new high-speed USB device number 5 using ehci-platform
+[    3.577355] usb 1-1.3: device descriptor read/64, error -71
+[    3.776661] usb 1-1.3: device descriptor read/64, error -71
+[    3.884818] usb 1-1-port3: attempt power cycle
+[    4.488643] usb 1-1.3: new high-speed USB device number 6 using ehci-platform
+[    4.912653] usb 1-1.3: device not accepting address 6, error -71
+[    4.992641] usb 1-1.3: new high-speed USB device number 7 using ehci-platform
+[    5.416654] usb 1-1.3: device not accepting address 7, error -71
+[    5.417184] usb 1-1-port3: unable to enumerate USB device
+[    5.644655] usb 1-1.3: new high-speed USB device number 8 using ehci-platform
+[    5.736639] usb 1-1.3: device descriptor read/64, error -71
+[    5.936648] usb 1-1.3: device descriptor read/64, error -71
+[    6.124639] usb 1-1.3: new high-speed USB device number 9 using ehci-platform
+[    6.216648] usb 1-1.3: device descriptor read/64, error -71
+[    6.416675] usb 1-1.3: device descriptor read/64, error -71
+[    6.524807] usb 1-1-port3: attempt power cycle
+[    7.128641] usb 1-1.3: new high-speed USB device number 10 using ehci-platform
+[    7.552654] usb 1-1.3: device not accepting address 10, error -71
+[    7.632643] usb 1-1.3: new high-speed USB device number 11 using ehci-platform
+[    8.056656] usb 1-1.3: device not accepting address 11, error -71
+[    8.057308] usb 1-1-port3: unable to enumerate USB device
+[    8.139656] EXT4-fs (mmcblk1p6): recovery complete
+[    8.140246] EXT4-fs (mmcblk1p6): mounted filesystem 9b182710-9bcb-44b6-8dfa-ac1b2b9cc378 r/w with ordered data mode. Quota mode: none.
+ln: /etc/mtab: File exists
+[    8.292635] usb 1-1.3: new high-speed USB device number 12 using ehci-platform
+[    8.384689] usb 1-1.3: device descriptor read/64, error -71
+[    8.474626] systemd[1]: System time before build time, advancing clock.
+[    8.524200] systemd[1]: systemd 255.4^ running in system mode (+PAM -AUDIT -SELINUX -APPARMOR +IMA -SMACK -SECCOMP -GCRYPT -GNUTLS -OPENSSL -ACL +BLKID -CURL -ELFUTILS -FIDO2 -IDN2 -IDN +IPTC +KMOD -LIBCRYPTSETUP +LIBFDISK -PCRE2 -PWQUALITY -P11KIT -QRENCODE -TPM2 -BZIP2 -LZ4 -XZ -ZLIB +ZSTD -BPF_FRAMEWORK -XKBCOMMON +UTMP +SYSVINIT default-hierarchy=unified)
+[    8.550809] systemd[1]: Detected architecture arm64.
+
+Welcome to ST OpenSTLinux - Weston - (A Yocto Project Based Distro) 5.0.3-snapshot-20241210 (scarthgap)!
+
+[    8.577111] systemd[1]: Hostname set to <ATK-DLMP257>.
+[    8.613017] systemd[1]: Using hardware watchdog 'arm_smc_wdt', version 0, device /dev/watchdog0
+[    8.616506] systemd[1]: Watchdog running with a timeout of 32s.
+[    8.622128] usb 1-1.3: device descriptor read/64, error -71
+[    8.820518] usb 1-1.3: new high-speed USB device number 13 using ehci-platform
+[    8.910696] systemd[1]: Configuration file /usr/lib/systemd/system/st-tsn.service is marked executable. Please remove executable permission bits. Proceeding anyway.
+[    8.919937] usb 1-1.3: device descriptor read/64, error -71
+[    8.931026] systemd[1]: Binding to IPv6 address not available since kernel does not support IPv6.
+[    8.934453] systemd[1]: Binding to IPv6 address not available since kernel does not support IPv6.
+[    9.128687] usb 1-1.3: device descriptor read/64, error -71
+[    9.142289] systemd[1]: Queued start job for default target Multi-User System.
+[    9.169755] systemd[1]: Created slice Slice /system/modprobe.
+[  OK  ] Created slice Slice /system/modprobe.
+[    9.191088] systemd[1]: Created slice Slice /system/serial-getty.
+[  OK  ] Created slice Slice /system/serial-getty.
+[    9.210947] systemd[1]: Created slice Slice /system/wpa_supplicant.
+[  OK  ] Created slice Slice /system/wpa_supplicant.
+[    9.230233] systemd[1]: Created slice User and Session Slice.
+[  OK  ] Created slice User and Session Slice usb 1-1-port3: attempt power cycle
+[0m.
+[    9.253190] systemd[1]: Started Dispatch Password Requests to Console Directory Watch.
+[  OK  ] Started Dispatch Password Requests to Console Directory Watch.
+[    9.273019] systemd[1]: Started Forward Password Requests to Wall Directory Watch.
+[  OK  ] Started Forward Password Requests to Wall Directory Watch.
+[    9.292872] systemd[1]: Expecting device /dev/dri/card0...
+         Expecting device /dev/dri/card0...
+[    9.308738] systemd[1]: Expecting device /dev/tee0...
+         Expecting device /dev/tee0...
+[    9.324724] systemd[1]: Expecting device /sys/subsystem/net/devices/wlan0...
+         Expecting device /sys/subsystem/net/devices/wlan0...
+[    9.344773] systemd[1]: Expecting device /sys/subsystem/net/devices/wlan1...
+         Expecting device /sys/subsystem/net/devices/wlan1...
+[    9.364928] systemd[1]: Reached target Host and Network Name Lookups.
+[  OK  ] Reached target Host and Network Name Lookups.
+[    9.384801] systemd[1]: Reached target Path Units.
+[  OK  ] Reached target Path Units.
+[    9.400813] systemd[1]: Reached target Remote File Systems.
+[  OK  ] Reached target Remote File Systems.
+[    9.420801] systemd[1]: Reached target Slice Units.
+[  OK  ] Reached target Slice Units.
+[    9.436838] systemd[1]: Reached target Swaps.
+[  OK  ] Reached target Swaps.
+[    9.482756] systemd[1]: Listening on RPCbind Server Activation Socket.
+[  OK  ] Listening on RPCbind Server Activation Socket.
+[    9.500938] systemd[1]: Reached target RPC Port Mapper.
+[  OK  ] Reached target RPC Port Mapper.
+[    9.518444] systemd[1]: Listening on Syslog Socket.
+[  OK  ] Listening on Syslog Socket.
+[    9.533246] systemd[1]: Listening on initctl Compatibility Named Pipe.
+[  OK  ] Listening on initctl Compatibility Named Pipe.
+[    9.559363] systemd[1]: Journal Audit Socket was skipped because of an unmet condition check (ConditionSecurity=audit).
+[    9.565558] systemd[1]: Listening on Journal Socket (/dev/log).
+[  OK  ] Listening on Journal Socket (/dev/log).
+[    9.593477] systemd[1]: Listening on Journal Socket.
+[  OK  ] Listening on Journal Socket.
+[    9.609684] systemd[1]: Listening on Network Service Netlink Socket.
+[  OK  ] Listening on Network Service Netlink Socket.
+[    9.632576] systemd[1]: Listening on udev Control Socket.
+[  OK  ] Listening on udev Control Socket.
+[    9.649468] systemd[1]: Listening on udev Kernel Socket.
+[  OK  ] Listening on udev Kernel Socket.
+[    9.681088] systemd[1]: Mounting Huge Pages File System...
+         Mounting Huge Pages File System...
+[    9.700988] systemd[1]: Mounting POSIX Message Queue File System...
+         Mounting POSIX Message Queue File System...
+[    9.745190] systemd[1]: Mounting Kernel Debug File System...
+         Mounting Kernel Debug File System...
+[    9.761344] systemd[1]: Kernel Trace File System was skipped because of an unmet condition check (ConditionPathExists=/sys/kernel/tracing).
+[    9.773968] systemd[1]: Mounting Temporary Directory /tmp...
+         Mounting Temporary Directory /tmp...
+[    9.789607] systemd[1]: Create List of Static Device Nodes was skipped because of an unmet condition check (ConditionFileNotEmpty=/lib/modules/6.6.48/modules.devname).
+[    9.803558] systemd[1]: Starting Load Kernel Module configfs...
+         Starting Load Kernel Module configfs...
+[    9.829762] systemd[1]: Starting Load Kernel Module drm...
+         Starting Load Kernel Module drm...
+[    9.853517] systemd[1]: Starting Load Kernel Module fuse...
+         Starting Load Ker[    9.856560] usb 1-1.3: new high-speed USB device number 14 using ehci-platform
+nel Module fuse...
+[    9.885352] systemd[1]: Starting Mount partitions...
+         Starting Mount partitions...
+[    9.905970] systemd[1]: Starting RPC Bind...
+         Starting RPC Bind...
+[    9.921284] systemd[1]: File System Check on Root Device was skipped because of an unmet condition check (ConditionPathIsReadWrite=!/).
+[    9.939053] systemd[1]: Starting Journal Service...
+         Starting Journal Service...
+[    9.985531] systemd[1]: Starting Load Kernel Modules...
+         Starting Load Kernel Modules...
+[   10.019110] systemd-journald[264]: Collecting audit messages is disabled.
+[   10.022788] systemd[1]: Starting Generate network units from Kernel command line...
+         Starting Generate network units from Kernel command line...
+[   10.085196] systemd[1]: Starting Remount Root and Kernel File Systems...
+         Starting Remount Root and Kernel File Systems...
+[   10.130528] systemd[1]: Starting Create Static Device Nodes in /dev gracefully...
+         Starting Create Static Device Nodes in /dev gracefully...
+[   10.191354] systemd[1]: Starting Coldplug All udev Devices...
+  [   10.191844] EXT4-fs (mmcblk1p6): re-mounted 9b182710-9bcb-44b6-8dfa-ac1b2b9cc378 r/w. Quota mode: none.
+       Starting Coldplug All udev Devices...
+[   10.239290] EXT4-fs (mmcblk1p5): recovery complete
+[   10.239973] EXT4-fs (mmcblk1p5): mounted filesystem a7bcf5f5-5741-4c93-8725-20a7157904bc r/w with ordered data mode. Quota mode: none.
+[   10.254157] systemd[1]: Started RPC Bind.
+[  OK  ] Started RPC Bind.
+[   10.284344] systemd[1]: Started Journal Service.
+[  OK  ] Started Journal Se[   10.288533] usb 1-1.3: device not accepting address 14, error -71
+rvice.
+[  OK  ] Mounted Huge Pages File System.
+[  OK  ] Mounted POSIX Message Queue File System.
+[  OK  ] Mounted Kernel Debug File System.
+[  OK  ] Mounted Temporary Directory /tmp.
+[  OK  ] Finished Load Kernel Module configfs[   10.376669] usb 1-1.3: new high-speed USB device number 15 using ehci-platform
+.
+[  OK  ] Finished Load Kernel Module drm.
+[  OK  ] Finished Load Kernel Module fuse.
+[  OK  ] Finished Mount partitions.
+[  OK  ] Finished Load Kernel Modules.
+[  OK  ] Finished Generate network units from Kernel command line.
+[  OK  ] Finished Remount Root and Kernel File Systems.
+[  OK  ] Finished Create Static Device Nodes in /dev gracefully.
+         Mounting FUSE Control File System...
+         Mounting Kernel Configuration File System...
+         Starting Link Linux Kernel Modules...
+         Starting Flush Journal to Persistent Storage...
+[   10.671028] systemd-journald[264]: Received client request to flush runtime journal.
+         Starting Apply Kernel Variables...
+         Starting Create Static Device Nodes in /dev...
+[  OK  ] Mounted FUSE Control File System.
+[  OK  ] Mounted Kernel Configuration File System.
+[  OK  ] Finished Flush Journal to Persistent Storage.
+[   10.816536] usb 1-1.3: device not accepting address 15, error -71
+[   10.817322] usb 1-1-port3: unable to enumerate USB device
+[  OK  ] Finished Apply Kernel Variables.
+[  OK  ] Finished Create Static Device Nodes in /dev.
+[  OK  ] Reached target Preparation for Local File Systems.
+         Mounting /var/volatile...
+         Starting Rule-based Manager for Device Events and Files...
+[  OK  ] Mounted /var/volatile.
+         Starting Load/Save OS Random Seed...
+[  OK  ] Reached target Local File Systems.
+[   11.052534] usb 1-1.3: new high-speed USB device number 16 using ehci-platform
+         Starting Automatic Boot Loader Update...
+         Starting Create Volatile Files and Directories...
+[   11.144578] usb 1-1.3: device descriptor read/64, error -71
+[  OK  ] Finished Load/Save OS Random Seed.
+[  OK  ] Finished Automatic Boot Loader Update.
+[  OK  ] Started Rule-based Manager for Device Events and Files.
+[  OK  ] Finished Coldplug All udev Devices.
+         Starting Wait for udev To Complete Device Initialization...
+[  OK  ] Finished Create Volatile Files and Directories.
+[   11.344533] usb 1-1.3: device descriptor read/64, error -71
+         Starting Network Time Synchronization...
+         Starting Record System Boot/Shutdown in UTMP...
+[   11.532610] usb 1-1.3: new high-speed USB device number 17 using ehci-platform
+[  OK  ] Finished Record System Boot/Shutdown in UTMP.
+[   11.629169] usb 1-1.3: device descriptor read/64, error -71
+[  OK  ] Finished Link Linux Kernel Modules.
+[  OK  ] Started Network Time Synchronization.
+[  OK  ] Reached target System Time Set.
+[   11.828545] usb 1-1.3: device descriptor read/64, error -71
+[   11.938305] usb 1-1-port3: attempt power cycle
+[   12.540531] usb 1-1.3: new high-speed USB device number 18 using ehci-platform
+[   12.636734] psci-cpuidle-domain psci: sync_state() pending due to 404c0000.crc
+[   12.638386] psci-cpuidle-domain psci: sync_state() pending due to 404e0000.adc
+[   12.650496] psci-cpuidle-domain psci: sync_state() pending due to 46020000.spi
+[   12.654843] psci-cpuidle-domain psci: sync_state() pending due to 48030000.dcmipp
+[   12.666719] psci-cpuidle-domain psci: sync_state() pending due to 48400000.pcie
+[   12.670397] psci-cpuidle-domain psci: sync_state() pending due to 402e0000.can
+[   12.679822] psci-cpuidle-domain psci: sync_state() pending due to 402f0000.can
+[   12.683576] psci-cpuidle-domain psci: sync_state() pending due to 480d0000.vdec
+[   12.695253] psci-cpuidle-domain psci: sync_state() pending due to 480e0000.venc
+[   12.699248] psci-cpuidle-domain psci: sync_state() pending due to 48280000.gpu
+[   12.707749] psci-cpuidle-domain psci: sync_state() pending due to 42080000.bus:ttt-sw@4c000000
+[   12.833440] ds18b20 ds18b20: ds18b20 device and driver matched successfully!
+[   12.874212] dht11 dht11: dht11 device and driver matched successfully!
+[   12.875183] dht11 dht11: Failed to request gpio
+[   12.888373] dht11: probe of dht11 failed with error -16
+[   12.942704] CAN device driver interface
+[   12.949700] stm32-deip 42080000.bus:ttt-sw@4c000000: No phy clock provided...
+[   12.961279] stm32-crc32 404c0000.crc: Initialized
+[   12.963441] m_can_platform 402e0000.can: m_can device registered (irq=83, version=32)
+[   12.970061] usb 1-1.3: device not accepting address 18, error -71
+[   12.985609] m_can_platform 402f0000.can: m_can device registered (irq=86, version=32)
+[  OK  ] Reached target Hardware activated USB gadget.
+[   13.015385] mc: Linux media interface: v0.10
+[   13.042700] videodev: Linux video capture interface: v2.00
+[   13.052619] usb 1-1.3: new high-speed USB device number 19 using ehci-platform
+[   13.056314] fusb302 1-0022: Can't get property of role, set role to default DRP
+[   13.070485] spi_stm32 46020000.spi: driver initialized (master mode)
+[   13.092507] stm32-csi 48020000.csi: Probed CSI with 2 lanes
+[   13.102240] fusb302 1-0022: port 0 probe success with role ROLE_MODE_DRP, try_role ROLE_MODE_NONE
+[   13.160692] imx335 1-001a: failed to find sensor: -5
+[   13.177041] imx335: probe of 1-001a failed with error -5
+[   13.186501] dcmipp 48030000.dcmipp: Probe done
+[   13.259038] hantro-vpu 480d0000.vdec: registered st,stm32mp25-vdec-dec as /dev/video5
+[   13.286196] Galcore version 6.4.19.4.952875
+[   13.293446] hantro-vpu 480e0000.venc: registered st,stm32mp25-venc-enc as /dev/video6
+[   13.480541] usb 1-1.3: device not accepting address 19, error -71
+[   13.481196] usb 1-1-port3: unable to enumerate USB device
+[   13.712570] usb 1-1.3: new high-speed USB device number 20 using ehci-platform
+[   13.804510] usb 1-1.3: device descriptor read/64, error -71
+[  OK  ] Found device /dev/tee0.
+[   14.004721] usb 1-1.3: device descriptor read/64, error -71
+         Starting Virtual Console Setup...
+[   14.192513] usb 1-1.3: new high-speed USB device number 21 using ehci-platform
+[   14.288604] usb 1-1.3: device descriptor read/64, error -71
+[  OK  ] Finished Virtual Console Setup.
+[   14.492638] usb 1-1.3: device descriptor read/64, error -71
+[   14.600816] usb 1-1-port3: attempt power cycle
+[   15.204617] usb 1-1.3: new high-speed USB device number 22 using ehci-platform
+[   15.628628] usb 1-1.3: device not accepting address 22, error -71
+[   15.708667] usb 1-1.3: new high-speed USB device number 23 using ehci-platform
+[   16.132632] usb 1-1.3: device not accepting address 23, error -71
+[   16.133317] usb 1-1-port3: unable to enumerate USB device
+[   16.360656] usb 1-1.3: new high-speed USB device number 24 using ehci-platform
+[   16.452639] usb 1-1.3: device descriptor read/64, error -71
+[*     ] (1 of 4) A start job is running for /dev/dri/card0 (7s / 1min 30s)
+[   16.652626] usb 1-1.3: device descriptor read/64, error -71
+[   16.840470] usb 1-1.3: new high-speed USB device number 25 using ehci-platform
+[   16.932650] usb 1-1.3: device descriptor read/64, error -71
+[**    ] (1 of 4) A start job is running for /dev/dri/card0 (8s / 1min 30s)
+[***   ] (1 of 4) A start job is running for /dev/dri/card0 (8s / 1min 30s)
+[   17.848644] usb 1-1.3: new high-speed USB device number 26 using ehci-platform
+[ ***  ] (2 of 4) A start job is running for…vice Initialization (9s / 3min 2s)
+[   18.352479] usb 1-1.3: new high-speed USB device number 27 using ehci-platform
+[   18.776649] usb 1-1.3: device not accepting address 27, error -71
+[  *** ] (2 of 4) A start job is running for…vice Initialization (9s / 3min 2s)
+[   19.004661] usb 1-1.3: new high-speed USB device number 28 using ehci-platform
+[   19.100668] usb 1-1.3: device descriptor read/64, error -71
+[   ***] (2 of 4) A start job is running for…ice Initialization (10s / 3min 2s)
+[   19.488644] usb 1-1.3: new high-speed USB device number 29 using ehci-platform
+[   19.580648] usb 1-1.3: device descriptor read/64, error -71
+[   19.780659] usb 1-1.3: device descriptor read/64, error -71
+[    **] (3 of 4) A start job is running for…net/devices/wlan1 (10s / 1min 30s)
+[   20.500635] usb 1-1.3: new high-speed USB device number 30 using ehci-platfor[     *] (3 of 4) A start job is running for…net/devices/wlan1 (11s / 1min 30s)
+[   20.924646] usb 1-1.3: device not accepting address 30, error -71
+[   21.004633] usb 1-1.3: new high-speed USB device number 31 using ehci-platfor[    **] (3 of 4) A start job is running for…net/devices/wlan1 (12s / 1min 30s)
+[   21.428646] usb 1-1.3: device not accepting address 31, error -71
+[   21.429304] usb 1-1-port3: unable to enumerate USB device
+[   21.656475] usb 1-1.3: new high-speed USB device number 32 using ehci-platform
+[   ***] (4 of 4) A start job is running for…net/devices/wlan0 (12s / 1min 30s)
+[   21.948472] usb 1-1.3: device descriptor read/64, error -71
+[   22.136632] usb 1-1.3: new high-speed USB device number 33 using ehci-platform
+[  *** ] (4 of 4) A start job is running for…net/devices/wlan0 (13s / 1min 30s)
+[   22.432628] usb 1-1.3: device descriptor read/64, error -71
+[ ***  ] (4 of 4) A start job is running for…net/devices/wlan0 (13s / 1min 30s)
+[   23.148637] usb 1-1.3: new high-speed USB device number 34 using ehci-platfor[***   ] (1 of 4) A start job is running for /dev/dri/card0 (14s / 1min 30s)
+[   23.572645] usb 1-1.3: device not accepting address 34, error -71
+[   23.652645] usb 1-1.3: new high-speed USB device number 35 using ehci-platform
+[   24.076624] usb 1-1.3: device not accepting address 35, error -71
+[**    ] (1 of 4) A start job is running for /dev/dri/card0 (15s / 1min 30s)
+[   24.304470] usb 1-1.3: new high-speed USB device number 36 using ehci-platform
+[   24.396634] usb 1-1.3: device descriptor read/64, error -71
+[*     ] (1 of 4) A start job is running for /dev/dri/card0 (15s / 1min 30s)
+[   24.784674] usb 1-1.3: new high-speed USB device number 37 using ehci-platform
+[   24.876478] usb 1-1.3: device descriptor read/64, error -71
+[   25.080655] usb 1-1.3: device descriptor read/64, error -71
+[**    ] (2 of 4) A start job is running for…ice Initialization (16s / 3min 2s)
+[   25.796666] usb 1-1.3: new high-speed USB device number 38 using ehci-platfor[***   ] (2 of 4) A start job is running for…ice Initialization (16s / 3min 2s)
+[   26.220640] usb 1-1.3: device not accepting address 38, error -71
+[   26.300634] usb 1-1.3: new high-speed USB device number 39 using ehci-platfor[ ***  ] (2 of 4) A start job is running for…ice Initialization (17s / 3min 2s)
+[   26.724610] usb 1-1.3: device not accepting address 39, error -71
+[   26.725304] usb 1-1-port3: unable to enumerate USB device
+[   26.952646] usb 1-1.3: new high-speed USB device number 40 using ehci-platform
+[  *** ] (3 of 4) A start job is running for…net/devices/wlan1 (17s / 1min 30s)
+[   27.244638] usb 1-1.3: device descriptor read/64, error -71
+[   27.436626] usb 1-1.3: new high-speed USB device number 41 using ehci-platform
+[   ***] (3 of 4) A start job is running for…net/devices/wlan1 (18s / 1min 30s)
+[   27.728623] usb 1-1.3: device descriptor read/64, error -71
+[    **] (3 of 4) A start job is running for…net/devices/wlan1 (19s / 1min 30s)
+[   28.440634] usb 1-1.3: new high-speed USB device number 42 using ehci-platfor[     *] (4 of 4) A start job is running for…net/devices/wlan0 (19s / 1min 30s)
+[   28.864474] usb 1-1.3: device not accepting address 42, error -71
+[   28.944971] usb 1-1.3: new high-speed USB device number 43 using ehci-platform
+[   29.368472] usb 1-1.3: device not accepting address 43, error -71
+[    **] (4 of 4) A start job is running for…net/devices/wlan0 (20s / 1min 30s)
+[   29.596621] usb 1-1.3: new high-speed USB device number 44 using ehci-platform
+[   29.688656] usb 1-1.3: device descriptor read/64, error -71
+[   ***] (4 of 4) A start job is running for…net/devices/wlan0 (20s / 1min 30s)
+[   30.076662] usb 1-1.3: new high-speed USB device number 45 using ehci-platform
+[   30.168636] usb 1-1.3: device descriptor read/64, error -71
+[   30.368653] usb 1-1.3: device descriptor read/64, error -71
+[  *** ] (1 of 4) A start job is running for /dev/dri/card0 (21s / 1min 30s)
+[   31.080643] usb 1-1.3: new high-speed USB device number 46 using ehci-platfor[ ***  ] (1 of 4) A start job is running for /dev/dri/card0 (22s / 1min 30s)
+[   31.504625] usb 1-1.3: device not accepting address 46, error -71
+[   31.584639] usb 1-1.3: new high-speed USB device number 47 using ehci-platfor[***   ] (1 of 4) A start job is running for /dev/dri/card0 (22s / 1min 30s)
+[   32.008617] usb 1-1.3: device not accepting address 47, error -71
+[   32.009308] usb 1-1-port3: unable to enumerate USB device
+[   32.236470] usb 1-1.3: new high-speed USB device number 48 using ehci-platfor[**    ] (2 of 4) A start job is running for…ice Initialization (23s / 3min 2s)
+[   32.328761] usb 1-1.3: device descriptor read/64, error -71
+[   32.528477] usb 1-1.3: device descriptor read/64, error -71
+[   32.716636] usb 1-1.3: new high-speed USB device number 49 using ehci-platform
+[*     ] (2 of 4) A start job is running for…ice Initialization (23s / 3min 2s)
+[   33.012477] usb 1-1.3: device descriptor read/64, error -71
+[**    ] (2 of 4) A start job is running for…ice Initialization (24s / 3min 2s)
+[   33.724729] usb 1-1.3: new high-speed USB device number 50 using ehci-platform
+[   33.884579] vddio3: disabling
+[   33.884641] vddio4: disabling
+[   33.885003] vdda18adc: disabling
+[   33.888161] vddcore: disabling
+[   33.891257] v1v8: disabling
+[***   ] (3 of 4) A start job is running for…net/devices/wlan1 (24s / 1min 30s)
+[   34.149264] usb 1-1.3: device not accepting address 50, error -71
+[   34.228636] usb 1-1.3: new high-speed USB device number 51 using ehci-platfor[ ***  ] (3 of 4) A start job is running for…net/devices/wlan1 (25s / 1min 30s)
+[   34.656654] usb 1-1.3: device not accepting address 51, error -71
+[   34.657686] usb 1-1-port3: unable to enumerate USB device
+[   34.884470] usb 1-1.3: new high-speed USB device number 52 using ehci-platform
+[   34.976632] usb 1-1.3: device descriptor read/64, error -71
+[  *** ] (3 of 4) A start job is running for…net/devices/wlan1 (26s / 1min 30s)
+[   35.368470] usb 1-1.3: new high-speed USB device number 53 using ehci-platform
+[   35.460642] usb 1-1.3: device descriptor read/64, error -71
+[   35.660475] usb 1-1.3: device descriptor read/64, error -71
+[    **] (4 of 4) A start job is running for…net/devices/wlan0 (27s / 1min 30s)
+[   36.372647] usb 1-1.3: new high-speed USB device number 54 using ehci-platform
+[     *] (4 of 4) A start job is running for…net/devices/wlan0 (27s / 1min 30s)
+[   36.876648] usb 1-1.3: new high-speed USB device number 55 using ehci-platform
+[   37.300467] usb 1-1.3: device not accepting address 55, error -71
+[    **] (1 of 4) A start job is running for /dev/dri/card0 (28s / 1min 30s)
+[   37.532477] usb 1-1.3: new high-speed USB device number 56 using ehci-platform
+[   ***] (1 of 4) A start jo[   37.824476] usb 1-1.3: device descriptor read/64, error -71
+b is running for /dev/dri/card0 (28s / 1min 30s)
+[   38.012675] usb 1-1.3: new high-speed USB device number 57 using ehci-platform
+[   38.104644] usb 1-1.3: device descriptor read/64, error -71
+[  *** ] (1 of 4) A start job is running for /dev/dri/card0 (29s / 1min 30s)
+[ ***  ] (2 of 4) A start job is running for…ice Initialization (29s / 3min 2s)
+[   39.024637] usb 1-1.3: new high-speed USB device number 58 using ehci-platfor[***   ] (2 of 4) A start job is running for…ice Initialization (30s / 3min 2s)
+[   39.448649] usb 1-1.3: device not accepting address 58, error -71
+[   39.528636] usb 1-1.3: new high-speed USB device number 59 using ehci-platfor[**    ] (2 of 4) A start job is running for…ice Initialization (30s / 3min 2s)
+[   39.952648] usb 1-1.3: device not accepting address 59, error -71
+[   39.953314] usb 1-1-port3: unable to enumerate USB device
+[   40.188512] usb 1-1.3: new high-speed USB device number 60 using ehci-platfor[  OK  ] Listening on Load/Save RF Kill Switch Status /dev/rfkill Watch.
+[   40.280423] Bluetooth: Core ver 2.22
+[   40.280889] NET: Registered PF_BLUETOOTH protocol family
+[   40.280910] usb 1-1.3: device descriptor read/64, error -71
+[   40.286215] Bluetooth: HCI device and connection manager initialized
+[   40.298145] Bluetooth: HCI socket layer initialized
+[   40.303075] Bluetooth: L2CAP socket layer initialized
+[   40.308111] Bluetooth: SCO socket layer initialized
+[   40.319730] rtk_btusb: btusb_probe intf->cur_altsetting->desc.bInterfaceNumber 0
+[   40.322476] rtk_btusb: btusb_open hdev->promisc ==0
+[   40.323366] usbcore: registered new interface driver rtk_btusb
+[   40.332293] rtk_btusb: chip type value: 0x71
+[   40.352976] rtk_btusb: config filename rtl8723du_config
+[   40.353716] usb 1-1.1: Direct firmware load for rtl8723du_config failed with error -2
+[   40.360655] usb 1-1.1: Direct firmware load for rtl8723du_fw failed with error -2
+[   40.368133] rtk_btusb: request_firmware error
+[   40.372471] rtk_btusb: load firmware failed!
+[   40.372494] rtk_btusb: btusb_open failed
+         Starting Load/Save RF Kill Switch Status...
+[  OK  ] Finished Wait for udev To Complete Device Initialization.
+[  OK  ] Started Load/Save RF Kill Switch Status.
+[   40.492504] usb 1-1.3: device descriptor read/64, error -71
+         Starting Create List of Static Device Nodes...
+         Starting Network Name Resolution...
+[  OK  ] Finished Create List of Static Device Nodes.
+[   40.680661] usb 1-1.3: new high-speed USB device number 61 using ehci-platform
+[  OK  ] Started Network Name Resolution.
+[  OK  ] Reached target System Initialization.
+[  OK  ] Started Serves stm32mp clocks calibration..
+[  OK  ] Started Daily Cleanup of Temporary Directories.
+[   40.772497] usb 1-1.3: device descriptor read/64, error -71
+[  OK  ] Started Connect WiFi 105 shortly after boot.
+[  OK  ] Reached target Timer Units.
+[  OK  ] Listening on Avahi mDNS/DNS-SD Stack Activation Socket.
+[  OK  ] Listening on D-Bus System Message Bus Socket.
+         Starting sshd.socket...
+[  OK  ] Listening on sshd.socket.
+[  OK  ] Reached target Socket Units.
+[  OK  ] Reached target Basic System.
+         Starting ST set alsa state configuration...
+[   40.980525] usb 1-1.3: device descriptor read/64, error -71
+         Starting Bluetooth service...
+[  OK  ] Started Kernel Logging Service.
+[  OK  ] Started System Logging Service.
+         Starting D-Bus System Message Bus...
+[   41.089397] usb 1-1-port3: attempt power cycle
+         Starting Ethernet Bridge Filtering Tables...
+         Starting IPv6 Packet Filtering Framework...
+         Starting IPv4 Packet Filtering Framework...
+[  OK  ] Started Multiple Spanning Tree Protocol Daemon.
+[  OK  ] Started Seat for Weston user.
+         Starting ST Load M33 firmware via remoteproc...
+[  OK  ] Started Calibrates HSI/CSI clocks.
+         Starting Resets System Activity Logs...
+[   41.482460] Default copro already stopped
+         Starting User Login Management...
+         Starting TEE Supplicant...
+         Starting Check if the gpu are pres…the correct weston configuration...
+         Starting OpenSSH Key Generation...
+[   41.620257] remoteproc remoteproc0: powering up m33
+[  OK  ] Started D-Bus System Message Bus.
+[   41.704570] usb 1-1.3: new high-speed USB device number 62 using ehci-platform
+[  OK  ] Finished Ethernet Bridge Filtering Tables.
+[  OK  ] Finished IPv6 Packet Filtering Framework.
+[  OK  ] Finished IPv4 Packet Filtering Framework.
+[  OK  ] Finished Resets System Activity Logs.
+[  OK  ] Started User Login Management.
+[   41.884237] remoteproc remoteproc0: Booting fw image OpenAMP_TTY_echo_CM33_NonSecure.elf, size 3390304
+[  OK  ] Reached target Preparation for Network.
+[   41.902315] rproc-virtio rproc-virtio.1.auto: assigned reserved memory node vdev0buffer@812fa000
+[   41.906531] virtio_rpmsg_bus virtio0: rpmsg host is online
+[   41.911441] rproc-virtio rproc-virtio.1.auto: registered virtio0 (type 7)
+[   41.917996] virtio_rpmsg_bus virtio0: creating channel rpmsg-tty addr 0x400
+[   41.925670] remoteproc remoteproc0: remote processor m33 is now up
+[   41.940828] Booting fw image for stm32mp257d-atk
+[   41.993818] NET: Registered PF_INET6 protocol family
+         Starting Connection service...
+         Starting Network Configuration...
+[   42.083422] Segment Routing with IPv6
+[   42.083502] In-situ OAM (IOAM) with IPv6
+         Starting Connect wlan1 to WiFi SSID 105 with wpa_supplicant...
+[  OK  ] Finished ST Load M33 firmware via remoteproc.
+[   42.140845] usb 1-1.3: device not accepting address 62, error -71
+[  OK  ] Started TEE Supplicant.
+[  OK  ] Finished OpenSSH Key Generation.
+[  OK  ] Finished ST set alsa state configura[   42.226802] usb 1-1.3: new high-speed USB device number 63 using ehci-platform
+tion.
+[  OK  ] Started Bluetooth service.
+[  OK  ] Finished Check if the gpu are pres…t the correct weston configuration.
+[   42.473865] cfg80211: Loading compiled-in X.509 certificates for regulatory database
+         Starting BlueALSA service...
+         Stopping Connection service...
+[   42.500128] Loaded X.509 cert 'wens: 61c038651aabdcf94bd0ac7ff06c7248db18c600'
+[   42.506241] Loaded X.509 cert 'sforshee: 00b28ddf47aef9cea7'
+         Starting Hostname Service...
+         Starting WPA supplicant...
+[   42.651662] stm32-dwmac 482d0000.eth2 end0: Register MEM_TYPE_PAGE_POOL RxQ-0
+[   42.659537] stm32-dwmac 482d0000.eth2 end0: Register MEM_TYPE_PAGE_POOL RxQ-1
+
+[   42.672510] usb 1-1.3: device not accepting address 63, error -71
+[   42.673216] usb 1-1-port3: unable to enumerate USB device
+[  OK  ] Stopped Connection service.
+         Starting Avahi mDNS/DNS-SD Stack...
+         Starting Wait for Network to be Configured...
+[  OK  ] Started WPA supplicant.
+[  OK  ] Started BlueALSA service.
+[   42.912537] usb 1-1.3: new high-speed USB device number 64 using ehci-platform
+[  OK  ] Started Hostname Service.
+[  OK  ] Started Avahi mDNS/DNS-SD Stack.
+[   43.007752] usb 1-1.3: device descriptor read/64, error -71
+[  OK  ] Reached target Bluetooth Support.
+[   43.204487] usb 1-1.3: device descriptor read/64, error -71
+[   43.392657] usb 1-1.3: new high-speed USB device number 65 using ehci-platform
+[   43.484626] usb 1-1.3: device descriptor read/64, error -71
+[   43.688480] usb 1-1.3: device descriptor read/64, error -71
+[   43.800810] usb 1-1-port3: attempt power cycle
+[   44.404642] usb 1-1.3: new high-speed USB device number 66 using ehci-platform
+[   44.828647] usb 1-1.3: device not accepting address 66, error -71
+[   44.908634] usb 1-1.3: new high-speed USB device number 67 using ehci-platform
+[**    ] (5 of 5) A start job is running for… to be Configured (35s / no limit)
+[   45.332623] usb 1-1.3: device not accepting address 67, error -71
+[***   ] (5 of 5) A start job is running for… to be Configured (36s / no limit)
+[   45.564661] usb 1-1.3: new high-speed USB device number 68 using ehci-platform
+[ ***  ] (1 of 5) A start job is running for /dev/dri/card0 (36s / 1min 30s)
+[   45.860501] usb 1-1.3: device descriptor read/64, error -71
+[   46.048633] usb 1-1.3: new high-speed USB device number 69 using ehci-platform
+[  *** ] (1 of 5) A start job is running for /dev/dri/card0 (37s / 1min 30s)
+[   46.340647] usb 1-1.3: device descriptor read/64, error -71
+[   ***] (1 of 5) A start job is running for /dev/dri/card0 (37s / 1min 30s)
+[   47.052656] usb 1-1.3: new high-speed USB device number 70 using ehci-platfor[    **] (2 of 5) A start job is running for…net/devices/wlan1 (38s / 1min 30s)
+[   47.476671] usb 1-1.3: device not accepting address 70, error -71
+[   47.556651] usb 1-1.3: new high-speed USB device number 71 using ehci-platfor[     *] (2 of 5) A start job is running for…net/devices/wlan1 (38s / 1min 30s)
+[   47.980642] usb 1-1.3: device not accepting address 71, error -71
+[   47.981317] usb 1-1-port3: unable to enumerate USB device
+[   48.208650] usb 1-1.3: new high-speed USB device number 72 using ehci-platform
+[    **] (2 of 5) A start job is running for…net/devices/wlan1 (39s / 1min 30s)
+[   48.500626] usb 1-1.3: device descriptor read/64, error -71
+[   48.688818] usb 1-1.3: new high-speed USB device number 73 using ehci-platform
+[   ***] (3 of 5) A start job is running for…ith wpa_supplicant (7s / 1min 32s)
+[   48.980479] usb 1-1.3: device descriptor read/64, error -71
+[  *** ] (3 of 5) A start job is running for…ith wpa_supplicant (8s / 1min 32s)
+[   49.692649] usb 1-1.3: new high-speed USB device number 74 using ehci-platfor[ ***  ] (3 of 5) A start job is running for…ith wpa_supplicant (8s / 1min 32s)
+[   50.120632] usb 1-1.3: device not accepting address 74, error -71
+[   50.200640] usb 1-1.3: new high-speed USB device number 75 using ehci-platfor[***   ] (4 of 5) A start job is running for…net/devices/wlan0 (41s / 1min 30s)
+[   50.624654] usb 1-1.3: device not accepting address 75, error -71
+[**    ] (4 of 5) A start job is running for…net/devices/wlan0 (41s / 1min 30s)
+[   50.852481] usb 1-1.3: new high-speed USB device number 76 using ehci-platform
+[   50.944476] usb 1-1.3: device descriptor read/64, error -71
+[*     ] (4 of 5) A start job is running for…net/devices/wlan0 (42s / 1min 30s)
+[   51.336487] usb 1-1.3: new high-speed USB device number 77 using ehci-platform
+[   51.428648] usb 1-1.3: device descriptor read/64, error -71
+[   51.628476] usb 1-1.3: device descriptor read/64, error -71
+[***   ] (5 of 5) A start job is running for… to be Configured (43s / no limit)
+[   52.344652] usb 1-1.3: new high-speed USB device number 78 using ehci-platform
+[ ***  ] (5 of 5) A start job is running for… to be Configured (43s / no limit)
+[   52.848645] usb 1-1.3: new high-speed USB device number 79 using ehci-platform
+[   53.272668] usb 1-1.3: device not accepting address 79, error -71
+[  *** ] (1 of 5) A start job is running for /dev/dri/card0 (44s / 1min 30s)
+[   53.500650] usb 1-1.3: new high-speed USB device number 80 using ehci-platform
+[   53.592642] usb 1-1.3: device descriptor read/64, error -71
+[   ***] (1 of 5) A start job is running for /dev/dri/card0 (44s / 1min 30s)
+[   53.980561] usb 1-1.3: new high-speed USB device number 81 using ehci-platform
+[   54.072496] usb 1-1.3: device descriptor read/64, error -71
+[    **] (1 of 5) A start job is running for /dev/dri/card0 (45s / 1min 30s)
+[     *] (2 of 5) A start job is running for…net/devices/wlan1 (45s / 1min 30s)
+[   54.988641] usb 1-1.3: new high-speed USB device number 82 using ehci-platfor[    **] (2 of 5) A start job is running for…net/devices/wlan1 (46s / 1min 30s)
+[   55.412651] usb 1-1.3: device not accepting address 82, error -71
+[   55.492632] usb 1-1.3: new high-speed USB device number 83 using ehci-platfor[   ***] (2 of 5) A start job is running for…net/devices/wlan1 (46s / 1min 30s)
+[   55.916654] usb 1-1.3: device not accepting address 83, error -71
+[   55.917313] usb 1-1-port3: unable to enumerate USB device
+[   56.144659] usb 1-1.3: new high-speed USB device number 84 using ehci-platform
+[  *** ] (3 of 5) A start job is running for…th wpa_supplicant (15s / 1min 32s)
+[   56.436656] usb 1-1.3: device descriptor read/64, error -71
+[   56.624480] usb 1-1.3: new high-speed USB device number 85 using ehci-platform
+[ ***  ] (3 of 5) A start job is running for…th wpa_supplicant (15s / 1min 32s)
+[   56.916661] usb 1-1.3: device descriptor read/64, error -71
+[***   ] (3 of 5) A start job is running for…th wpa_supplicant (16s / 1min 32s)
+[   57.632646] usb 1-1.3: new high-speed USB device number 86 using ehci-platfor[**    ] (4 of 5) A start job is running for…net/devices/wlan0 (48s / 1min 30s)
+[   58.056653] usb 1-1.3: device not accepting address 86, error -71
+[   58.136657] usb 1-1.3: new high-speed USB device number 87 using ehci-platfor[*     ] (4 of 5) A start job is running for…net/devices/wlan0 (49s / 1min 30s)
+[   58.560660] usb 1-1.3: device not accepting address 87, error -71
+[   58.561312] usb 1-1-port3: unable to enumerate USB device
+[   58.788651] usb 1-1.3: new high-speed USB device number 88 using ehci-platfor[**    ] (4 of 5) A start job is running for…net/devices/wlan0 (49s / 1min 30s)
+[   58.880675] usb 1-1.3: device descriptor read/64, error -71
+[   59.080662] usb 1-1.3: device descriptor read/64, error -71
+[   59.268475] usb 1-1.3: new high-speed USB device number 89 using ehci-platfor[***   ] (5 of 5) A start job is running for… to be Configured (50s / no limit)
+[   59.360661] usb 1-1.3: device descriptor read/64, error -71
+[   59.560675] usb 1-1.3: device descriptor read/64, error -71
+[ ***  ] (5 of 5) A start job is running for… to be Configured (50s / no limit)
+[   60.272469] usb 1-1.3: new high-speed USB device number 90 using ehci-platfor[  OK  ] Started Calibrates HSI/CSI clocks.
+[   60.696658] usb 1-1.3: device not accepting address 90, error -71
+[   60.776649] usb 1-1.3: new high-speed USB device number 91 using ehci-platform
+[   61.200629] usb 1-1.3: device not accepting address 91, error -71
+[   61.201311] usb 1-1-port3: unable to enumerate USB device
+[   61.432655] usb 1-1.3: new high-speed USB device number 92 using ehci-platform
+[   61.524753] usb 1-1.3: device descriptor read/64, error -71
+[   61.728645] usb 1-1.3: device descriptor read/64, error -71
+[   61.916477] usb 1-1.3: new high-speed USB device number 93 using ehci-platform
+[   62.008474] usb 1-1.3: device descriptor read/64, error -71
+[   62.212657] usb 1-1.3: device descriptor read/64, error -71
+[   62.320818] usb 1-1-port3: attempt power cycle
+[   ***] (1 of 5) A start job is running for /dev/dri/card0 (53s / 1min 30s)
+[   62.924649] usb 1-1.3: new high-speed USB device number 94 using ehci-platfor[    **] (1 of 5) A start job is running for /dev/dri/card0 (53s / 1min 30s)
+[   63.348629] usb 1-1.3: device not accepting address 94, error -71
+[   63.428651] usb 1-1.3: new high-speed USB device number 95 using ehci-platfor[     *] (1 of 5) A start job is running for /dev/dri/card0 (54s / 1min 30s)
+[   63.852655] usb 1-1.3: device not accepting address 95, error -71
+[    **] (2 of 5) A start job is running for…net/devices/wlan1 (54s / 1min 30s)
+[   64.080653] usb 1-1.3: new high-speed USB device number 96 using ehci-platform
+[   64.172672] usb 1-1.3: device descriptor read/64, error -71
+[   64.372649] usb 1-1.3: device descriptor read/64, error -71
+[   64.561267] usb 1-1.3: new high-speed USB device number 97 using ehci-platfor[   ***] (2 of 5) A start job is running for…net/devices/wlan1 (55s / 1min 30s)
+[   64.652484] usb 1-1.3: device descriptor read/64, error -71
+[   64.856638] usb 1-1.3: device descriptor read/64, error -71
+[  *** ] (2 of 5) A start job is running for…net/devices/wlan1 (55s / 1min 30s)
+[   65.568476] usb 1-1.3: new high-speed USB device number 98 using ehci-platfor[ ***  ] (3 of 5) A start job is running for…th wpa_supplicant (24s / 1min 32s)
+[***   ] (3 of 5) A start jo[   66.072479] usb 1-1.3: new high-speed USB device number 99 using ehci-platform
+b is running for…th wpa_supplicant (25s / 1min 32s)
+[   66.500615] usb 1-1.3: device not accepting address 99, error -71
+[**    ] (3 of 5) A start job is running for…th wpa_supplicant (25s / 1min 32s)
+[   66.728659] usb 1-1.3: new high-speed USB device number 100 using ehci-platform
+[   66.820665] usb 1-1.3: device descriptor read/64, error -71
+[*     ] (4 of 5) A start job is running for…net/devices/wlan0 (57s / 1min 30s)
+[   67.208481] usb 1-1.3: new high-speed USB device number 101 using ehci-platform
+[   67.300475] usb 1-1.3: device descriptor read/64, error -71
+[**    ] (4 of 5) A start job is running for…net/devices/wlan0 (58s / 1min 30s)
+[***   ] (4 of 5) A start job is running for…net/devices/wlan0 (58s / 1min 30s)
+[   68.212641] usb 1-1.3: new high-speed USB device number 102 using ehci-platfo[ ***  ] (5 of 5) A start job is running for… to be Configured (59s / no limit)
+[   68.636814] usb 1-1.3: device not accepting address 102, error -71
+[   68.717271] usb 1-1.3: new high-speed USB device number 103 using ehci-platfo[  *** ] (5 of 5) A start job is running for… to be Configured (59s / no limit)
+[   69.140483] usb 1-1.3: device not accepting address 103, error -71
+[   69.141317] usb 1-1-port3: unable to enumerate USB device
+[   69.372472] usb 1-1.3: new high-speed USB device number 104 using ehci-platform
+[   ***] (5 of 5) A start job is running for…to be Configured (1min / no limit)
+[   69.664481] usb 1-1.3: device descriptor read/64, error -71
+[   69.856631] usb 1-1.3: new high-speed USB device number 105 using ehci-platform
+[    **] (1 of 5) A start job is running for /dev/dri/card0 (1min / 1min 30s)
+[   70.148668] usb 1-1.3: device descriptor read/64, error -71
+[     *] (1 of 5) A start job is running for…dev/dri/card0 (1min 1s / 1min 30s)
+[   70.860476] usb 1-1.3: new high-speed USB device number 106 using ehci-platfo[    **] (1 of 5) A start job is running for…dev/dri/card0 (1min 1s / 1min 30s)
+[   71.284469] usb 1-1.3: device not accepting address 106, error -71
+[   71.364478] usb 1-1.3: new high-speed USB device number 107 using ehci-platfo[   ***] (2 of 5) A start job is running for…devices/wlan1 (1min 2s / 1min 30s)
+[   71.788655] usb 1-1.3: device not accepting address 107, error -71
+[   71.789433] usb 1-1-port3: unable to enumerate USB device
+[   72.016621] usb 1-1.3: new high-speed USB device number 108 using ehci-platfo[  *** ] (2 of 5) A start job is running for…devices/wlan1 (1min 2s / 1min 30s)
+[   72.108480] usb 1-1.3: device descriptor read/64, error -71
+[   72.308822] usb 1-1.3: device descriptor read/64, error -71
+[   72.496638] usb 1-1.3: new high-speed USB device number 109 using ehci-platfo[ ***  ] (2 of 5) A start job is running for…devices/wlan1 (1min 3s / 1min 30s)
+[   72.588813] usb 1-1.3: device descriptor read/64, error -71
+[   72.788673] usb 1-1.3: device descriptor read/64, error -71
+[**    ] (3 of 5) A start job is running for…th wpa_supplicant (32s / 1min 32s)
+[   73.508640] usb 1-1.3: new high-speed USB device number 110 using ehci-platfo[*     ] (3 of 5) A start job is running for…th wpa_supplicant (32s / 1min 32s)
+[   73.932649] usb 1-1.3: device not accepting address 110, error -71
+[   74.012645] usb 1-1.3: new high-speed USB device number 111 using ehci-platfo[**    ] (4 of 5) A start job is running for…devices/wlan0 (1min 5s / 1min 30s)
+[   74.436615] usb 1-1.3: device not accepting address 111, error -71
+[   74.437435] usb 1-1-port3: unable to enumerate USB device
+[   74.664477] usb 1-1.3: new high-speed USB device number 112 using ehci-platform
+[***   ] (4 of 5) A start job is running for…devices/wlan0 (1min 5s / 1min 30s)
+[   74.956647] usb 1-1.3: device descriptor read/64, error -71
+[   75.148640] usb 1-1.3: new high-speed USB device number 113 using ehci-platform
+[ ***  ] (4 of 5) A start job is running for…devices/wlan0 (1min 6s / 1min 30s)
+[   75.440656] usb 1-1.3: device descriptor read/64, error -71
+[  *** ] (5 of 5) A start job is running for…be Configured (1min 6s / no limit)
+[   76.152478] usb 1-1.3: new high-speed USB device number 114 using ehci-platfo[   ***] (5 of 5) A start job is running for…be Configured (1min 7s / no limit)
+[   76.576664] usb 1-1.3: device not accepting address 114, error -71
+[   76.656481] usb 1-1.3: new high-speed USB device number 115 using ehci-platfo[    **] (5 of 5) A start job is running for…be Configured (1min 7s / no limit)
+[   77.080673] usb 1-1.3: device not accepting address 115, error -71
+[   77.081439] usb 1-1-port3: unable to enumerate USB device
+[   77.308647] usb 1-1.3: new high-speed USB device number 116 using ehci-platfo[     *] (1 of 5) A start job is running for…dev/dri/card0 (1min 8s / 1min 30s)
+[   77.400483] usb 1-1.3: device descriptor read/64, error -71
+[   77.600482] usb 1-1.3: device descriptor read/64, error -71
+[   77.788679] usb 1-1.3: new high-speed USB device number 117 using ehci-platfo[    **] (1 of 5) A start job is running for…dev/dri/card0 (1min 8s / 1min 30s)
+[   77.880651] usb 1-1.3: device descriptor read/64, error -71
+[   78.080631] usb 1-1.3: device descriptor read/64, error -71

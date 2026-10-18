@@ -1,0 +1,345 @@
+<!DOCTYPE html><html class="light" lang="en"><head>
+<meta charset="utf-8">
+<meta content="width=device-width, initial-scale=1.0" name="viewport">
+<title>EdgeFocus - Settings</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@500;600;700&amp;display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet">
+<style>
+        .material-symbols-outlined {
+            font-variation-settings:
+            'FILL' 1,
+            'wght' 400,
+            'GRAD' 0,
+            'opsz' 24;
+        }
+        
+        /* Bubbly sliders */
+        input[type=range] {
+            -webkit-appearance: none;
+            width: 100%;
+            background: transparent;
+        }
+
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 24px;
+            width: 24px;
+            border-radius: 50%;
+            background: #b51925; /* primary */
+            cursor: pointer;
+            margin-top: -8px; 
+            box-shadow: 0 4px 6px rgba(181, 25, 37, 0.4), inset 0 2px 0 rgba(255, 255, 255, 0.3);
+            transition: transform 0.1s;
+        }
+        
+        input[type=range]::-webkit-slider-thumb:active {
+            transform: scale(0.9);
+        }
+
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 8px;
+            cursor: pointer;
+            background: #e4e2e0; /* surface-variant */
+            border-radius: 4px;
+        }
+
+        input[type=range]:focus {
+            outline: none;
+        }
+
+        /* Bubbly Toggle Switches */
+        .toggle-checkbox:checked {
+            right: 0;
+            border-color: #b51925;
+        }
+        .toggle-checkbox:checked + .toggle-label {
+            background-color: #b51925;
+        }
+        .toggle-checkbox:checked + .toggle-label:after {
+            transform: translateX(100%);
+            border-color: white;
+        }
+        .toggle-label {
+            width: 50px;
+            height: 26px;
+            background-color: #e4e2e0;
+            border-radius: 9999px;
+            position: relative;
+            cursor: pointer;
+            transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+            box-shadow: inset 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .toggle-label:after {
+            content: '';
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 22px;
+            height: 22px;
+            background-color: white;
+            border-radius: 50%;
+            transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+
+        /* Ambient shadows for cards */
+        .ambient-shadow {
+            box-shadow: 0 10px 30px rgba(181, 25, 37, 0.08);
+        }
+    </style>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                    "on-primary": "#ffffff",
+                    "surface": "#fbf9f7",
+                    "error": "#ba1a1a",
+                    "on-secondary-fixed-variant": "#005313",
+                    "primary": "#b51925",
+                    "tertiary-fixed-dim": "#ffb954",
+                    "on-error": "#ffffff",
+                    "on-background": "#1b1c1b",
+                    "background": "#fbf9f7",
+                    "inverse-on-surface": "#f2f0ee",
+                    "primary-fixed": "#ffdad7",
+                    "tertiary-fixed": "#ffddb4",
+                    "surface-dim": "#dbdad8",
+                    "on-secondary": "#ffffff",
+                    "on-secondary-fixed": "#002204",
+                    "on-tertiary-container": "#fffbff",
+                    "secondary": "#006e1c",
+                    "on-error-container": "#93000a",
+                    "surface-container-lowest": "#ffffff",
+                    "on-surface": "#1b1c1b",
+                    "surface-container-highest": "#e4e2e0",
+                    "surface-variant": "#e4e2e0",
+                    "tertiary": "#805200",
+                    "surface-tint": "#b81d27",
+                    "on-primary-container": "#fffbff",
+                    "surface-bright": "#fbf9f7",
+                    "secondary-fixed-dim": "#78dc77",
+                    "on-tertiary": "#ffffff",
+                    "primary-fixed-dim": "#ffb3ae",
+                    "tertiary-container": "#a06900",
+                    "surface-container-low": "#f5f3f1",
+                    "secondary-fixed": "#94f990",
+                    "surface-container": "#efedec",
+                    "surface-container-high": "#e9e8e6",
+                    "secondary-container": "#91f78e",
+                    "primary-container": "#d8363a",
+                    "on-primary-fixed": "#410004",
+                    "error-container": "#ffdad6",
+                    "inverse-surface": "#30302f",
+                    "on-secondary-container": "#00731e",
+                    "on-primary-fixed-variant": "#930015",
+                    "outline-variant": "#e3bebb",
+                    "outline": "#8f706d",
+                    "on-surface-variant": "#5b403e",
+                    "inverse-primary": "#ffb3ae",
+                    "on-tertiary-fixed-variant": "#633f00",
+                    "on-tertiary-fixed": "#291800"
+            },
+            "borderRadius": {
+                    "DEFAULT": "1rem",
+                    "lg": "2rem",
+                    "xl": "3rem",
+                    "full": "9999px"
+            },
+            "spacing": {
+                    "unit": "8px",
+                    "section-margin": "40px",
+                    "container-padding-desktop": "48px",
+                    "card-padding": "24px",
+                    "container-padding-mobile": "24px",
+                    "stack-gap": "16px"
+            },
+            "fontFamily": {
+                    "display-timer": ["Quicksand"],
+                    "body-md": ["Quicksand"],
+                    "headline-lg-mobile": ["Quicksand"],
+                    "headline-md": ["Quicksand"],
+                    "body-lg": ["Quicksand"],
+                    "label-sm": ["Quicksand"],
+                    "headline-lg": ["Quicksand"],
+                    "label-md": ["Quicksand"]
+            },
+            "fontSize": {
+                    "display-timer": ["80px", {"lineHeight": "90px", "letterSpacing": "-0.02em", "fontWeight": "700"}],
+                    "body-md": ["16px", {"lineHeight": "24px", "fontWeight": "500"}],
+                    "headline-lg-mobile": ["28px", {"lineHeight": "36px", "fontWeight": "700"}],
+                    "headline-md": ["24px", {"lineHeight": "32px", "fontWeight": "600"}],
+                    "body-lg": ["18px", {"lineHeight": "28px", "fontWeight": "500"}],
+                    "label-sm": ["12px", {"lineHeight": "16px", "fontWeight": "700"}],
+                    "headline-lg": ["32px", {"lineHeight": "40px", "fontWeight": "700"}],
+                    "label-md": ["14px", {"lineHeight": "20px", "letterSpacing": "0.01em", "fontWeight": "600"}]
+            }
+          }
+        }
+      }
+    </script>
+</head>
+<body class="bg-background text-on-background min-h-screen pb-[100px] font-body-md overflow-x-hidden">
+<!-- TopAppBar -->
+<header class="w-full top-0 sticky bg-background z-40">
+<div class="flex justify-between items-center px-container-padding-mobile py-4 max-w-[600px] mx-auto bg-background">
+<button class="text-primary hover:opacity-80 transition-opacity active:scale-95 duration-200 ease-[cubic-bezier(0.34,1.56,0.64,1)]">
+</button>
+<h1 class="font-headline-lg-mobile text-headline-lg-mobile text-primary tracking-tight">EdgeFocus</h1>
+<button class="text-on-surface-variant hover:opacity-80 transition-opacity active:scale-95 duration-200 ease-[cubic-bezier(0.34,1.56,0.64,1)]">
+<span class="material-symbols-outlined" style="font-variation-settings: &quot;FILL&quot; 1;">bluetooth_connected</span>
+</button>
+</div>
+</header>
+<main class="max-w-[600px] mx-auto px-container-padding-mobile pt-4 pb-12 flex flex-col gap-stack-gap">
+<div class="flex items-center gap-2 mb-2">
+<span class="material-symbols-outlined text-primary">settings</span>
+<h2 class="font-headline-md text-headline-md text-on-background">Settings</h2>
+</div>
+<!-- Pomodoro Settings Card -->
+<section class="bg-surface-container-lowest rounded-xl p-card-padding ambient-shadow">
+<h3 class="font-body-lg text-body-lg text-primary mb-6 flex items-center gap-2">
+<span class="material-symbols-outlined text-primary">timelapse</span>
+                Pomodoro Settings
+            </h3>
+<div class="flex flex-col gap-6">
+<!-- Focus Duration -->
+<div class="flex flex-col gap-2">
+<div class="flex justify-between items-center">
+<label class="font-label-md text-label-md text-on-surface">Focus</label>
+<span class="font-label-md text-label-md text-primary bg-primary-fixed px-3 py-1 rounded-full"><span class="" id="focus-val">36</span>m</span>
+</div>
+<input max="60" min="1" oninput="document.getElementById('focus-val').innerText = this.value" type="range" value="25">
+</div>
+<!-- Short Break -->
+<div class="flex flex-col gap-2">
+<div class="flex justify-between items-center">
+<label class="font-label-md text-label-md text-on-surface">Short Break</label>
+<span class="font-label-md text-label-md text-primary bg-primary-fixed px-3 py-1 rounded-full"><span class="" id="short-break-val">5</span>m</span>
+</div>
+<input max="30" min="1" oninput="document.getElementById('short-break-val').innerText = this.value" type="range" value="5">
+</div>
+<!-- Long Break -->
+<div class="flex flex-col gap-2">
+<div class="flex justify-between items-center">
+<label class="font-label-md text-label-md text-on-surface">Long Break</label>
+<span class="font-label-md text-label-md text-primary bg-primary-fixed px-3 py-1 rounded-full"><span class="" id="long-break-val">15</span>m</span>
+</div>
+<input max="60" min="1" oninput="document.getElementById('long-break-val').innerText = this.value" type="range" value="15">
+</div>
+</div>
+</section>
+<!-- Device Integration Card -->
+<section class="bg-surface-container-lowest rounded-xl p-card-padding ambient-shadow mt-4">
+<h3 class="font-body-lg text-body-lg text-primary mb-6 flex items-center gap-2">
+<span class="material-symbols-outlined text-primary">devices_other</span>
+                Device Integration
+            </h3>
+<div class="flex flex-col gap-4">
+<!-- Use EdgeFocus Device -->
+<div class="flex justify-between items-center py-2">
+<span class="font-body-md text-body-md text-on-surface">Use EdgeFocus Device</span>
+<div class="relative inline-block w-12 mr-2 align-middle select-none">
+<input checked="" class="toggle-checkbox absolute block w-6 h-6 rounded-full bg-white border-4 appearance-none cursor-pointer opacity-0 z-10" id="toggle-device" name="toggle" type="checkbox">
+<label class="toggle-label block overflow-hidden h-6 rounded-full bg-surface-variant cursor-pointer" for="toggle-device"></label>
+</div>
+</div>
+<!-- NFC Auto-rotate -->
+<div class="flex justify-between items-center py-2">
+<span class="font-body-md text-body-md text-on-surface">NFC Auto-rotate</span>
+<div class="relative inline-block w-12 mr-2 align-middle select-none">
+<input class="toggle-checkbox absolute block w-6 h-6 rounded-full bg-white border-4 appearance-none cursor-pointer opacity-0 z-10" id="toggle-nfc" name="toggle" type="checkbox">
+<label class="toggle-label block overflow-hidden h-6 rounded-full bg-surface-variant cursor-pointer" for="toggle-nfc"></label>
+</div>
+</div>
+<!-- Notification on Exit -->
+<div class="flex justify-between items-center py-2">
+<span class="font-body-md text-body-md text-on-surface">Notification on Exit</span>
+<div class="relative inline-block w-12 mr-2 align-middle select-none">
+<input checked="" class="toggle-checkbox absolute block w-6 h-6 rounded-full bg-white border-4 appearance-none cursor-pointer opacity-0 z-10" id="toggle-notify" name="toggle" type="checkbox">
+<label class="toggle-label block overflow-hidden h-6 rounded-full bg-surface-variant cursor-pointer" for="toggle-notify"></label>
+</div>
+</div>
+</div>
+</section>
+<!-- App Management Card -->
+<section class="bg-surface-container-lowest rounded-xl p-card-padding ambient-shadow mt-4 cursor-pointer hover:scale-[0.98] transition-transform duration-200">
+<div class="flex justify-between items-center">
+<div class="flex items-center gap-3">
+<div class="bg-primary-container p-2 rounded-full text-primary">
+<span class="material-symbols-outlined">dashboard</span>
+</div>
+<div>
+<h3 class="font-body-lg text-body-lg text-on-surface">Control Panel (控制面板)</h3>
+<p class="font-label-sm text-label-sm text-on-surface-variant">Advanced settings and hardware tools (高级设置与硬件工具)</p>
+</div>
+</div>
+<span class="material-symbols-outlined text-on-surface-variant">chevron_right</span>
+</div>
+</section><section class="bg-surface-container-lowest rounded-xl p-card-padding ambient-shadow mt-4 cursor-pointer hover:scale-[0.98] transition-transform duration-200">
+<div class="flex justify-between items-center">
+<div class="flex items-center gap-3">
+<div class="bg-primary-container p-2 rounded-full text-primary">
+<span class="material-symbols-outlined">block</span>
+</div>
+<div>
+<h3 class="font-body-lg text-body-lg text-on-surface">Distraction Apps Settings</h3>
+<p class="font-label-sm text-label-sm text-on-surface-variant">Manage blocked apps during focus</p>
+</div>
+</div>
+<span class="material-symbols-outlined text-on-surface-variant">chevron_right</span>
+</div>
+</section>
+<!-- Version / Hidden Dev Tools -->
+<div class="mt-8 text-center" id="version-container">
+<p class="font-label-sm text-label-sm text-on-surface-variant select-none" id="version-text">Version 2.4.1 (Build 842)</p>
+<p class="font-label-sm text-label-sm text-surface-variant mt-1">Made with focus in mind</p>
+</div>
+</main>
+<!-- BottomNavBar -->
+<nav class="fixed bottom-0 w-full rounded-t-xl z-50 md:hidden bg-surface shadow-[0_-8px_30px_rgb(186,26,26,0.08)]">
+<div class="fixed bottom-0 left-0 w-full z-50 flex justify-around items-center px-4 pb-8 pt-4 bg-surface">
+<!-- Home -->
+<button class="flex flex-col items-center justify-center text-on-surface-variant px-4 py-2 hover:bg-surface-variant rounded-full">
+<span class="material-symbols-outlined mb-1">home</span>
+<span class="font-label-md text-label-md">Home</span>
+</button>
+<!-- Data -->
+<button class="flex flex-col items-center justify-center text-on-surface-variant px-4 py-2 hover:bg-surface-variant rounded-full">
+<span class="material-symbols-outlined mb-1">bar_chart</span>
+<span class="font-label-md text-label-md">Data</span>
+</button>
+<!-- Settings (Active) -->
+<button class="flex flex-col items-center justify-center bg-primary-container text-on-primary-container rounded-full px-6 py-2 transition-all duration-300 ease-[cubic-bezier(0.34,1.56,0.64,1)] scale-110 active:scale-90">
+<span class="material-symbols-outlined mb-1" style="font-variation-settings: &quot;FILL&quot; 1;">settings</span>
+<span class="font-label-md text-label-md">Settings</span>
+</button>
+</div>
+</nav>
+<script>
+        // Hidden Developer Tools Logic
+        let tapCount = 0;
+        let tapTimer;
+        const versionText = document.getElementById('version-text');
+
+        versionText.addEventListener('click', () => {
+            tapCount++;
+            clearTimeout(tapTimer);
+            
+            if (tapCount >= 7) {
+                alert('Developer options unlocked! (Placeholder for actual dev tools menu)');
+                tapCount = 0;
+            } else if (tapCount >= 3) {
+                // subtle visual feedback could go here
+            }
+
+            tapTimer = setTimeout(() => {
+                tapCount = 0;
+            }, 1000);
+        });
+    </script>
+</body></html>

@@ -1,0 +1,19 @@
+[Unit]
+Description=EdgeFocus focus app
+After=network-online.target bluetooth.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/edgefocus
+Environment=EDGEFOCUS_DISABLE_LCD=1
+Environment=EDGEFOCUS_LCD_BACKEND=offscreen
+Environment=EDGEFOCUS_DISABLE_SOUND=1
+Environment=EDGEFOCUS_DISABLE_GIMBAL=1
+Environment=EDGEFOCUS_VISION_MODE=mock
+ExecStart=/opt/edgefocus/focus_app --log-level info --demo-http-port 18080
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

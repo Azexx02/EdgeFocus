@@ -1,0 +1,14 @@
+{
+  "decoder": "yolov8_pose",
+  "confidence_threshold": 0.65,
+  "iou_threshold": 0.50,
+  "keypoint_threshold": 0.35,
+  "outputs": {
+    "presence": "person box confidence",
+    "head_pose": "nose and shoulder geometry approximation",
+    "posture": "shoulder and head geometry approximation",
+    "eyes": "invalid in W04 first version",
+    "hands": "invalid in W04 first version",
+    "phone": "uncertain in W04 first version"
+  }
+}

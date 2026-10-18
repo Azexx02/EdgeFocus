@@ -1,0 +1,55 @@
+flowchart TB
+    subgraph PRESENTATION["Presentation"]
+        MAIN["MainActivity<br/>竖屏导航"]
+        PANEL["ControlPanelActivity<br/>横屏三页 Pager"]
+        UI["Compose Screens / ViewModels"]
+        OVERLAY["AlertOverlay / BlackScreenSaver"]
+        MAIN --> UI
+        PANEL --> UI
+        MAIN --> OVERLAY
+        PANEL --> OVERLAY
+    end
+
+    subgraph APPLICATION["Application Coordination"]
+        SESSION["AppSessionCoordinator"]
+        TIMER["TimerStateHolder"]
+        ALERT["AlertDeliveryCoordinator"]
+        PRECHECK["PrecheckController"]
+        CONNECTION["ConnectionSupervisor"]
+        MONITOR["AppMonitorService"]
+    end
+
+    subgraph DATA["Data / Protocol"]
+        CODEC["HostJsonCodec"]
+        SCHEDULER["BleRequestScheduler P0-P4"]
+        BLE["BleManager / BluetoothGatt"]
+        STORES["SessionStore / EventInbox / CheckpointStore"]
+        ROOM[("Room v8")]
+    end
+
+    HOST["EdgeFocus Host<br/>schema 2.1"]
+
+    UI --> SESSION
+    UI --> TIMER
+    UI --> PRECHECK
+    OVERLAY --> ALERT
+    SESSION --> TIMER
+    SESSION --> MONITOR
+    SESSION --> STORES
+    ALERT --> STORES
+    PRECHECK --> STORES
+    MONITOR --> STORES
+    STORES --> ROOM
+
+    SESSION --> CONNECTION
+    ALERT --> CONNECTION
+    PRECHECK --> CONNECTION
+    MONITOR --> CONNECTION
+    CONNECTION --> CODEC
+    CONNECTION --> BLE
+    TIMER --> BLE
+    ALERT --> BLE
+    PRECHECK --> BLE
+    MONITOR --> BLE
+    BLE --> SCHEDULER
+    BLE <--> HOST

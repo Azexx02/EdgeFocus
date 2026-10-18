@@ -1,0 +1,136 @@
+Pinmux settings per pin
+Format: pin (name): mux_owner|gpio_owner (strict) hog?
+pin 0 (PA0): UNCLAIMED
+pin 1 (PA1): UNCLAIMED
+pin 2 (PA2): UNCLAIMED
+pin 3 (PA3): UNCLAIMED
+pin 4 (PA4): device 400e0000.serial function af6 group PA4
+pin 5 (PA5): UNCLAIMED
+pin 6 (PA6): UNCLAIMED
+pin 7 (PA7): UNCLAIMED
+pin 8 (PA8): device 400e0000.serial function af8 group PA8
+pin 9 (PA9): UNCLAIMED
+pin 10 (PA10): UNCLAIMED
+pin 11 (PA11): UNCLAIMED
+pin 12 (PA12): UNCLAIMED
+pin 13 (PA13): UNCLAIMED
+pin 14 (PA14): UNCLAIMED
+pin 15 (PA15): UNCLAIMED
+pin 16 (PB0): UNCLAIMED
+pin 17 (PB1): GPIO GPIOB:529
+pin 18 (PB2): UNCLAIMED
+pin 19 (PB3): UNCLAIMED
+pin 20 (PB4): UNCLAIMED
+pin 21 (PB5): UNCLAIMED
+pin 22 (PB6): UNCLAIMED
+pin 23 (PB7): UNCLAIMED
+pin 24 (PB8): UNCLAIMED
+pin 25 (PB9): device 402d0000.can function af7 group PB9
+pin 26 (PB10): device 40270000.timer:pwm function af7 group PB10
+pin 27 (PB11): device 402d0000.can function af7 group PB11
+pin 28 (PB12): UNCLAIMED
+pin 29 (PB13): UNCLAIMED
+pin 30 (PB14): UNCLAIMED
+pin 31 (PB15): device 404e0000.adc function analog group PB15
+pin 32 (PC0): UNCLAIMED
+pin 33 (PC1): UNCLAIMED
+pin 34 (PC2): UNCLAIMED
+pin 35 (PC3): UNCLAIMED
+pin 36 (PC4): UNCLAIMED
+pin 37 (PC5): UNCLAIMED
+pin 38 (PC6): UNCLAIMED
+pin 39 (PC7): UNCLAIMED
+pin 40 (PC8): UNCLAIMED
+pin 41 (PC9): UNCLAIMED
+pin 42 (PC10): UNCLAIMED
+pin 43 (PC11): UNCLAIMED
+pin 44 (PC12): UNCLAIMED
+pin 45 (PC13): UNCLAIMED
+pin 48 (PD0): device 40370000.serial function af6 group PD0
+pin 49 (PD1): device 402f0000.can function af9 group PD1
+pin 50 (PD2): device 402f0000.can function af9 group PD2
+pin 51 (PD3): device 40370000.serial function af6 group PD3
+pin 52 (PD4): UNCLAIMED
+pin 53 (PD5): UNCLAIMED
+pin 54 (PD6): UNCLAIMED
+pin 55 (PD7): UNCLAIMED
+pin 56 (PD8): GPIO GPIOD:566
+pin 57 (PD9): UNCLAIMED
+pin 58 (PD10): device 40150000.i2c function af6 group PD10
+pin 59 (PD11): device 40150000.i2c function af6 group PD11
+pin 60 (PD12): UNCLAIMED
+pin 61 (PD13): UNCLAIMED
+pin 62 (PD14): UNCLAIMED
+pin 63 (PD15): UNCLAIMED
+pin 64 (PE0): device 48220000.mmc function analog group PE0
+pin 65 (PE1): device 48220000.mmc function analog group PE1
+pin 66 (PE2): device 48220000.mmc function analog group PE2
+pin 67 (PE3): device 48220000.mmc function analog group PE3
+pin 68 (PE4): device 48220000.mmc function analog group PE4
+pin 69 (PE5): device 48220000.mmc function analog group PE5
+pin 70 (PE6): device 48230000.mmc function analog group PE6
+pin 71 (PE7): device 48230000.mmc function analog group PE7
+pin 72 (PE8): device 48230000.mmc function analog group PE8
+pin 73 (PE9): device 48230000.mmc function analog group PE9
+pin 74 (PE10): device 48230000.mmc function analog group PE10
+pin 75 (PE11): device 48230000.mmc function analog group PE11
+pin 76 (PE12): device 48230000.mmc function analog group PE12
+pin 77 (PE13): device 48230000.mmc function analog group PE13
+pin 78 (PE14): device 48230000.mmc function analog group PE14
+pin 79 (PE15): device 48230000.mmc function analog group PE15
+pin 80 (PF0): UNCLAIMED
+pin 81 (PF1): UNCLAIMED
+pin 82 (PF2): UNCLAIMED
+pin 83 (PF3): UNCLAIMED
+pin 84 (PF4): UNCLAIMED
+pin 85 (PF5): UNCLAIMED
+pin 86 (PF6): UNCLAIMED
+pin 87 (PF7): UNCLAIMED
+pin 88 (PF8): UNCLAIMED
+pin 89 (PF9): UNCLAIMED
+pin 90 (PF10): UNCLAIMED
+pin 91 (PF11): UNCLAIMED
+pin 92 (PF12): UNCLAIMED
+pin 93 (PF13): UNCLAIMED
+pin 94 (PF14): UNCLAIMED
+pin 95 (PF15): UNCLAIMED
+pin 96 (PG0): UNCLAIMED
+pin 97 (PG1): device 40140000.i2c function af9 group PG1
+pin 98 (PG2): device 40140000.i2c function af9 group PG2
+pin 99 (PG3): UNCLAIMED
+pin 100 (PG4): UNCLAIMED
+pin 101 (PG5): UNCLAIMED
+pin 102 (PG6): UNCLAIMED
+pin 103 (PG7): UNCLAIMED
+pin 104 (PG8): UNCLAIMED
+pin 105 (PG9): UNCLAIMED
+pin 106 (PG10): UNCLAIMED
+pin 107 (PG11): UNCLAIMED
+pin 108 (PG12): UNCLAIMED
+pin 109 (PG13): UNCLAIMED
+pin 110 (PG14): device 40330000.serial function af6 group PG14
+pin 111 (PG15): device 40330000.serial function af6 group PG15
+pin 114 (PH2): UNCLAIMED
+pin 115 (PH3): device 40230000.audio-controller function analog group PH3
+pin 116 (PH4): GPIO GPIOH:626
+pin 117 (PH5): GPIO GPIOH:627
+pin 118 (PH6): UNCLAIMED
+pin 119 (PH7): device 40230000.audio-controller function analog group PH7
+pin 120 (PH8): UNCLAIMED
+pin 121 (PH9): UNCLAIMED
+pin 122 (PH10): device 40230000.audio-controller function analog group PH10
+pin 123 (PH11): UNCLAIMED
+pin 124 (PH12): UNCLAIMED
+pin 125 (PH13): UNCLAIMED
+pin 128 (PI0): UNCLAIMED
+pin 129 (PI1): UNCLAIMED
+pin 130 (PI2): UNCLAIMED
+pin 131 (PI3): UNCLAIMED
+pin 132 (PI4): UNCLAIMED
+pin 133 (PI5): UNCLAIMED
+pin 134 (PI6): UNCLAIMED
+pin 135 (PI7): UNCLAIMED
+pin 136 (PI8): GPIO GPIOI:644
+pin 137 (PI9): device 402e0000.can function af4 group PI9
+pin 138 (PI10): device 402e0000.can function af4 group PI10
+pin 139 (PI11): UNCLAIMED

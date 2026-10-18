@@ -1,0 +1,25 @@
+[Unit]
+Description=EdgeFocus A35 to M33 fan temperature bridge
+Requires=edgefocus-m33-fan.service
+After=edgefocus-m33-fan.service
+OnFailure=edgefocus-fan-fallback.service
+StartLimitIntervalSec=30
+StartLimitBurst=3
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/edgefocus-fan-bridge
+Restart=on-failure
+RestartSec=1
+User=root
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+RuntimeDirectory=edgefocus
+RuntimeDirectoryMode=0755
+RuntimeDirectoryPreserve=yes
+ReadWritePaths=/run/edgefocus
+
+[Install]
+WantedBy=multi-user.target

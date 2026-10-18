@@ -1,0 +1,17 @@
+stateDiagram-v2
+    direction LR
+    [*] --> IDLE
+    IDLE --> PRECHECK: 开始预检
+    PRECHECK --> FOCUSING: 确认开始
+    PRECHECK --> IDLE: 取消 / 超时
+    FOCUSING --> PAUSED: 暂停
+    PAUSED --> FOCUSING: 恢复
+    FOCUSING --> ENDING: 结束
+    PAUSED --> ENDING: 结束
+    ENDING --> IDLE: 提交报告 + 最终事件
+
+    note right of PRECHECK
+        只做视觉与云台准备
+        不计时 · 不入库 · 不提醒
+    end note
+

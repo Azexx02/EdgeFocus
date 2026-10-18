@@ -1,0 +1,38 @@
+flowchart TB
+    subgraph COMPUTE["四个计算域"]
+        direction LR
+        subgraph MP2["STM32MP257"]
+            direction LR
+            NPU["NPU<br/>YOLO11n Pose"]:::ai --> A35["A35 / Linux<br/>会话 · Fusion · BLE · 存储<br/>资源与安全编排"]:::host
+            A35 <-->|"RPMsg<br/>1 Hz 温度 / 状态"| M33["Cortex-M33<br/>100 ms 风扇控制<br/>PB10 PWM / PB11 tach"]:::realtime
+        end
+        A35 <-->|"UART4 115200"| G431["STM32G431<br/>对齐 · HOLD · FOC<br/>编码器 · 本地 Fault 停机"]:::realtime
+        A35 -->|"PD7 Enable"| G431
+        G431 -->|"PD6 Fault 低有效"| A35
+    end
+
+    CAM["摄像头"]:::device
+    POWER["STUSB4500<br/>外部供电事实"]:::device
+    FAN["风扇"]:::device
+    GIMBAL["双轴云台"]:::device
+
+    CAM --> NPU
+    POWER -->|"3 × 250 ms 去抖<br/>PRESENT→Home<br/>ABSENT/UNKNOWN→Go"| A35
+    M33 --> FAN
+    G431 --> GIMBAL
+
+    subgraph SAFETY["局部故障隔离｜单点异常不扩大为全系统停机"]
+        direction LR
+        FAN_SAFE["A35 失联 3 s<br/>风扇安全高转"]:::fault
+        GIMBAL_SAFE["G431 Fault 本地停机<br/>固定相机视觉继续"]:::fault
+        PROFILE_SAFE["Home / Go 只改变业务节拍<br/>安全环不降频"]:::fault
+        FAN_SAFE ~~~ GIMBAL_SAFE ~~~ PROFILE_SAFE
+    end
+
+    COMPUTE -.->|"安全策略"| SAFETY
+
+    classDef host fill:#E6FFFB,stroke:#08979C,color:#103B3D,stroke-width:1.5px;
+    classDef ai fill:#F3E8FF,stroke:#7C3AED,color:#2E1065,stroke-width:1.5px;
+    classDef realtime fill:#FFF3E0,stroke:#F97316,color:#431407,stroke-width:1.5px;
+    classDef device fill:#ECFDF3,stroke:#16A34A,color:#052E16,stroke-width:1.5px;
+    classDef fault fill:#FFF1F0,stroke:#DC2626,color:#450A0A,stroke-width:1.5px;

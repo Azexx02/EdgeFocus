@@ -1,0 +1,1033 @@
+#include "FrameBuffer.h"
+#include "CjkFont16.h"
+#include "app/Logger.h"
+#include <cstring>
+#include <cmath>
+#include <algorithm>
+#include <cctype>
+#include <cstdint>
+#include <fstream>
+#include <cstdlib>
+
+
+#ifdef __linux__
+#include <fcntl.h>
+#include <cmath>
+#include <unistd.h>
+#include <sys/mman.h>
+#include <sys/ioctl.h>
+#include <linux/fb.h>
+#include <linux/gpio.h>
+#include <linux/spi/spidev.h>
+#include <time.h>
+
+struct GpioLine {
+    int chip_fd = -1;
+    int handle_fd = -1;
+    char name[32] = {0};
+};
+
+namespace edgefocus {
+struct SpiLcdContext {
+    int spi_fd = -1;
+    GpioLine cs;
+    GpioLine pwr;
+    GpioLine dc;
+    GpioLine rst;
+    GpioLine bl;
+};
+} // namespace edgefocus
+
+static void msleep_fb(unsigned ms) {
+    struct timespec ts = { .tv_sec = (time_t)(ms / 1000), .tv_nsec = (long)(ms % 1000) * 1000000L };
+    nanosleep(&ts, nullptr);
+}
+
+static int starts_with_fb(const char *s, const char *prefix) {
+    return strncmp(s, prefix, strlen(prefix)) == 0;
+}
+
+static int gpio_find_line_fb(const char *name, char *chip_path, size_t chip_len, unsigned int *offset) {
+    for (int chip = 0; chip < 16; chip++) {
+        char path[64];
+        snprintf(path, sizeof(path), "/dev/gpiochip%d", chip);
+        int fd = open(path, O_RDONLY | O_CLOEXEC);
+        if (fd < 0) continue;
+
+        struct gpiochip_info chip_info;
+        if (ioctl(fd, GPIO_GET_CHIPINFO_IOCTL, &chip_info) < 0) {
+            close(fd);
+            continue;
+        }
+
+        for (uint32_t i = 0; i < chip_info.lines; i++) {
+            struct gpioline_info info;
+            memset(&info, 0, sizeof(info));
+            info.line_offset = i;
+            if (ioctl(fd, GPIO_GET_LINEINFO_IOCTL, &info) < 0) continue;
+            if (strcmp(info.name, name) == 0 || starts_with_fb(info.name, name)) {
+                snprintf(chip_path, chip_len, "%s", path);
+                *offset = i;
+                close(fd);
+                return 0;
+            }
+        }
+        close(fd);
+    }
+    return -1;
+}
+
+static GpioLine gpio_open_line_fb(const char *name, int output, int value) {
+    char chip_path[64];
+    unsigned int offset;
+    GpioLine line;
+    snprintf(line.name, sizeof(line.name), "%s", name);
+
+    if (gpio_find_line_fb(name, chip_path, sizeof(chip_path), &offset) < 0) return line;
+
+    line.chip_fd = open(chip_path, O_RDONLY | O_CLOEXEC);
+    if (line.chip_fd < 0) return line;
+
+    struct gpiohandle_request req;
+    memset(&req, 0, sizeof(req));
+    req.lineoffsets[0] = offset;
+    req.lines = 1;
+    req.flags = output ? GPIOHANDLE_REQUEST_OUTPUT : GPIOHANDLE_REQUEST_INPUT;
+    req.default_values[0] = value ? 1 : 0;
+    snprintf(req.consumer_label, sizeof(req.consumer_label), "focus-ui-%s", name);
+
+    if (ioctl(line.chip_fd, GPIO_GET_LINEHANDLE_IOCTL, &req) < 0) return line;
+    line.handle_fd = req.fd;
+    return line;
+}
+
+static void gpio_set_fb(GpioLine *line, int value) {
+    if (line->handle_fd < 0) return;
+    struct gpiohandle_data data;
+    memset(&data, 0, sizeof(data));
+    data.values[0] = value ? 1 : 0;
+    ioctl(line->handle_fd, GPIOHANDLE_SET_LINE_VALUES_IOCTL, &data);
+}
+
+static void gpio_close_fb(GpioLine *line) {
+    if (line->handle_fd >= 0) close(line->handle_fd);
+    if (line->chip_fd >= 0) close(line->chip_fd);
+    line->handle_fd = -1;
+    line->chip_fd = -1;
+}
+
+static int spi_open_config_fb(const char *path, int speed_hz, int spi_mode) {
+    int fd = open(path, O_RDWR | O_CLOEXEC);
+    if (fd < 0) return -1;
+    uint8_t mode = (uint8_t)spi_mode;
+    uint8_t bits = 8;
+    if (ioctl(fd, SPI_IOC_WR_MODE, &mode) < 0 ||
+        ioctl(fd, SPI_IOC_WR_BITS_PER_WORD, &bits) < 0 ||
+        ioctl(fd, SPI_IOC_WR_MAX_SPEED_HZ, &speed_hz) < 0) {
+        close(fd);
+        return -1;
+    }
+    return fd;
+}
+
+static int env_int_fb(const char *name, int fallback) {
+    const char *value = std::getenv(name);
+    if (!value || !*value) return fallback;
+    char *end = nullptr;
+    long parsed = std::strtol(value, &end, 0);
+    return end && *end == '\0' ? (int)parsed : fallback;
+}
+
+static bool env_bool_fb(const char *name, bool fallback = false) {
+    const char *value = std::getenv(name);
+    if (!value || !*value) return fallback;
+    char lower[16] = {0};
+    size_t i = 0;
+    for (; value[i] && i + 1 < sizeof(lower); ++i) {
+        lower[i] = (char)std::tolower((unsigned char)value[i]);
+    }
+    lower[i] = '\0';
+    return strcmp(lower, "1") == 0 || strcmp(lower, "true") == 0 ||
+           strcmp(lower, "yes") == 0 || strcmp(lower, "on") == 0 ||
+           strcmp(lower, "disable") == 0 || strcmp(lower, "disabled") == 0;
+}
+
+static bool env_string_eq_fb(const char *name, const char *expected) {
+    const char *value = std::getenv(name);
+    if (!value || !*value) return false;
+    while (*value && *expected) {
+        if (std::tolower((unsigned char)*value) != std::tolower((unsigned char)*expected)) {
+            return false;
+        }
+        ++value;
+        ++expected;
+    }
+    return *value == '\0' && *expected == '\0';
+}
+
+static void spi_write_all_fb(int fd, const uint8_t *buf, size_t len) {
+    while (len > 0) {
+        size_t chunk = len > 4096 ? 4096 : len;
+        ssize_t n = write(fd, buf, chunk);
+        if (n <= 0) break;
+        buf += n;
+        len -= (size_t)n;
+    }
+}
+
+static void lcd_cmd_fb(int spi_fd, GpioLine *cs, GpioLine *dc, uint8_t cmd) {
+    gpio_set_fb(cs, 0); gpio_set_fb(dc, 0);
+    spi_write_all_fb(spi_fd, &cmd, 1);
+    gpio_set_fb(cs, 1);
+}
+
+static void lcd_data_fb(int spi_fd, GpioLine *cs, GpioLine *dc, const uint8_t *data, size_t len) {
+    gpio_set_fb(cs, 0); gpio_set_fb(dc, 1);
+    spi_write_all_fb(spi_fd, data, len);
+    gpio_set_fb(cs, 1);
+}
+
+static void lcd_data8_fb(int spi_fd, GpioLine *cs, GpioLine *dc, uint8_t data) {
+    lcd_data_fb(spi_fd, cs, dc, &data, 1);
+}
+
+static void lcd_init_ili9341_fb(int spi_fd, GpioLine *cs, GpioLine *dc, GpioLine *rst) {
+    gpio_set_fb(rst, 1); msleep_fb(20);
+    gpio_set_fb(rst, 0); msleep_fb(80);
+    gpio_set_fb(rst, 1); msleep_fb(120);
+
+    lcd_cmd_fb(spi_fd, cs, dc, 0x01); msleep_fb(120);
+    lcd_cmd_fb(spi_fd, cs, dc, 0x3A); lcd_data8_fb(spi_fd, cs, dc, 0x55);
+    lcd_cmd_fb(spi_fd, cs, dc, 0x36);
+    lcd_data8_fb(spi_fd, cs, dc, (uint8_t)env_int_fb("EDGEFOCUS_LCD_MADCTL", 0x48));
+    lcd_cmd_fb(spi_fd, cs, dc, 0x11); msleep_fb(120);
+    lcd_cmd_fb(spi_fd, cs, dc, 0x29); msleep_fb(20);
+}
+
+static void lcd_set_window_fb(int spi_fd, GpioLine *cs, GpioLine *dc, int x0, int y0, int x1, int y1) {
+    uint8_t buf[4];
+    lcd_cmd_fb(spi_fd, cs, dc, 0x2A);
+    buf[0] = (uint8_t)(x0 >> 8); buf[1] = (uint8_t)x0;
+    buf[2] = (uint8_t)(x1 >> 8); buf[3] = (uint8_t)x1;
+    lcd_data_fb(spi_fd, cs, dc, buf, sizeof(buf));
+
+    lcd_cmd_fb(spi_fd, cs, dc, 0x2B);
+    buf[0] = (uint8_t)(y0 >> 8); buf[1] = (uint8_t)y0;
+    buf[2] = (uint8_t)(y1 >> 8); buf[3] = (uint8_t)y1;
+    lcd_data_fb(spi_fd, cs, dc, buf, sizeof(buf));
+    lcd_cmd_fb(spi_fd, cs, dc, 0x2C);
+}
+
+#else
+namespace edgefocus {
+struct SpiLcdContext {
+};
+} // namespace edgefocus
+#endif
+
+namespace {
+
+uint32_t nextUtf8Codepoint(const std::string& text, size_t& index) {
+    const auto remaining = text.size() - index;
+    const auto first = static_cast<unsigned char>(text[index++]);
+    if (first < 0x80) return first;
+
+    auto continuation = [&](size_t offset) -> unsigned char {
+        return static_cast<unsigned char>(text[index + offset]);
+    };
+    auto validContinuation = [](unsigned char value) {
+        return (value & 0xC0) == 0x80;
+    };
+
+    if ((first & 0xE0) == 0xC0 && remaining >= 2) {
+        const unsigned char b1 = continuation(0);
+        if (validContinuation(b1)) {
+            index += 1;
+            return ((first & 0x1F) << 6) | (b1 & 0x3F);
+        }
+    }
+    if ((first & 0xF0) == 0xE0 && remaining >= 3) {
+        const unsigned char b1 = continuation(0);
+        const unsigned char b2 = continuation(1);
+        if (validContinuation(b1) && validContinuation(b2)) {
+            index += 2;
+            return ((first & 0x0F) << 12) |
+                   ((b1 & 0x3F) << 6) |
+                   (b2 & 0x3F);
+        }
+    }
+    if ((first & 0xF8) == 0xF0 && remaining >= 4) {
+        const unsigned char b1 = continuation(0);
+        const unsigned char b2 = continuation(1);
+        const unsigned char b3 = continuation(2);
+        if (validContinuation(b1) && validContinuation(b2) && validContinuation(b3)) {
+            index += 3;
+            return ((first & 0x07) << 18) |
+                   ((b1 & 0x3F) << 12) |
+                   ((b2 & 0x3F) << 6) |
+                   (b3 & 0x3F);
+        }
+    }
+    return '?';
+}
+
+} // namespace
+
+
+namespace edgefocus {
+
+static constexpr float kPi = 3.14159265358979323846f;
+
+// ---------------------------------------------------------------------------
+// Built-in 8x16 bitmap font (ISO 8859-1, covers ASCII printable range)
+// Each character is 8 pixels wide, 16 pixels tall, stored as 16 bytes.
+// ---------------------------------------------------------------------------
+
+static const uint8_t FONT_8X16[][16] = {
+    // Space (0x20)
+    {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00},
+    // ! (0x21)
+    {0x00,0x00,0x18,0x3C,0x3C,0x3C,0x18,0x18,0x18,0x00,0x18,0x18,0x00,0x00,0x00,0x00},
+    // " (0x22)
+    {0x00,0x66,0x66,0x66,0x24,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00},
+    // # (0x23)
+    {0x00,0x00,0x00,0x6C,0x6C,0xFE,0x6C,0x6C,0xFE,0x6C,0x6C,0x00,0x00,0x00,0x00,0x00},
+    // $ (0x24)
+    {0x18,0x18,0x7C,0xC6,0xC2,0xC0,0x7C,0x06,0x06,0x86,0xC6,0x7C,0x18,0x18,0x00,0x00},
+    // % (0x25)
+    {0x00,0x00,0x00,0x00,0xC2,0xC6,0x0C,0x18,0x30,0x60,0xC6,0x86,0x00,0x00,0x00,0x00},
+    // & (0x26)
+    {0x00,0x00,0x38,0x6C,0x6C,0x38,0x76,0xDC,0xCC,0xCC,0xCC,0x76,0x00,0x00,0x00,0x00},
+    // ' (0x27)
+    {0x00,0x30,0x30,0x30,0x60,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00},
+    // ( (0x28)
+    {0x00,0x00,0x0C,0x18,0x30,0x30,0x30,0x30,0x30,0x30,0x18,0x0C,0x00,0x00,0x00,0x00},
+    // ) (0x29)
+    {0x00,0x00,0x30,0x18,0x0C,0x0C,0x0C,0x0C,0x0C,0x0C,0x18,0x30,0x00,0x00,0x00,0x00},
+    // * (0x2A)
+    {0x00,0x00,0x00,0x00,0x00,0x66,0x3C,0xFF,0x3C,0x66,0x00,0x00,0x00,0x00,0x00,0x00},
+    // + (0x2B)
+    {0x00,0x00,0x00,0x00,0x00,0x18,0x18,0x7E,0x18,0x18,0x00,0x00,0x00,0x00,0x00,0x00},
+    // , (0x2C)
+    {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x18,0x18,0x18,0x30,0x00,0x00,0x00},
+    // - (0x2D)
+    {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0xFE,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00},
+    // . (0x2E)
+    {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x18,0x18,0x00,0x00,0x00,0x00},
+    // / (0x2F)
+    {0x00,0x00,0x00,0x00,0x02,0x06,0x0C,0x18,0x30,0x60,0xC0,0x80,0x00,0x00,0x00,0x00},
+    // 0 (0x30)
+    {0x00,0x00,0x7C,0xC6,0xC6,0xCE,0xDE,0xF6,0xE6,0xC6,0xC6,0x7C,0x00,0x00,0x00,0x00},
+    // 1 (0x31)
+    {0x00,0x00,0x18,0x38,0x78,0x18,0x18,0x18,0x18,0x18,0x18,0x7E,0x00,0x00,0x00,0x00},
+    // 2 (0x32)
+    {0x00,0x00,0x7C,0xC6,0x06,0x0C,0x18,0x30,0x60,0xC0,0xC6,0xFE,0x00,0x00,0x00,0x00},
+    // 3 (0x33)
+    {0x00,0x00,0x7C,0xC6,0x06,0x06,0x3C,0x06,0x06,0x06,0xC6,0x7C,0x00,0x00,0x00,0x00},
+    // 4 (0x34)
+    {0x00,0x00,0x0C,0x1C,0x3C,0x6C,0xCC,0xFE,0x0C,0x0C,0x0C,0x1E,0x00,0x00,0x00,0x00},
+    // 5 (0x35)
+    {0x00,0x00,0xFE,0xC0,0xC0,0xC0,0xFC,0x06,0x06,0x06,0xC6,0x7C,0x00,0x00,0x00,0x00},
+    // 6 (0x36)
+    {0x00,0x00,0x38,0x60,0xC0,0xC0,0xFC,0xC6,0xC6,0xC6,0xC6,0x7C,0x00,0x00,0x00,0x00},
+    // 7 (0x37)
+    {0x00,0x00,0xFE,0xC6,0x06,0x06,0x0C,0x18,0x30,0x30,0x30,0x30,0x00,0x00,0x00,0x00},
+    // 8 (0x38)
+    {0x00,0x00,0x7C,0xC6,0xC6,0xC6,0x7C,0xC6,0xC6,0xC6,0xC6,0x7C,0x00,0x00,0x00,0x00},
+    // 9 (0x39)
+    {0x00,0x00,0x7C,0xC6,0xC6,0xC6,0x7E,0x06,0x06,0x06,0x0C,0x78,0x00,0x00,0x00,0x00},
+    // : (0x3A)
+    {0x00,0x00,0x00,0x00,0x18,0x18,0x00,0x00,0x00,0x18,0x18,0x00,0x00,0x00,0x00,0x00},
+    // ; (0x3B)
+    {0x00,0x00,0x00,0x00,0x18,0x18,0x00,0x00,0x00,0x18,0x18,0x30,0x00,0x00,0x00,0x00},
+    // < (0x3C)
+    {0x00,0x00,0x00,0x06,0x0C,0x18,0x30,0x60,0x30,0x18,0x0C,0x06,0x00,0x00,0x00,0x00},
+    // = (0x3D)
+    {0x00,0x00,0x00,0x00,0x00,0x7E,0x00,0x00,0x7E,0x00,0x00,0x00,0x00,0x00,0x00,0x00},
+    // > (0x3E)
+    {0x00,0x00,0x00,0x60,0x30,0x18,0x0C,0x06,0x0C,0x18,0x30,0x60,0x00,0x00,0x00,0x00},
+    // ? (0x3F)
+    {0x00,0x00,0x7C,0xC6,0xC6,0x0C,0x18,0x18,0x18,0x00,0x18,0x18,0x00,0x00,0x00,0x00},
+    // @ (0x40)
+    {0x00,0x00,0x00,0x7C,0xC6,0xC6,0xDE,0xDE,0xDE,0xDC,0xC0,0x7C,0x00,0x00,0x00,0x00},
+    // A (0x41)
+    {0x00,0x00,0x10,0x38,0x6C,0xC6,0xC6,0xFE,0xC6,0xC6,0xC6,0xC6,0x00,0x00,0x00,0x00},
+    // B (0x42)
+    {0x00,0x00,0xFC,0x66,0x66,0x66,0x7C,0x66,0x66,0x66,0x66,0xFC,0x00,0x00,0x00,0x00},
+    // C (0x43)
+    {0x00,0x00,0x3C,0x66,0xC2,0xC0,0xC0,0xC0,0xC0,0xC2,0x66,0x3C,0x00,0x00,0x00,0x00},
+    // D (0x44)
+    {0x00,0x00,0xF8,0x6C,0x66,0x66,0x66,0x66,0x66,0x66,0x6C,0xF8,0x00,0x00,0x00,0x00},
+    // E (0x45)
+    {0x00,0x00,0xFE,0x66,0x62,0x68,0x78,0x68,0x60,0x62,0x66,0xFE,0x00,0x00,0x00,0x00},
+    // F (0x46)
+    {0x00,0x00,0xFE,0x66,0x62,0x68,0x78,0x68,0x60,0x60,0x60,0xF0,0x00,0x00,0x00,0x00},
+    // G (0x47)
+    {0x00,0x00,0x3C,0x66,0xC2,0xC0,0xC0,0xDE,0xC6,0xC6,0x66,0x3A,0x00,0x00,0x00,0x00},
+    // H (0x48)
+    {0x00,0x00,0xC6,0xC6,0xC6,0xC6,0xFE,0xC6,0xC6,0xC6,0xC6,0xC6,0x00,0x00,0x00,0x00},
+    // I (0x49)
+    {0x00,0x00,0x3C,0x18,0x18,0x18,0x18,0x18,0x18,0x18,0x18,0x3C,0x00,0x00,0x00,0x00},
+    // J (0x4A)
+    {0x00,0x00,0x1E,0x0C,0x0C,0x0C,0x0C,0x0C,0xCC,0xCC,0xCC,0x78,0x00,0x00,0x00,0x00},
+    // K (0x4B)
+    {0x00,0x00,0xE6,0x66,0x66,0x6C,0x78,0x78,0x6C,0x66,0x66,0xE6,0x00,0x00,0x00,0x00},
+    // L (0x4C)
+    {0x00,0x00,0xF0,0x60,0x60,0x60,0x60,0x60,0x60,0x62,0x66,0xFE,0x00,0x00,0x00,0x00},
+    // M (0x4D)
+    {0x00,0x00,0xC6,0xEE,0xFE,0xFE,0xD6,0xC6,0xC6,0xC6,0xC6,0xC6,0x00,0x00,0x00,0x00},
+    // N (0x4E)
+    {0x00,0x00,0xC6,0xE6,0xF6,0xFE,0xDE,0xCE,0xC6,0xC6,0xC6,0xC6,0x00,0x00,0x00,0x00},
+    // O (0x4F)
+    {0x00,0x00,0x7C,0xC6,0xC6,0xC6,0xC6,0xC6,0xC6,0xC6,0xC6,0x7C,0x00,0x00,0x00,0x00},
+    // P (0x50)
+    {0x00,0x00,0xFC,0x66,0x66,0x66,0x7C,0x60,0x60,0x60,0x60,0xF0,0x00,0x00,0x00,0x00},
+    // Q (0x51)
+    {0x00,0x00,0x7C,0xC6,0xC6,0xC6,0xC6,0xC6,0xC6,0xD6,0xDE,0x7C,0x0C,0x0E,0x00,0x00},
+    // R (0x52)
+    {0x00,0x00,0xFC,0x66,0x66,0x66,0x7C,0x6C,0x66,0x66,0x66,0xE6,0x00,0x00,0x00,0x00},
+    // S (0x53)
+    {0x00,0x00,0x7C,0xC6,0xC6,0x60,0x38,0x0C,0x06,0xC6,0xC6,0x7C,0x00,0x00,0x00,0x00},
+    // T (0x54)
+    {0x00,0x00,0xFF,0xDB,0x99,0x18,0x18,0x18,0x18,0x18,0x18,0x3C,0x00,0x00,0x00,0x00},
+    // U (0x55)
+    {0x00,0x00,0xC6,0xC6,0xC6,0xC6,0xC6,0xC6,0xC6,0xC6,0xC6,0x7C,0x00,0x00,0x00,0x00},
+    // V (0x56)
+    {0x00,0x00,0xC6,0xC6,0xC6,0xC6,0xC6,0xC6,0xC6,0x6C,0x38,0x10,0x00,0x00,0x00,0x00},
+    // W (0x57)
+    {0x00,0x00,0xC6,0xC6,0xC6,0xC6,0xD6,0xD6,0xD6,0xFE,0xEE,0x6C,0x00,0x00,0x00,0x00},
+    // X (0x58)
+    {0x00,0x00,0xC6,0xC6,0xC6,0x6C,0x38,0x38,0x6C,0xC6,0xC6,0xC6,0x00,0x00,0x00,0x00},
+    // Y (0x59)
+    {0x00,0x00,0xC6,0xC6,0xC6,0xC6,0x6C,0x38,0x18,0x18,0x18,0x3C,0x00,0x00,0x00,0x00},
+    // Z (0x5A)
+    {0x00,0x00,0xFE,0xC6,0x86,0x0C,0x18,0x30,0x60,0xC2,0xC6,0xFE,0x00,0x00,0x00,0x00},
+    // [ (0x5B)
+    {0x00,0x00,0x3C,0x30,0x30,0x30,0x30,0x30,0x30,0x30,0x30,0x3C,0x00,0x00,0x00,0x00},
+    // \ (0x5C)
+    {0x00,0x00,0x00,0x80,0xC0,0xE0,0x70,0x38,0x1C,0x0E,0x06,0x02,0x00,0x00,0x00,0x00},
+    // ] (0x5D)
+    {0x00,0x00,0x3C,0x0C,0x0C,0x0C,0x0C,0x0C,0x0C,0x0C,0x0C,0x3C,0x00,0x00,0x00,0x00},
+    // ^ (0x5E)
+    {0x10,0x38,0x6C,0xC6,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00},
+    // _ (0x5F)
+    {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0xFF,0x00,0x00,0x00},
+    // ` (0x60)
+    {0x30,0x18,0x0C,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00},
+    // a (0x61)
+    {0x00,0x00,0x00,0x00,0x00,0x78,0x0C,0x7C,0xCC,0xCC,0xCC,0x76,0x00,0x00,0x00,0x00},
+    // b (0x62)
+    {0x00,0x00,0xE0,0x60,0x60,0x78,0x6C,0x66,0x66,0x66,0x66,0x7C,0x00,0x00,0x00,0x00},
+    // c (0x63)
+    {0x00,0x00,0x00,0x00,0x00,0x7C,0xC6,0xC0,0xC0,0xC0,0xC6,0x7C,0x00,0x00,0x00,0x00},
+    // d (0x64)
+    {0x00,0x00,0x1C,0x0C,0x0C,0x3C,0x6C,0xCC,0xCC,0xCC,0xCC,0x76,0x00,0x00,0x00,0x00},
+    // e (0x65)
+    {0x00,0x00,0x00,0x00,0x00,0x7C,0xC6,0xFE,0xC0,0xC0,0xC6,0x7C,0x00,0x00,0x00,0x00},
+    // f (0x66)
+    {0x00,0x00,0x1C,0x36,0x32,0x30,0x78,0x30,0x30,0x30,0x30,0x78,0x00,0x00,0x00,0x00},
+    // g (0x67)
+    {0x00,0x00,0x00,0x00,0x00,0x76,0xCC,0xCC,0xCC,0xCC,0xCC,0x7C,0x0C,0xCC,0x78,0x00},
+    // h (0x68)
+    {0x00,0x00,0xE0,0x60,0x60,0x6C,0x76,0x66,0x66,0x66,0x66,0xE6,0x00,0x00,0x00,0x00},
+    // i (0x69)
+    {0x00,0x00,0x18,0x18,0x00,0x38,0x18,0x18,0x18,0x18,0x18,0x3C,0x00,0x00,0x00,0x00},
+    // j (0x6A)
+    {0x00,0x00,0x06,0x06,0x00,0x0E,0x06,0x06,0x06,0x06,0x06,0x06,0x66,0x66,0x3C,0x00},
+    // k (0x6B)
+    {0x00,0x00,0xE0,0x60,0x60,0x66,0x6C,0x78,0x78,0x6C,0x66,0xE6,0x00,0x00,0x00,0x00},
+    // l (0x6C)
+    {0x00,0x00,0x38,0x18,0x18,0x18,0x18,0x18,0x18,0x18,0x18,0x3C,0x00,0x00,0x00,0x00},
+    // m (0x6D)
+    {0x00,0x00,0x00,0x00,0x00,0xEC,0xFE,0xD6,0xD6,0xD6,0xD6,0xC6,0x00,0x00,0x00,0x00},
+    // n (0x6E)
+    {0x00,0x00,0x00,0x00,0x00,0xDC,0x66,0x66,0x66,0x66,0x66,0x66,0x00,0x00,0x00,0x00},
+    // o (0x6F)
+    {0x00,0x00,0x00,0x00,0x00,0x7C,0xC6,0xC6,0xC6,0xC6,0xC6,0x7C,0x00,0x00,0x00,0x00},
+    // p (0x70)
+    {0x00,0x00,0x00,0x00,0x00,0xDC,0x66,0x66,0x66,0x66,0x66,0x7C,0x60,0x60,0xF0,0x00},
+    // q (0x71)
+    {0x00,0x00,0x00,0x00,0x00,0x76,0xCC,0xCC,0xCC,0xCC,0xCC,0x7C,0x0C,0x0C,0x1E,0x00},
+    // r (0x72)
+    {0x00,0x00,0x00,0x00,0x00,0xDC,0x76,0x66,0x60,0x60,0x60,0xF0,0x00,0x00,0x00,0x00},
+    // s (0x73)
+    {0x00,0x00,0x00,0x00,0x00,0x7C,0xC6,0x60,0x38,0x0C,0xC6,0x7C,0x00,0x00,0x00,0x00},
+    // t (0x74)
+    {0x00,0x00,0x10,0x30,0x30,0xFC,0x30,0x30,0x30,0x30,0x36,0x1C,0x00,0x00,0x00,0x00},
+    // u (0x75)
+    {0x00,0x00,0x00,0x00,0x00,0xCC,0xCC,0xCC,0xCC,0xCC,0xCC,0x76,0x00,0x00,0x00,0x00},
+    // v (0x76)
+    {0x00,0x00,0x00,0x00,0x00,0xC6,0xC6,0xC6,0xC6,0xC6,0x6C,0x38,0x00,0x00,0x00,0x00},
+    // w (0x77)
+    {0x00,0x00,0x00,0x00,0x00,0xC6,0xC6,0xD6,0xD6,0xD6,0xFE,0x6C,0x00,0x00,0x00,0x00},
+    // x (0x78)
+    {0x00,0x00,0x00,0x00,0x00,0xC6,0x6C,0x38,0x38,0x38,0x6C,0xC6,0x00,0x00,0x00,0x00},
+    // y (0x79)
+    {0x00,0x00,0x00,0x00,0x00,0xC6,0xC6,0xC6,0xC6,0xC6,0xC6,0x7E,0x06,0x0C,0xF8,0x00},
+    // z (0x7A)
+    {0x00,0x00,0x00,0x00,0x00,0xFE,0xCC,0x18,0x30,0x60,0xC6,0xFE,0x00,0x00,0x00,0x00},
+    // { (0x7B)
+    {0x00,0x00,0x0E,0x18,0x18,0x18,0x70,0x18,0x18,0x18,0x18,0x0E,0x00,0x00,0x00,0x00},
+    // | (0x7C)
+    {0x00,0x00,0x18,0x18,0x18,0x18,0x00,0x18,0x18,0x18,0x18,0x18,0x00,0x00,0x00,0x00},
+    // } (0x7D)
+    {0x00,0x00,0x70,0x18,0x18,0x18,0x0E,0x18,0x18,0x18,0x18,0x70,0x00,0x00,0x00,0x00},
+    // ~ (0x7E)
+    {0x00,0x00,0x76,0xDC,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00},
+};
+
+// ---------------------------------------------------------------------------
+// FrameBuffer implementation
+// ---------------------------------------------------------------------------
+
+
+bool FrameBuffer::initSpiLcd() {
+#ifdef __linux__
+    if (env_bool_fb("EDGEFOCUS_DISABLE_LCD") ||
+        env_string_eq_fb("EDGEFOCUS_LCD_BACKEND", "offscreen") ||
+        env_string_eq_fb("EDGEFOCUS_LCD_BACKEND", "fbdev")) {
+        LOGW("FrameBuffer", "SPI LCD disabled by environment; using fallback framebuffer/offscreen path");
+        return false;
+    }
+
+    int spi_speed = env_int_fb("EDGEFOCUS_LCD_SPI_SPEED", 4000000);
+    int madctl = env_int_fb("EDGEFOCUS_LCD_MADCTL", 0x48);
+    int invert_bl = env_int_fb("EDGEFOCUS_LCD_INVERT_BL", 0);
+    int fd = spi_open_config_fb("/dev/spidev0.0", spi_speed, 0);
+    if (fd < 0) return false;
+
+    spi_ctx_ = new SpiLcdContext();
+    spi_ctx_->spi_fd = fd;
+    // PB0 is controlled by the SPI controller cs-gpios, so leave cs uninitialized
+    spi_ctx_->cs.handle_fd = -1; 
+    spi_ctx_->pwr = gpio_open_line_fb("PB4", 1, 1);
+    spi_ctx_->rst = gpio_open_line_fb("PB1", 1, 1);
+    spi_ctx_->dc = gpio_open_line_fb("PF10", 1, 0);
+    spi_ctx_->bl = gpio_open_line_fb("PD8", 1, invert_bl ? 0 : 1);
+
+    if (spi_ctx_->pwr.handle_fd < 0 || spi_ctx_->rst.handle_fd < 0 ||
+        spi_ctx_->dc.handle_fd < 0 || spi_ctx_->bl.handle_fd < 0) {
+        LOGW("FrameBuffer", "SPI LCD GPIOs unavailable (PB4/PB1/PF10/PD8), falling back");
+        ::close(spi_ctx_->spi_fd);
+        gpio_close_fb(&spi_ctx_->pwr);
+        gpio_close_fb(&spi_ctx_->rst);
+        gpio_close_fb(&spi_ctx_->dc);
+        gpio_close_fb(&spi_ctx_->bl);
+        delete spi_ctx_;
+        spi_ctx_ = nullptr;
+        return false;
+    }
+
+    LOGI("FrameBuffer", "SPI LCD config speed=%dHz madctl=0x%02X backlight=%s",
+         spi_speed, madctl & 0xFF, invert_bl ? "active-low" : "active-high");
+    lcd_init_ili9341_fb(spi_ctx_->spi_fd, &spi_ctx_->cs, &spi_ctx_->dc, &spi_ctx_->rst);
+    return true;
+#else
+    return false;
+#endif
+}
+
+void FrameBuffer::flushSpiLcd() {
+#ifdef __linux__
+    if (!spi_ctx_ || spi_ctx_->spi_fd < 0 || width_ != 240 || height_ != 320) return;
+
+    int out_w = 240;
+    int out_h = 320;
+    uint8_t* line_buf = new uint8_t[out_w * 2];
+
+    lcd_set_window_fb(spi_ctx_->spi_fd, &spi_ctx_->cs, &spi_ctx_->dc, 0, 0, out_w - 1, out_h - 1);
+    gpio_set_fb(&spi_ctx_->cs, 0);
+    gpio_set_fb(&spi_ctx_->dc, 1);
+
+    for (int y = 0; y < out_h; y++) {
+        for (int x = 0; x < out_w; x++) {
+            uint32_t argb = buffer_[y * width_ + x];
+            uint8_t r = (argb >> 16) & 0xFF;
+            uint8_t g = (argb >> 8) & 0xFF;
+            uint8_t b = argb & 0xFF;
+            uint16_t rgb565 = ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+            line_buf[x * 2] = (uint8_t)(rgb565 >> 8);
+            line_buf[x * 2 + 1] = (uint8_t)(rgb565 & 0xFF);
+        }
+        spi_write_all_fb(spi_ctx_->spi_fd, line_buf, out_w * 2);
+    }
+
+    gpio_set_fb(&spi_ctx_->cs, 1);
+    delete[] line_buf;
+#endif
+}
+
+FrameBuffer::FrameBuffer() = default;
+
+FrameBuffer::~FrameBuffer() {
+    close();
+}
+
+bool FrameBuffer::init(const char* device) {
+#ifdef __linux__
+    width_ = 240;
+    height_ = 320;
+    buffer_.assign(width_ * height_, 0);
+    real_fb_ = false;
+
+    if (initSpiLcd()) {
+        LOGI("FrameBuffer", "Initialized userspace SPI LCD driver: %dx%d on /dev/spidev0.0", width_, height_);
+        return true;
+    }
+
+    buffer_.clear();
+    width_ = 0;
+    height_ = 0;
+
+    fb_fd_ = open(device, O_RDWR);
+    if (fb_fd_ >= 0) {
+        struct fb_var_screeninfo vinfo;
+        if (ioctl(fb_fd_, FBIOGET_VSCREENINFO, &vinfo) == 0) {
+            width_ = vinfo.xres;
+            height_ = vinfo.yres;
+            bpp_ = vinfo.bits_per_pixel;
+            stride_ = vinfo.xres * (bpp_ / 8);
+            fb_size_ = stride_ * height_;
+
+            fb_mem_ = static_cast<uint8_t*>(
+                mmap(nullptr, fb_size_, PROT_READ | PROT_WRITE, MAP_SHARED, fb_fd_, 0));
+            if (fb_mem_ != MAP_FAILED) {
+                real_fb_ = true;
+                LOGI("FrameBuffer", "Opened %s: %dx%d @ %d bpp", device, width_, height_, bpp_);
+                return true;
+            }
+            LOGW("FrameBuffer", "mmap failed, falling back to offscreen");
+            ::close(fb_fd_);
+            fb_fd_ = -1;
+        }
+    }
+#endif
+
+    // Fallback: offscreen buffer (240x320 for SPI LCD)
+    width_ = 240;
+    height_ = 320;
+    buffer_.resize(width_ * height_, 0);
+    real_fb_ = false;
+    LOGI("FrameBuffer", "Using offscreen buffer: %dx%d", width_, height_);
+    return true;
+}
+
+bool FrameBuffer::initOffscreen(int width, int height) {
+    close();
+    width_ = width;
+    height_ = height;
+    stride_ = width_ * 4;
+    bpp_ = 32;
+    real_fb_ = false;
+    buffer_.assign(width_ * height_, 0);
+    LOGI("FrameBuffer", "Using forced offscreen buffer: %dx%d", width_, height_);
+    return true;
+}
+
+void FrameBuffer::close() {
+#ifdef __linux__
+    if (fb_mem_ && fb_mem_ != MAP_FAILED) {
+        munmap(fb_mem_, fb_size_);
+        fb_mem_ = nullptr;
+    }
+    if (fb_fd_ >= 0) {
+        ::close(fb_fd_);
+        fb_fd_ = -1;
+    }
+#endif
+
+    if (spi_ctx_) {
+#ifdef __linux__
+        if (spi_ctx_->spi_fd >= 0) ::close(spi_ctx_->spi_fd);
+        gpio_close_fb(&spi_ctx_->cs);
+        gpio_close_fb(&spi_ctx_->pwr);
+        gpio_close_fb(&spi_ctx_->dc);
+        gpio_close_fb(&spi_ctx_->rst);
+        gpio_close_fb(&spi_ctx_->bl);
+#endif
+        delete spi_ctx_;
+        spi_ctx_ = nullptr;
+    }
+    buffer_.clear();
+    width_ = height_ = 0;
+}
+
+void FrameBuffer::setPixel(int x, int y, const Color& color) {
+    if (x < 0 || x >= width_ || y < 0 || y >= height_) return;
+    if (color.a == 0) return;
+
+    uint32_t pixel = color.toARGB();
+
+    if (real_fb_) {
+#ifdef __linux__
+        size_t offset = y * stride_ + x * (bpp_ / 8);
+        if (bpp_ == 32) {
+            *reinterpret_cast<uint32_t*>(fb_mem_ + offset) = pixel;
+        }
+#endif
+    } else {
+        buffer_[y * width_ + x] = pixel;
+    }
+}
+
+void FrameBuffer::clear(const Color& bg) {
+    uint32_t pixel = bg.toARGB();
+    if (real_fb_) {
+#ifdef __linux__
+        for (int y = 0; y < height_; y++) {
+            for (int x = 0; x < width_; x++) {
+                size_t offset = y * stride_ + x * (bpp_ / 8);
+                *reinterpret_cast<uint32_t*>(fb_mem_ + offset) = pixel;
+            }
+        }
+#endif
+    } else {
+        std::fill(buffer_.begin(), buffer_.end(), pixel);
+    }
+}
+
+void FrameBuffer::fillRect(const Rect& rect, const Color& color) {
+    int x0 = std::max(0, rect.x);
+    int y0 = std::max(0, rect.y);
+    int x1 = std::min(width_, rect.x + rect.w);
+    int y1 = std::min(height_, rect.y + rect.h);
+
+    for (int y = y0; y < y1; y++) {
+        for (int x = x0; x < x1; x++) {
+            setPixel(x, y, color);
+        }
+    }
+}
+
+void FrameBuffer::drawRect(const Rect& rect, const Color& color, int thickness) {
+    // Top
+    fillRect(Rect(rect.x, rect.y, rect.w, thickness), color);
+    // Bottom
+    fillRect(Rect(rect.x, rect.y + rect.h - thickness, rect.w, thickness), color);
+    // Left
+    fillRect(Rect(rect.x, rect.y, thickness, rect.h), color);
+    // Right
+    fillRect(Rect(rect.x + rect.w - thickness, rect.y, thickness, rect.h), color);
+}
+
+void FrameBuffer::fillCircle(int cx, int cy, int radius, const Color& color) {
+    for (int y = -radius; y <= radius; y++) {
+        for (int x = -radius; x <= radius; x++) {
+            if (x * x + y * y <= radius * radius) {
+                setPixel(cx + x, cy + y, color);
+            }
+        }
+    }
+}
+
+void FrameBuffer::drawRing(int cx, int cy, int radius, int thickness, const Color& color) {
+    drawArc(cx, cy, radius, thickness, 0.0f, 2.0f * kPi, color);
+}
+
+void FrameBuffer::drawArc(int cx, int cy, int radius, int thickness, float start_angle, float end_angle, const Color& color) {
+    int r_outer = radius + thickness / 2;
+    int r_inner = radius - thickness / 2;
+    int r_outer_sq = r_outer * r_outer;
+    int r_inner_sq = r_inner * r_inner;
+
+    // Normalize angles to [0, 2PI]
+    while (start_angle < 0) start_angle += 2.0f * kPi;
+    while (end_angle < 0) end_angle += 2.0f * kPi;
+    while (start_angle > 2.0f * kPi) start_angle -= 2.0f * kPi;
+    while (end_angle > 2.0f * kPi) end_angle -= 2.0f * kPi;
+    
+    bool inverted = start_angle > end_angle;
+
+    for (int y = -r_outer; y <= r_outer; y++) {
+        for (int x = -r_outer; x <= r_outer; x++) {
+            int d_sq = x * x + y * y;
+            if (d_sq >= r_inner_sq && d_sq <= r_outer_sq) {
+                // Calculate angle of this pixel
+                float angle = std::atan2((float)y, (float)x);
+                if (angle < 0) angle += 2.0f * kPi;
+
+                bool in_arc = false;
+                if (!inverted) {
+                    if (angle >= start_angle && angle <= end_angle) in_arc = true;
+                } else {
+                    if (angle >= start_angle || angle <= end_angle) in_arc = true;
+                }
+
+                if (in_arc) {
+                    setPixel(cx + x, cy + y, color);
+                }
+            }
+        }
+    }
+}
+
+void FrameBuffer::drawLine(int x0, int y0, int x1, int y1, const Color& color, int thickness) {
+    // Bresenham's line algorithm
+    int dx = abs(x1 - x0);
+    int dy = abs(y1 - y0);
+    int sx = x0 < x1 ? 1 : -1;
+    int sy = y0 < y1 ? 1 : -1;
+    int err = dx - dy;
+
+    int half_t = thickness / 2;
+    while (true) {
+        for (int t = -half_t; t <= half_t; t++) {
+            setPixel(x0 + t, y0, color);
+            setPixel(x0, y0 + t, color);
+        }
+
+        if (x0 == x1 && y0 == y1) break;
+        int e2 = 2 * err;
+        if (e2 > -dy) { err -= dy; x0 += sx; }
+        if (e2 < dx)  { err += dx; y0 += sy; }
+    }
+}
+
+void FrameBuffer::fillRoundRect(const Rect& rect, int radius, const Color& color) {
+    int r = std::min(radius, std::min(rect.w, rect.h) / 2);
+    int r2 = r * r;
+
+    for (int y = 0; y < rect.h; y++) {
+        for (int x = 0; x < rect.w; x++) {
+            // Check corners
+            bool in_corner = false;
+            int dx, dy;
+
+            if (x < r && y < r) {
+                dx = r - x; dy = r - y;
+                in_corner = true;
+            } else if (x >= rect.w - r && y < r) {
+                dx = x - (rect.w - r - 1); dy = r - y;
+                in_corner = true;
+            } else if (x < r && y >= rect.h - r) {
+                dx = r - x; dy = y - (rect.h - r - 1);
+                in_corner = true;
+            } else if (x >= rect.w - r && y >= rect.h - r) {
+                dx = x - (rect.w - r - 1); dy = y - (rect.h - r - 1);
+                in_corner = true;
+            }
+
+            if (!in_corner || (dx * dx + dy * dy <= r2)) {
+                setPixel(rect.x + x, rect.y + y, color);
+            }
+        }
+    }
+}
+
+void FrameBuffer::drawRoundRect(const Rect& rect, int radius, const Color& color, int thickness) {
+    int r = std::min(radius, std::min(rect.w, rect.h) / 2);
+
+    // Top and bottom horizontal lines
+    fillRect(Rect(rect.x + r, rect.y, rect.w - 2 * r, thickness), color);
+    fillRect(Rect(rect.x + r, rect.y + rect.h - thickness, rect.w - 2 * r, thickness), color);
+
+    // Left and right vertical lines
+    fillRect(Rect(rect.x, rect.y + r, thickness, rect.h - 2 * r), color);
+    fillRect(Rect(rect.x + rect.w - thickness, rect.y + r, thickness, rect.h - 2 * r), color);
+
+    // Corner arcs (simplified as pixel-level draws)
+    int r2 = r * r;
+    for (int dy = 0; dy < r; dy++) {
+        for (int dx = 0; dx < r; dx++) {
+            int dist = dx * dx + dy * dy;
+            if (dist <= r2 && dist > (r - thickness) * (r - thickness)) {
+                // Top-left corner
+                setPixel(rect.x + r - dx, rect.y + r - dy, color);
+                // Top-right corner
+                setPixel(rect.x + rect.w - r + dx, rect.y + r - dy, color);
+                // Bottom-left corner
+                setPixel(rect.x + r - dx, rect.y + rect.h - r + dy, color);
+                // Bottom-right corner
+                setPixel(rect.x + rect.w - r + dx, rect.y + rect.h - r + dy, color);
+            }
+        }
+    }
+}
+
+void FrameBuffer::drawText(int x, int y, const std::string& text, const Color& color,
+                           const FontInfo& font) {
+    int cx = x;
+    for (size_t index = 0; index < text.size();) {
+        const uint32_t codepoint = nextUtf8Codepoint(text, index);
+        if (const auto* glyph = findCjkGlyph16(codepoint)) {
+            for (int row = 0; row < 16; row++) {
+                const uint16_t bits = glyph->rows[row];
+                for (int col = 0; col < 16; col++) {
+                    if (bits & (0x8000 >> col)) {
+                        for (int sy = 0; sy < font.scale; sy++) {
+                            for (int sx = 0; sx < font.scale; sx++) {
+                                setPixel(cx + col * font.scale + sx,
+                                         y + row * font.scale + sy,
+                                         color);
+                            }
+                        }
+                    }
+                }
+            }
+            cx += 16 * font.scale;
+        } else {
+            drawChar(cx, y, codepoint <= 0xFF ? static_cast<char>(codepoint) : '?',
+                     color, font);
+            cx += font.char_width * font.scale;
+        }
+    }
+}
+
+int FrameBuffer::textWidth(const std::string& text, const FontInfo& font) const {
+    int width = 0;
+    for (size_t index = 0; index < text.size();) {
+        const uint32_t codepoint = nextUtf8Codepoint(text, index);
+        width += findCjkGlyph16(codepoint) ? 16 * font.scale
+                                           : font.char_width * font.scale;
+    }
+    return width;
+}
+
+int FrameBuffer::textHeight(const FontInfo& font) const {
+    return font.char_height * font.scale;
+}
+
+void FrameBuffer::drawTextCentered(const Rect& area, const std::string& text,
+                                   const Color& color, const FontInfo& font) {
+    int tw = textWidth(text, font);
+    int th = textHeight(font);
+    int x = area.x + (area.w - tw) / 2;
+    int y = area.y + (area.h - th) / 2;
+    drawText(x, y, text, color, font);
+}
+
+void FrameBuffer::drawProgressBar(const Rect& rect, float progress,
+                                  const Color& fg, const Color& bg, const Color& border) {
+    // Background
+    fillRoundRect(rect, 4, bg);
+
+    // Fill
+    int fill_w = static_cast<int>(rect.w * std::clamp(progress, 0.0f, 1.0f));
+    if (fill_w > 0) {
+        fillRoundRect(Rect(rect.x, rect.y, fill_w, rect.h), 4, fg);
+    }
+
+    // Border
+    drawRect(rect, border, 1);
+}
+
+void FrameBuffer::flush() {
+    if (real_fb_) {
+#ifdef __linux__
+        // fbdev is memory-mapped, already written directly
+#endif
+    } else if (spi_ctx_) {
+        flushSpiLcd();
+    }
+}
+
+bool FrameBuffer::savePNG(const std::string& path) const {
+    if (real_fb_ || buffer_.empty()) return false;
+
+    // Write a minimal PPM file (easier than PNG, no library needed)
+    std::string ppm_path = path;
+    if (ppm_path.find(".png") != std::string::npos) {
+        ppm_path.replace(ppm_path.find(".png"), 4, ".ppm");
+    }
+
+    std::ofstream ofs(ppm_path, std::ios::binary);
+    if (!ofs) return false;
+
+    ofs << "P6\n" << width_ << " " << height_ << "\n255\n";
+    for (int y = 0; y < height_; y++) {
+        for (int x = 0; x < width_; x++) {
+            uint32_t pixel = buffer_[y * width_ + x];
+            uint8_t r = (pixel >> 16) & 0xFF;
+            uint8_t g = (pixel >> 8) & 0xFF;
+            uint8_t b = pixel & 0xFF;
+            ofs.put(static_cast<char>(r));
+            ofs.put(static_cast<char>(g));
+            ofs.put(static_cast<char>(b));
+        }
+    }
+
+    LOGI("FrameBuffer", "Saved screenshot to %s", ppm_path.c_str());
+    return true;
+}
+
+void FrameBuffer::drawIconGear(int cx, int cy, int radius, const Color& color) {
+    fillCircle(cx, cy, radius, color);
+    fillCircle(cx, cy, radius - 2, Color::bgDark());
+    for (int a = 0; a < 360; a += 45) {
+        float rad = a * 3.14159f / 180.0f;
+        int x1 = cx + static_cast<int>(std::cos(rad) * radius);
+        int y1 = cy + static_cast<int>(std::sin(rad) * radius);
+        int x2 = cx + static_cast<int>(std::cos(rad) * (radius + 3));
+        int y2 = cy + static_cast<int>(std::sin(rad) * (radius + 3));
+        drawLine(x1, y1, x2, y2, color, 2);
+    }
+    fillCircle(cx, cy, radius - 4, color);
+    fillCircle(cx, cy, radius - 6, Color::bgDark());
+}
+
+void FrameBuffer::drawIconBattery(int x, int y, int w, int h, int percent, const Color& color) {
+    drawRect(Rect(x, y, w - 2, h), color, 2);
+    fillRect(Rect(x + w - 2, y + h/4, 2, h/2), color);
+    int fill_w = (w - 6) * std::clamp(percent, 0, 100) / 100;
+    if (fill_w > 0) fillRect(Rect(x + 3, y + 3, fill_w, h - 6), color);
+}
+
+void FrameBuffer::drawIconTrophy(int cx, int cy, int size, const Color& color) {
+    int w = size;
+    int h = size;
+    fillRoundRect(Rect(cx - w/2, cy - h/2, w, h/2), 4, color);
+    fillRect(Rect(cx - 2, cy, 4, h/3), color);
+    fillRect(Rect(cx - w/3, cy + h/3, w*2/3, 4), color);
+    drawRect(Rect(cx - w/2 - 4, cy - h/2 + 2, 6, h/3), color, 2);
+    drawRect(Rect(cx + w/2 - 2, cy - h/2 + 2, 6, h/3), color, 2);
+}
+
+void FrameBuffer::drawIconWarning(int cx, int cy, int size, const Color& color) {
+    int h = size;
+    int w = size + 4;
+    for (int y = 0; y < h; y++) {
+        int span = (y * w) / h;
+        drawLine(cx - span/2, cy - h/2 + y, cx + span/2, cy - h/2 + y, color, 1);
+    }
+    fillRect(Rect(cx - 1, cy - h/4 + 2, 2, h/3), Color::bgDark());
+    fillRect(Rect(cx - 1, cy + h/6 + 2, 2, 2), Color::bgDark());
+}
+
+void FrameBuffer::drawIconClock(int cx, int cy, int radius, const Color& color) {
+    fillCircle(cx, cy, radius, color);
+    fillCircle(cx, cy, radius - 2, Color::bgCard());
+    drawLine(cx, cy, cx, cy - radius/2 + 2, color, 2);
+    drawLine(cx, cy, cx + radius/3, cy + radius/3, color, 2);
+}
+
+void FrameBuffer::drawIconMuted(int cx, int cy, int size, const Color& color) {
+    int w = size/2;
+    int h = size;
+    fillRoundRect(Rect(cx - w/2, cy - h/2, w, h*3/4), 4, color);
+    fillRect(Rect(cx - w, cy + h/4, w*2, 2), color);
+    drawLine(cx - size/2, cy - size/2, cx + size/2, cy + size/2, Color::error(), 2);
+}
+
+void FrameBuffer::drawChar(int x, int y, char c, const Color& color, const FontInfo& font) {
+    if (c < 0x20 || c > 0x7E) c = '?';  // fallback for non-printable
+
+    const uint8_t* glyph = FONT_8X16[c - 0x20];
+
+    for (int row = 0; row < font.char_height; row++) {
+        uint8_t bits = (row < 16) ? glyph[row] : 0;
+        for (int col = 0; col < font.char_width; col++) {
+            if (bits & (0x80 >> col)) {
+                // Scale up
+                for (int sy = 0; sy < font.scale; sy++) {
+                    for (int sx = 0; sx < font.scale; sx++) {
+                        setPixel(x + col * font.scale + sx,
+                                 y + row * font.scale + sy,
+                                 color);
+                    }
+                }
+            }
+        }
+    }
+}
+
+} // namespace edgefocus

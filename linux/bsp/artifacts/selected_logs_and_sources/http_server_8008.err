@@ -1,0 +1,3 @@
+192.168.10.171 - - [05/Jul/2026 17:15:05] "GET /focus_app_deploy_min.zip HTTP/1.1" 200 -
+192.168.10.171 - - [05/Jul/2026 17:20:46] "GET /focus_app_npu HTTP/1.1" 200 -
+192.168.10.171 - - [05/Jul/2026 17:28:54] "GET /npu_smoke HTTP/1.1" 200 -

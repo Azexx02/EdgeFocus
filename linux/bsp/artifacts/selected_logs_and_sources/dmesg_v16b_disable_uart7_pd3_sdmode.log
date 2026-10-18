@@ -1,0 +1,5 @@
+[   93.784003] RTW: Turbo EDCA =0x5ea42b
+[   95.799931] RTW: rtw_set_ps_mode(wlan0) Enter 802.11 power save - WIFI-TRAFFIC_IDLE
+[   95.803100] RTW: rtl8723d_set_FwPwrMode_cmd(): FW LPS mode = 2, SmartPS=2
+[   95.810104] RTW: Turbo EDCA =0xa42b
+[  102.263869] RTW: rtl8723d_fill_default_txdesc(wlan0): SP Packet(0x0806) rate=0x4 SeqNum = 73

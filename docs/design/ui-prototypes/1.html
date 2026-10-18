@@ -1,0 +1,519 @@
+<!DOCTYPE html><html class="light" lang="en" style=""><head></head><body class="min-h-screen flex flex-col items-center overflow-x-hidden selection:bg-primary-container selection:text-on-primary-container"><svg class="inline-defs-container" aria-hidden="true" style="position:absolute;width:0;height:0;overflow:hidden"></svg>
+<meta charset="utf-8">
+<meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" name="viewport">
+<title>EdgeFocus - Home</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet">
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "on-primary": "#ffffff",
+                        "surface": "#fbf9f7",
+                        "error": "#ba1a1a",
+                        "on-secondary-fixed-variant": "#005313",
+                        "primary": "#b51925",
+                        "tertiary-fixed-dim": "#ffb954",
+                        "on-error": "#ffffff",
+                        "on-background": "#1b1c1b",
+                        "background": "#fbf9f7",
+                        "inverse-on-surface": "#f2f0ee",
+                        "primary-fixed": "#ffdad7",
+                        "tertiary-fixed": "#ffddb4",
+                        "surface-dim": "#dbdad8",
+                        "on-secondary": "#ffffff",
+                        "on-secondary-fixed": "#002204",
+                        "on-tertiary-container": "#fffbff",
+                        "secondary": "#006e1c",
+                        "on-error-container": "#93000a",
+                        "surface-container-lowest": "#ffffff",
+                        "on-surface": "#1b1c1b",
+                        "surface-container-highest": "#e4e2e0",
+                        "surface-variant": "#e4e2e0",
+                        "tertiary": "#805200",
+                        "surface-tint": "#b81d27",
+                        "on-primary-container": "#fffbff",
+                        "surface-bright": "#fbf9f7",
+                        "secondary-fixed-dim": "#78dc77",
+                        "on-tertiary": "#ffffff",
+                        "primary-fixed-dim": "#ffb3ae",
+                        "tertiary-container": "#a06900",
+                        "surface-container-low": "#f5f3f1",
+                        "secondary-fixed": "#94f990",
+                        "surface-container": "#efedec",
+                        "surface-container-high": "#e9e8e6",
+                        "secondary-container": "#91f78e",
+                        "primary-container": "#d8363a",
+                        "on-primary-fixed": "#410004",
+                        "error-container": "#ffdad6",
+                        "inverse-surface": "#30302f",
+                        "on-secondary-container": "#00731e",
+                        "on-primary-fixed-variant": "#930015",
+                        "outline-variant": "#e3bebb",
+                        "outline": "#8f706d",
+                        "on-surface-variant": "#5b403e",
+                        "inverse-primary": "#ffb3ae",
+                        "on-tertiary-fixed-variant": "#633f00",
+                        "on-tertiary-fixed": "#291800",
+                        "brand-red": "#ff5252"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "1rem",
+                        "lg": "2rem",
+                        "xl": "3rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "unit": "8px",
+                        "section-margin": "40px",
+                        "container-padding-desktop": "48px",
+                        "card-padding": "24px",
+                        "container-padding-mobile": "24px",
+                        "stack-gap": "16px"
+                    },
+                    "fontFamily": {
+                        "display-timer": ["Quicksand"],
+                        "body-md": ["Quicksand"],
+                        "headline-lg-mobile": ["Quicksand"],
+                        "headline-md": ["Quicksand"],
+                        "body-lg": ["Quicksand"],
+                        "label-sm": ["Quicksand"],
+                        "headline-lg": ["Quicksand"],
+                        "label-md": ["Quicksand"]
+                    },
+                    "fontSize": {
+                        "display-timer": ["80px", { "lineHeight": "90px", "letterSpacing": "-0.02em", "fontWeight": "700" }],
+                        "body-md": ["16px", { "lineHeight": "24px", "fontWeight": "500" }],
+                        "headline-lg-mobile": ["28px", { "lineHeight": "36px", "fontWeight": "700" }],
+                        "headline-md": ["24px", { "lineHeight": "32px", "fontWeight": "600" }],
+                        "body-lg": ["18px", { "lineHeight": "28px", "fontWeight": "500" }],
+                        "label-sm": ["12px", { "lineHeight": "16px", "fontWeight": "700" }],
+                        "headline-lg": ["32px", { "lineHeight": "40px", "fontWeight": "700" }],
+                        "label-md": ["14px", { "lineHeight": "20px", "letterSpacing": "0.01em", "fontWeight": "600" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        body {
+            background-color: theme('colors.background');
+            color: theme('colors.on-background');
+            -webkit-tap-highlight-color: transparent;
+            touch-action: pan-y; /* Prevent touch interference with slider */
+        }
+
+        .ambient-shadow-1 {
+            box-shadow: 0 8px 30px rgba(181, 25, 37, 0.08);
+        }
+
+        .ambient-shadow-2 {
+            box-shadow: 0 16px 40px rgba(255, 82, 82, 0.15); /* Updated to brand red */
+        }
+
+        .btn-tactile {
+            box-shadow: 0 4px 0 theme('colors.on-primary-fixed-variant'), 0 8px 16px rgba(181, 25, 37, 0.2);
+            position: relative;
+            transition: all 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+            border-top: 2px solid rgba(255, 255, 255, 0.3);
+        }
+
+        .btn-tactile:active {
+            box-shadow: 0 0 0 theme('colors.on-primary-fixed-variant'), 0 2px 4px rgba(181, 25, 37, 0.2);
+            transform: translateY(4px) scale(0.98);
+            border-top-color: transparent;
+        }
+
+        .btn-tomato {
+            background: linear-gradient(135deg, #ff5e5e 0%, #ff3333 40%, #b80000 100%);
+            box-shadow: 0 4px 0 #800000, 0 8px 16px rgba(184, 0, 0, 0.3);
+            border-top: 2px solid rgba(255, 255, 255, 0.4);
+        }
+        
+        .btn-tomato:active {
+            box-shadow: 0 0 0 #800000, 0 2px 4px rgba(184, 0, 0, 0.3);
+            transform: translateY(4px) scale(0.98);
+            border-top-color: transparent;
+        }
+        
+        .btn-tactile.btn-pause {
+             box-shadow: 0 4px 0 theme('colors.surface-dim'), 0 8px 16px rgba(0, 0, 0, 0.1);
+        }
+        
+        .btn-tactile.btn-pause:active {
+            box-shadow: 0 0 0 theme('colors.surface-dim'), 0 2px 4px rgba(0, 0, 0, 0.1);
+            transform: translateY(4px) scale(0.98);
+        }
+
+        /* Animations */
+        @keyframes fade-in-up {
+            0% { opacity: 0; transform: translateY(20px); }
+            100% { opacity: 1; transform: translateY(0); }
+        }
+
+        .animate-fade-in-up {
+            animation: fade-in-up 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+        }
+
+        .delay-100 { animation-delay: 100ms; }
+        .delay-200 { animation-delay: 200ms; }
+        .delay-300 { animation-delay: 300ms; }
+
+        @keyframes pulse-ring {
+            0% { box-shadow: 0 0 0 0 rgba(255, 82, 82, 0.4); }
+            70% { box-shadow: 0 0 0 20px rgba(255, 82, 82, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(255, 82, 82, 0); }
+        }
+
+        .timer-running {
+            animation: pulse-ring 3s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+        }
+        
+        /* Slider specifics */
+        #slider-handle {
+            cursor: grab;
+            transition: transform 0.1s;
+            transform-origin: center;
+        }
+        #slider-handle:active {
+            cursor: grabbing;
+            transform: scale(1.3);
+        }
+        .handle-active {
+            transform: scale(1.3) !important;
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+
+
+<!-- TopAppBar -->
+<header class="w-full top-0 sticky bg-background dark:bg-background z-50 animate-fade-in-up">
+<div class="flex justify-between items-center px-container-padding-mobile py-4 max-w-[600px] mx-auto">
+<button aria-label="Timer" class="w-[48px] h-[48px] flex items-center justify-center rounded-full hover:bg-surface-variant transition-colors text-primary dark:text-primary-fixed-dim">
+
+</button>
+<div class="flex flex-col items-center">
+<h1 class="font-headline-lg-mobile text-headline-lg-mobile text-primary tracking-tight cursor-pointer hover:opacity-80 transition-opacity" id="app-title" title="Long press for control panel">EdgeFocus</h1>
+<div class="flex items-center gap-2 mt-1">
+<span class="w-2 h-2 rounded-full bg-secondary"></span>
+<span class="font-label-sm text-label-sm text-on-surface-variant uppercase tracking-wider">EdgeFocus Mode</span>
+</div>
+</div>
+<button aria-label="Bluetooth Status" class="w-[48px] h-[48px] flex items-center justify-center rounded-full hover:bg-surface-variant transition-colors text-primary dark:text-primary-fixed-dim">
+<span class="material-symbols-outlined" style="font-size: 28px;">bluetooth_connected</span>
+</button>
+</div>
+</header>
+<!-- Main Content Canvas -->
+<main class="flex-grow w-full max-w-[600px] flex flex-col items-center justify-center px-container-padding-mobile py-8 pb-32">
+<!-- Context Tag -->
+<div class="bg-surface-variant rounded-full px-4 py-2 mb-8 animate-fade-in-up delay-100 flex items-center gap-2">
+<span class="material-symbols-outlined text-on-surface-variant" style="font-size: 18px;">work</span>
+<span class="font-label-md text-label-md text-on-surface-variant">Work Session</span>
+</div>
+<!-- Interactive Timer Circle -->
+<div class="relative w-[300px] h-[300px] md:w-[360px] md:h-[360px] rounded-full bg-surface ambient-shadow-2 flex items-center justify-center animate-fade-in-up delay-200 mb-12 select-none" id="timer-container">
+<!-- Interactive SVG Track -->
+<svg class="absolute inset-0 w-full h-full transform -rotate-90 overflow-visible" id="slider-svg" viewBox="0 0 100 100">
+<defs>
+<linearGradient id="tomato-grad" x1="0%" x2="100%" y1="0%" y2="100%"><stop offset="0%" stop-color="#b51925"></stop><stop offset="100%" stop-color="#930015"></stop></linearGradient>
+<filter height="140%" id="tomato-3d" width="140%" x="-20%" y="-20%">
+<feGaussianBlur in="SourceAlpha" result="blur" stdDeviation="1.5"></feGaussianBlur>
+<feOffset dx="-1" dy="-1" in="blur" result="offset1"></feOffset>
+<feComposite in="SourceAlpha" in2="offset1" k2="-1" k3="1" operator="arithmetic" result="highlightMask"></feComposite>
+<feFlood flood-color="white" flood-opacity="0.8" result="highlight"></feFlood>
+<feComposite in="highlight" in2="highlightMask" operator="in" result="highlightEffect"></feComposite>
+<feOffset dx="1" dy="1" in="blur" result="offset2"></feOffset>
+<feComposite in="SourceAlpha" in2="offset2" k2="-1" k3="1" operator="arithmetic" result="shadowMask"></feComposite>
+<feFlood flood-color="#4a0000" flood-opacity="0.8" result="shadow"></feFlood>
+<feComposite in="shadow" in2="shadowMask" operator="in" result="shadowEffect"></feComposite>
+<feMerge>
+<feMergeNode in="SourceGraphic"></feMergeNode>
+<feMergeNode in="highlightEffect"></feMergeNode>
+<feMergeNode in="shadowEffect"></feMergeNode>
+</feMerge>
+</filter>
+</defs>
+<circle class="opacity-30" cx="50" cy="50" fill="transparent" r="46" stroke="var(--color-surface-variant)" stroke-width="6"></circle>
+<!-- Active Progress -->
+<circle cx="50" cy="50" fill="transparent" filter="url(#tomato-3d)" id="progress-ring" r="46" stroke="currentColor" stroke-dasharray="289" stroke-dashoffset="0" stroke-linecap="round" stroke-width="6" class="text-primary" style="stroke-dasharray: 289.027; stroke-dashoffset: 228.813;"></circle>
+<!-- Slider Handle -->
+<g id="slider-handle">
+<circle cx="61.905676074715956" cy="94.43258800929715" fill="#ffffff" filter="url(#tomato-3d)" r="5" stroke="url(#tomato-grad)" stroke-width="2.5"></circle>
+</g>
+</svg>
+<div class="relative z-10 flex flex-col items-center pointer-events-none">
+<span class="font-display-timer text-display-timer text-on-surface select-none transition-transform duration-300" id="time-display">25:00</span>
+<span class="font-label-md text-label-md text-on-surface-variant mt-2 transition-opacity" id="time-hint" style="opacity: 1;">Drag to set time</span>
+</div>
+</div>
+<!-- Controls -->
+<div class="w-full flex flex-col items-center gap-stack-gap animate-fade-in-up delay-300">
+<p class="font-body-md text-body-md text-on-surface-variant mb-4">
+                Sessions Completed: <span class="font-bold text-primary">3</span>
+</p>
+<!-- Primary Action Area -->
+<div class="w-full flex items-center justify-center gap-4 transition-all duration-300" id="action-area">
+<!-- Start Button (Initial State) -->
+<button class="w-full max-w-[280px] h-[64px] text-white rounded-full font-headline-md text-headline-md btn-tactile flex items-center justify-center gap-3 bg-primary" id="btn-start">
+<span class="material-symbols-outlined" style="font-variation-settings: &quot;FILL&quot; 1;">play_arrow</span>
+                    Start Focus
+                </button>
+<!-- Active State Controls (Hidden Initially) -->
+<div class="w-full max-w-[320px] flex justify-between gap-4 hidden" id="active-controls">
+<button class="flex-grow h-[64px] bg-surface-variant text-on-surface rounded-full font-headline-md text-headline-md btn-tactile btn-pause flex items-center justify-center gap-2" id="btn-pause"><span class="material-symbols-outlined" style="font-variation-settings: &quot;FILL&quot; 1;">pause</span> Pause</button>
+<button class="w-[64px] h-[64px] bg-surface text-error border-2 border-surface-variant rounded-full flex items-center justify-center hover:bg-error-container transition-colors" id="btn-stop">
+<span class="material-symbols-outlined" style="font-variation-settings: &quot;FILL&quot; 1;">stop</span>
+</button>
+</div>
+</div>
+</div>
+</main>
+<!-- BottomNavBar -->
+<nav class="fixed bottom-0 left-0 w-full z-50 flex justify-around items-center px-4 pb-8 pt-4 bg-surface dark:bg-surface-container shadow-[0_-8px_30px_rgb(186,26,26,0.08)] rounded-t-xl md:hidden animate-fade-in-up delay-300">
+<!-- Home (Active) -->
+<a class="flex flex-col items-center justify-center dark:bg-primary-container text-on-primary-container rounded-full px-6 py-2 transition-all duration-300 ease-[cubic-bezier(0.34,1.56,0.64,1)] scale-110 bg-primary text-white" href="#">
+<span class="material-symbols-outlined" style="font-variation-settings: &quot;FILL&quot; 1;">home</span>
+<span class="font-label-sm text-label-sm mt-1">Home</span>
+</a>
+<!-- Data (Inactive) -->
+<a class="flex flex-col items-center justify-center text-on-surface-variant dark:text-on-surface-variant px-4 py-2 hover:bg-surface-container-highest dark:hover:bg-surface-variant rounded-full transition-colors" href="#">
+<span class="material-symbols-outlined">bar_chart</span>
+<span class="font-label-sm text-label-sm mt-1">Data</span>
+</a>
+<!-- Settings (Inactive) -->
+<a class="flex flex-col items-center justify-center text-on-surface-variant dark:text-on-surface-variant px-4 py-2 hover:bg-surface-container-highest dark:hover:bg-surface-variant rounded-full transition-colors" href="#">
+<span class="material-symbols-outlined">settings</span>
+<span class="font-label-sm text-label-sm mt-1">Settings</span>
+</a>
+</nav>
+<script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const btnStart = document.getElementById('btn-start');
+            const btnPause = document.getElementById('btn-pause');
+            const btnStop = document.getElementById('btn-stop');
+            const activeControls = document.getElementById('active-controls');
+            
+            const timerContainer = document.getElementById('timer-container');
+            const timeDisplay = document.getElementById('time-display');
+            const timeHint = document.getElementById('time-hint');
+            
+            const progressRing = document.getElementById('progress-ring');
+            const sliderSvg = document.getElementById('slider-svg');
+            const sliderHandle = document.getElementById('slider-handle');
+            
+            let state = 'IDLE'; // IDLE, RUNNING, PAUSED
+            let totalTime = 25 * 60; // Max time user set
+            let timeLeft = totalTime;
+            let timerInterval;
+            
+            const MAX_MINUTES = 120;
+            const CIRCUMFERENCE = 2 * Math.PI * 46; // r=46
+            progressRing.style.strokeDasharray = CIRCUMFERENCE;
+
+            // --- Slider Logic ---
+            let isDragging = false;
+
+            function getAngle(e) {
+                const rect = sliderSvg.getBoundingClientRect();
+                // Get center of SVG
+                const centerX = rect.left + rect.width / 2;
+                const centerY = rect.top + rect.height / 2;
+                
+                // Get pointer position (mouse or touch)
+                let clientX = e.clientX;
+                let clientY = e.clientY;
+                if(e.touches && e.touches.length > 0) {
+                    clientX = e.touches[0].clientX;
+                    clientY = e.touches[0].clientY;
+                }
+
+                // Calculate angle in radians
+                // We subtract Math.PI/2 because our SVG is rotated -90deg in CSS to start at 12 o'clock
+                // But the mouse coordinates are based on screen, so standard atan2 works from 3 o'clock.
+                // Because we rotated the SVG container visually, we need to calculate based on screen coords
+                // and then map that 0 to 360 starting from top.
+                
+                let dx = clientX - centerX;
+                let dy = clientY - centerY;
+                
+                // Angle from top (12 o'clock) clockwise
+                let theta = Math.atan2(dy, dx) + Math.PI / 2;
+                if (theta < 0) theta += 2 * Math.PI;
+                
+                return theta;
+            }
+
+            function updateSliderFromAngle(theta) {
+                // Map 0 - 2PI to 1 - MAX_MINUTES
+                let fraction = theta / (2 * Math.PI);
+                let minutes = Math.max(1, Math.round(fraction * MAX_MINUTES));
+                
+                if (minutes > MAX_MINUTES) minutes = MAX_MINUTES;
+                
+                // Snap to nearest 5 minutes if over 10 to make it easier to set common times
+                if (minutes > 10 && !isDragging) {
+                     // don't snap while dragging for smoother feel, snap on release if desired.
+                     // Actually, let's just let it be exact.
+                }
+
+                totalTime = minutes * 60;
+                timeLeft = totalTime;
+                updateDisplay();
+                updateVisuals();
+            }
+
+            function handlePointerStart(e) {
+                if (state !== 'IDLE') return; // Only allow setting time when idle
+                isDragging = true;
+                sliderHandle.classList.add('handle-active');
+                updateSliderFromEvent(e);
+                e.preventDefault(); // Prevent scrolling while dragging
+            }
+
+            function handlePointerMove(e) {
+                if (!isDragging) return;
+                updateSliderFromEvent(e);
+                e.preventDefault();
+            }
+
+            function handlePointerEnd(e) {
+                isDragging = false;
+                sliderHandle.classList.remove('handle-active');
+            }
+
+            function updateSliderFromEvent(e) {
+                const theta = getAngle(e);
+                updateSliderFromAngle(theta);
+            }
+
+            // Attach slider events
+            sliderSvg.addEventListener('mousedown', handlePointerStart);
+            document.addEventListener('mousemove', handlePointerMove);
+            document.addEventListener('mouseup', handlePointerEnd);
+            
+            sliderSvg.addEventListener('touchstart', handlePointerStart, {passive: false});
+            document.addEventListener('touchmove', handlePointerMove, {passive: false});
+            document.addEventListener('touchend', handlePointerEnd);
+
+            // --- Timer Logic ---
+            function updateDisplay() {
+                const minutes = Math.floor(timeLeft / 60);
+                const seconds = timeLeft % 60;
+                timeDisplay.textContent = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+            }
+
+            function updateVisuals() {
+                // Update Progress Ring
+                let fraction = timeLeft / (MAX_MINUTES * 60);
+                // The fraction of the total possible 120 mins
+                // Actually, standard pomodoro usually fills the ring for the *set* time.
+                // Let's make the ring fill represent the fraction of the *set* time remaining, 
+                // BUT the handle position represents the absolute time out of 120 mins.
+                // For a cooler effect: The ring shows fraction of 120 mins so the handle stays attached to the end of the stroke!
+                
+                const offset = CIRCUMFERENCE - (fraction * CIRCUMFERENCE);
+                progressRing.style.strokeDashoffset = offset;
+
+                // Update Handle Position
+                // SVG internal coordinates: center is 50,50, radius is 46
+                // Angle needs to match the visual rotation
+                let angle = fraction * 2 * Math.PI; 
+                let cx = 50 + 46 * Math.sin(angle);
+                let cy = 50 - 46 * Math.cos(angle);
+                
+                // The SVG is rotated -90deg in CSS, so internal 0deg (top) is visually top.
+                // In standard SVG math without rotation, sin/cos from top:
+                // x = cx + r * cos(theta), y = cy + r * sin(theta)
+                // Since container is rotated -90, (96, 50) which is 3 o'clock internally becomes 12 o'clock visually.
+                // Wait, if it's rotated -90, 3 o'clock goes to 12.
+                // Internal coords: 
+                // theta = fraction * 2PI. 
+                // x = 50 + 46 * Math.cos(theta);
+                // y = 50 + 46 * Math.sin(theta);
+                
+                let internalTheta = angle; 
+                let handleX = 50 + 46 * Math.cos(internalTheta);
+                let handleY = 50 + 46 * Math.sin(internalTheta);
+                
+                const handleCircle = sliderHandle.querySelector('circle');
+                handleCircle.setAttribute('cx', handleX);
+                handleCircle.setAttribute('cy', handleY);
+            }
+
+            function setInitialVisuals() {
+                // 25 mins out of 120
+                updateVisuals();
+            }
+
+            function startTimer() {
+                if (timeLeft <= 0) return;
+                state = 'RUNNING';
+                timerContainer.classList.add('timer-running');
+                
+                // UI changes
+                btnStart.classList.add('hidden');
+                activeControls.classList.remove('hidden');
+                btnPause.innerHTML = `<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">pause</span> Pause`;
+                timeHint.style.opacity = '0';
+                
+                timerInterval = setInterval(() => {
+                    if (timeLeft > 0) {
+                        timeLeft--;
+                        updateDisplay();
+                        updateVisuals();
+                    } else {
+                        stopTimer();
+                        alert('Session Complete!');
+                    }
+                }, 1000);
+            }
+
+            function pauseTimer() {
+                if (state === 'RUNNING') {
+                    state = 'PAUSED';
+                    clearInterval(timerInterval);
+                    timerContainer.classList.remove('timer-running');
+                    btnPause.innerHTML = `<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">play_arrow</span> Resume`;
+                } else if (state === 'PAUSED') {
+                    startTimer();
+                }
+            }
+
+            function stopTimer() {
+                state = 'IDLE';
+                clearInterval(timerInterval);
+                timerContainer.classList.remove('timer-running');
+                
+                btnStart.classList.remove('hidden');
+                activeControls.classList.add('hidden');
+                timeHint.style.opacity = '1';
+                
+                timeLeft = totalTime;
+                updateDisplay();
+                updateVisuals();
+            }
+
+            btnStart.addEventListener('click', startTimer);
+            btnPause.addEventListener('click', pauseTimer);
+            btnStop.addEventListener('click', stopTimer);
+
+            // Init
+            updateDisplay();
+            setInitialVisuals();
+        });
+    </script>
+
+
+
+
+
+
+</body></html>

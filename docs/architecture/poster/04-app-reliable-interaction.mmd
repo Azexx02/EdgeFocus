@@ -1,0 +1,55 @@
+flowchart TB
+    subgraph PRESENTATION["Presentation｜Jetpack Compose"]
+        MAIN["竖屏主界面<br/>计时 · 历史 · 设置"]:::external
+        PANEL["横屏控制面板<br/>PRECHECK · 会话 · 设备"]:::external
+        OVERLAY["AlertOverlay<br/>弹窗 · 闪烁 · 前台呈现"]:::external
+    end
+
+    subgraph APPLICATION["Application｜进程级协调"]
+        SESSION["SessionCoordinator<br/>唯一会话 owner"]:::host
+        CONNECTION["ConnectionSupervisor<br/>协商 · READY · 恢复"]:::host
+        ALERT["AlertCoordinator<br/>TTL · 去重 · ACK"]:::host
+        PRECHECK["PrecheckController<br/>云台 sequence"]:::host
+        MONITOR["AppMonitorService<br/>PhoneFact 心跳"]:::host
+    end
+
+    subgraph DATA["Data / Protocol"]
+        CODEC["HostJsonCodec<br/>schema 2.1"]:::host
+        QUEUE["BLE Scheduler<br/>P0–P4 优先级"]:::host
+        BLE["BleManager<br/>GATT · MTU · 分片"]:::host
+        ROOM["Room v8<br/>Session · Inbox · Outbox · Checkpoint"]:::device
+    end
+
+    HOST["EdgeFocus 主机<br/>会话权威 / GATT Server"]:::realtime
+
+    MAIN --> SESSION
+    PANEL --> SESSION
+    PANEL --> PRECHECK
+    OVERLAY <--> ALERT
+    SESSION --> CONNECTION
+    ALERT --> CONNECTION
+    PRECHECK --> CONNECTION
+    MONITOR --> CONNECTION
+    SESSION --> ROOM
+    ALERT --> ROOM
+    PRECHECK --> ROOM
+    MONITOR --> ROOM
+    CONNECTION --> CODEC --> QUEUE --> BLE
+    BLE <--> HOST
+
+    subgraph RELIABLE["可靠交互短链"]
+        direction LR
+        READY["hello / get_state<br/>恢复权威状态"]:::host
+        IDS["command_id / event_id<br/>幂等 + 去重"]:::host
+        ACK["RECEIVED → PRESENTED<br/>→ HANDLED"]:::host
+        RECOVER["断连：Outbox 保留<br/>重连：缺失事件补发"]:::fault
+        READY --> IDS --> ACK --> RECOVER
+    end
+
+    BLE -.-> RELIABLE
+
+    classDef external fill:#E8F3FF,stroke:#1677FF,color:#10243E,stroke-width:1.5px;
+    classDef host fill:#E6FFFB,stroke:#08979C,color:#103B3D,stroke-width:1.5px;
+    classDef realtime fill:#FFF3E0,stroke:#F97316,color:#431407,stroke-width:1.5px;
+    classDef device fill:#ECFDF3,stroke:#16A34A,color:#052E16,stroke-width:1.5px;
+    classDef fault fill:#FFF1F0,stroke:#DC2626,color:#450A0A,stroke-width:1.5px;

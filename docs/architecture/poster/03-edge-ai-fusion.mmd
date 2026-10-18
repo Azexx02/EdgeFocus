@@ -1,0 +1,40 @@
+flowchart TB
+    subgraph VISION["视觉证据｜不猜测手机类别"]
+        direction TB
+        subgraph PERCEPTION["姿态感知"]
+            direction LR
+            FRAME["CameraFrame"]:::device --> QUAL["质量 / 新鲜度门"]:::host
+            QUAL --> POSE["YOLO11n Pose<br/>17 keypoints"]:::ai
+        end
+        subgraph TEMPORAL["主体与时序"]
+            direction LR
+            SUBJECT["主体连续性<br/>58-d 归一化特征"]:::ai
+            SUBJECT --> PRES["Presence<br/>在场 / 不在 / 未知"]:::ai
+            SUBJECT --> WINDOW["2 s / 16 steps"]:::ai
+            WINDOW --> PRONE["Temporal Prone MLP<br/>趴下概率"]:::ai
+        end
+        PERCEPTION -->|"Pose 输出"| TEMPORAL
+    end
+
+    subgraph PHONE_BRANCH["手机事实｜类别只来自 App"]
+        direction TB
+        PHONE["PhoneFact<br/>未使用 · 学习 · 娱乐 · 其他"]:::external
+        PHONE --> FRESH["2 s 心跳<br/>5 s freshness TTL"]:::host
+        LEARNING["学习类只弱化 Phone 分支<br/>不覆盖视觉证据"]:::host -.-> FRESH
+    end
+
+    VISION -->|"Presence + Prone"| FUSION["FusionCore<br/>适用性 · 连续性 · 原因"]:::ai
+    PHONE_BRANCH -->|"fresh PhoneFact"| FUSION
+    FUSION --> EPISODE["Episode<br/>持续时间与等级跃迁"]:::ai
+    EPISODE --> OUT["DistractionAssessment"]:::host
+    OUT --> L0["Level 0<br/>正常 / 专注"]:::host
+    OUT --> L13["Level 1–3<br/>三级分神"]:::fault
+    OUT --> EVIDENCE["reasons + 近 30 s<br/>证据时间线"]:::external
+
+    GUARD["NOT_PRESENT / UNKNOWN<br/>不产生分神提醒"]:::host -.-> OUT
+
+    classDef external fill:#E8F3FF,stroke:#1677FF,color:#10243E,stroke-width:1.5px;
+    classDef host fill:#E6FFFB,stroke:#08979C,color:#103B3D,stroke-width:1.5px;
+    classDef ai fill:#F3E8FF,stroke:#7C3AED,color:#2E1065,stroke-width:1.5px;
+    classDef device fill:#ECFDF3,stroke:#16A34A,color:#052E16,stroke-width:1.5px;
+    classDef fault fill:#FFF1F0,stroke:#DC2626,color:#450A0A,stroke-width:1.5px;

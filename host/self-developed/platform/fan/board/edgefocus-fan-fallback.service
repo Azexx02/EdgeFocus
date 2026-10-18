@@ -1,0 +1,10 @@
+[Unit]
+Description=EdgeFocus Linux emergency fan actuator
+Conflicts=edgefocus-m33-fan.service edgefocus-fan-bridge.service
+After=edgefocus-m33-fan.service edgefocus-fan-bridge.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/edgefocus-fan-transition fallback
+TimeoutStartSec=20

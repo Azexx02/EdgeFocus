@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "tach_pulses_per_revolution": 2,
+  "rated_max_rpm": 6000,
+  "measured_max_rpm_at_2ppr": 5760,
+  "normal_duty_ns": 34000,
+  "measured_normal_rpm_range": [660, 1140],
+  "ppr_candidate_full_speed_rpm": {"1": 11520, "2": 5760, "4": 2880},
+  "linux_fallback_rpm_range": [5880, 6120],
+  "hardware_default_tach_pulses_30s": 7009,
+  "hardware_default_self_rotation_verified": true,
+  "physical_power_cycle_verified": true,
+  "physical_power_cycle_boot_id": 567037614887,
+  "waveform_verified": false,
+  "waveform_verification_waived": true,
+  "autostart_approved": true,
+  "approval_basis": "User explicitly waived the external waveform capture on 2026-07-15 after monotonic RPM, rated-speed, fallback, hardware-default-spin, and physical-power-cycle validation.",
+  "note": "The waiver preserves that no oscilloscope or logic-analyzer capture was made; it must not be represented as measured waveform evidence."
+}

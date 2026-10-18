@@ -1,0 +1,316 @@
+<!DOCTYPE html><html class="light" lang="en" style=""><head>
+<meta charset="utf-8">
+<meta content="width=device-width, initial-scale=1.0" name="viewport">
+<title>EdgeFocus - Hardware Settings</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet">
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                    "secondary": "#006e1c",
+                    "surface-variant": "#e4e2e0",
+                    "surface": "#fbf9f7",
+                    "on-surface-variant": "#5b403e",
+                    "on-primary-container": "#fffbff",
+                    "error": "#ba1a1a",
+                    "surface-tint": "#b81d27",
+                    "tertiary-fixed": "#ffddb4",
+                    "outline-variant": "#e3bebb",
+                    "background": "#fbf9f7",
+                    "on-tertiary-fixed-variant": "#633f00",
+                    "error-container": "#ffdad6",
+                    "surface-container-lowest": "#ffffff",
+                    "on-surface": "#1b1c1b",
+                    "secondary-container": "#91f78e",
+                    "surface-bright": "#fbf9f7",
+                    "on-tertiary-container": "#fffbff",
+                    "on-secondary": "#ffffff",
+                    "secondary-fixed-dim": "#78dc77",
+                    "primary-container": "#d8363a",
+                    "surface-dim": "#dbdad8",
+                    "primary-fixed-dim": "#ffb3ae",
+                    "on-secondary-container": "#00731e",
+                    "surface-container-high": "#e9e8e6",
+                    "on-background": "#1b1c1b",
+                    "on-tertiary-fixed": "#291800",
+                    "primary-fixed": "#ffdad7",
+                    "primary": "#b51925",
+                    "tertiary": "#805200",
+                    "on-tertiary": "#ffffff",
+                    "on-primary-fixed-variant": "#930015",
+                    "inverse-primary": "#ffb3ae",
+                    "surface-container-low": "#f5f3f1",
+                    "tertiary-fixed-dim": "#ffb954",
+                    "on-primary-fixed": "#410004",
+                    "on-secondary-fixed-variant": "#005313",
+                    "on-error-container": "#93000a",
+                    "surface-container": "#efedec",
+                    "on-primary": "#ffffff",
+                    "on-error": "#ffffff",
+                    "on-secondary-fixed": "#002204",
+                    "tertiary-container": "#a06900",
+                    "inverse-on-surface": "#f2f0ee",
+                    "surface-container-highest": "#e4e2e0",
+                    "secondary-fixed": "#94f990",
+                    "outline": "#8f706d",
+                    "inverse-surface": "#30302f"
+            },
+            "borderRadius": {
+                    "DEFAULT": "1rem",
+                    "lg": "2rem",
+                    "xl": "3rem",
+                    "full": "9999px"
+            },
+            "spacing": {
+                    "container-padding-desktop": "48px",
+                    "section-margin": "40px",
+                    "container-padding-mobile": "24px",
+                    "unit": "8px",
+                    "card-padding": "24px",
+                    "stack-gap": "16px"
+            },
+            "fontFamily": {
+                    "label-sm": ["Quicksand"],
+                    "label-md": ["Quicksand"],
+                    "headline-lg": ["Quicksand"],
+                    "headline-lg-mobile": ["Quicksand"],
+                    "body-md": ["Quicksand"],
+                    "headline-md": ["Quicksand"],
+                    "body-lg": ["Quicksand"],
+                    "display-timer": ["Quicksand"]
+            },
+            "fontSize": {
+                    "label-sm": ["12px", { "lineHeight": "16px", "fontWeight": "700" }],
+                    "label-md": ["14px", { "lineHeight": "20px", "letterSpacing": "0.01em", "fontWeight": "600" }],
+                    "headline-lg": ["32px", { "lineHeight": "40px", "fontWeight": "700" }],
+                    "headline-lg-mobile": ["28px", { "lineHeight": "36px", "fontWeight": "700" }],
+                    "body-md": ["16px", { "lineHeight": "24px", "fontWeight": "500" }],
+                    "headline-md": ["24px", { "lineHeight": "32px", "fontWeight": "600" }],
+                    "body-lg": ["18px", { "lineHeight": "28px", "fontWeight": "500" }],
+                    "display-timer": ["80px", { "lineHeight": "90px", "letterSpacing": "-0.02em", "fontWeight": "700" }]
+            }
+          }
+        }
+      }
+    </script>
+<style>
+        body {
+            /* Landscape constraints */
+            max-width: 896px;
+            max-height: 428px;
+            margin: auto;
+            overflow: hidden;
+            background-color: theme('colors.background');
+            color: theme('colors.on-background');
+            box-shadow: 0 0 40px rgba(0,0,0,0.05);
+            /* Center vertically on larger screens */
+            position: absolute;
+            top: 0; bottom: 0; left: 0; right: 0;
+            border-radius: 1.5rem;
+        }
+
+        .tactile-card {
+            box-shadow: 0 10px 30px -5px rgba(181, 25, 37, 0.08);
+            transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+
+        @keyframes pulse-ring {
+            0% { transform: scale(0.8); opacity: 0.5; }
+            100% { transform: scale(1.5); opacity: 0; }
+        }
+        .pulse-effect::before, .pulse-effect::after {
+            content: '';
+            position: absolute;
+            inset: -20px;
+            border-radius: 50%;
+            border: 2px solid theme('colors.primary');
+            animation: pulse-ring 2s cubic-bezier(0.215, 0.61, 0.355, 1) infinite;
+        }
+        .pulse-effect::after {
+            animation-delay: 1s;
+        }
+        
+        /* Range slider styling */
+        input[type=range] {
+            -webkit-appearance: none;
+            width: 100%;
+            background: transparent;
+        }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            height: 24px;
+            width: 24px;
+            border-radius: 50%;
+            background: theme('colors.primary');
+            cursor: pointer;
+            margin-top: -8px;
+            box-shadow: 0 4px 12px rgba(181, 25, 37, 0.2);
+            border: 2px solid theme('colors.surface-container-lowest');
+        }
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%;
+            height: 8px;
+            cursor: pointer;
+            background: theme('colors.surface-container-high');
+            border-radius: 4px;
+        }
+        input[type=range]:focus {
+            outline: none;
+        }
+        
+        /* Toggle switch styling */
+        .toggle-checkbox:checked {
+            right: 0;
+            border-color: theme('colors.primary');
+        }
+        .toggle-checkbox:checked + .toggle-label {
+            background-color: theme('colors.primary');
+        }
+    </style>
+</head>
+<body class="bg-background h-screen flex flex-col font-body-md text-on-background relative">
+<!-- Top Navigation Container -->
+<header class="w-full top-0 sticky bg-background z-50">
+<div class="flex justify-between items-center px-8 py-3 w-full">
+<div class="flex items-center gap-2 text-primary">
+<span class="material-symbols-outlined hover:opacity-80 transition-opacity cursor-pointer active:scale-95 duration-200 ease-[cubic-bezier(0.34,1.56,0.64,1)]">timer</span>
+</div>
+<h1 class="font-headline-lg-mobile text-headline-md text-primary tracking-tight">EdgeFocus</h1>
+<div class="flex items-center gap-2 text-primary">
+<span class="material-symbols-outlined hover:opacity-80 transition-opacity cursor-pointer active:scale-95 duration-200 ease-[cubic-bezier(0.34,1.56,0.64,1)]">bluetooth_connected</span>
+</div>
+</div>
+</header>
+<!-- Main Content Canvas -->
+<main class="flex-1 overflow-hidden relative flex flex-row px-8 pb-12">
+<!-- Left Side: Device Visualization -->
+<div class="w-1/2 flex flex-col items-center justify-center relative">
+<div class="absolute top-2 left-1/2 -translate-x-1/2 z-10">
+<span class="font-body-lg text-body-md text-on-surface-variant bg-surface-container-lowest px-6 py-2 rounded-full tactile-card whitespace-nowrap flex items-center gap-2">
+<span class="material-symbols-outlined text-[16px]">memory</span>
+Hardware Setup
+</span>
+</div>
+<!-- Device Mockup -->
+<div class="relative w-48 h-48 rounded-full bg-surface-container-lowest shadow-[0_10px_30px_rgba(0,0,0,0.05)] border-4 border-surface-container-high flex items-center justify-center z-10 pulse-effect mt-6">
+<!-- Inner device ring -->
+<div class="w-40 h-40 rounded-full border-[12px] border-surface-variant relative flex items-center justify-center">
+<!-- Progress indicator mock -->
+<svg class="absolute inset-0 w-full h-full transform -rotate-90" viewBox="0 0 100 100">
+<circle class="text-primary" cx="50" cy="50" fill="none" r="44" stroke="currentColor" stroke-dasharray="276" stroke-dashoffset="180" stroke-linecap="round" stroke-width="12"></circle>
+</svg>
+<!-- Center branding/icon -->
+<span class="material-symbols-outlined text-[48px] text-surface-variant">timer</span>
+<!-- Connection dot -->
+<div class="absolute bottom-2 right-2 w-4 h-4 rounded-full bg-secondary shadow-[0_0_10px_theme('colors.secondary')]"></div>
+</div>
+</div>
+<!-- Status Label -->
+<div class="mt-8 flex items-center gap-2 bg-surface-container-lowest px-4 py-2 rounded-full shadow-sm z-10">
+<span class="w-2 h-2 rounded-full bg-secondary"></span>
+<span class="font-label-md text-label-md text-secondary">Connected</span>
+</div>
+</div>
+<!-- Right Side: Controls -->
+<div class="w-1/2 flex flex-col justify-start gap-4 z-10 overflow-y-auto px-4 py-2" style="max-height: 100%;">
+<!-- Control Item: Vibration Strength -->
+<div class="bg-surface-container-lowest border border-surface-container p-4 rounded-xl tactile-card flex flex-col gap-2">
+<div class="flex justify-between items-center">
+<div class="flex items-center gap-3">
+<div class="w-8 h-8 rounded-full bg-primary-container/10 flex items-center justify-center text-primary">
+<span class="material-symbols-outlined text-[20px]" data-icon="vibration">vibration</span>
+</div>
+<div>
+<h3 class="font-body-md text-on-surface">Vibration Strength</h3>
+</div>
+</div>
+<span class="font-label-md text-primary" id="vib-val">Medium</span>
+</div>
+<div class="px-2 mt-2">
+<input class="w-full" max="100" min="0" oninput="document.getElementById('vib-val').innerText = this.value &gt; 66 ? 'Strong' : (this.value &gt; 33 ? 'Medium' : 'Light')" type="range" value="50">
+</div>
+<div class="flex justify-between mt-1 px-2 font-label-sm text-on-surface-variant opacity-70">
+<span class="">Light</span>
+<span class="">Strong</span>
+</div>
+</div>
+<!-- Control Item: LED Brightness -->
+<div class="bg-surface-container-lowest border border-surface-container p-4 rounded-xl tactile-card flex flex-col gap-2">
+<div class="flex justify-between items-center">
+<div class="flex items-center gap-3">
+<div class="w-8 h-8 rounded-full bg-tertiary-fixed/30 flex items-center justify-center text-tertiary">
+<span class="material-symbols-outlined text-[20px]" data-icon="lightbulb">lightbulb</span>
+</div>
+<div>
+<h3 class="font-body-md text-on-surface">LED Brightness</h3>
+</div>
+</div>
+<span class="font-label-md text-tertiary" id="led-val">75%</span>
+</div>
+<div class="px-2 mt-2">
+<input class="w-full" max="100" min="0" oninput="document.getElementById('led-val').innerText = this.value + '%'" type="range" value="75">
+</div>
+</div>
+<!-- Control Item: Auto-Sleep -->
+<div class="bg-surface-container-lowest border border-surface-container p-4 rounded-xl tactile-card flex flex-col gap-2">
+  <div class="flex justify-between items-center">
+    <div class="flex items-center gap-3">
+      <div class="w-8 h-8 rounded-full bg-primary-container/10 flex items-center justify-center text-primary">
+        <span class="material-symbols-outlined text-[20px]">sensors</span>
+      </div>
+      <div>
+        <h3 class="font-body-md text-on-surface">Reminder Sensitivity</h3>
+        <p class="text-label-sm text-on-surface-variant opacity-70">Distraction alert threshold</p>
+      </div>
+    </div>
+    <span class="font-label-md text-primary" id="sens-val">Normal</span>
+  </div>
+  <div class="px-2 mt-2">
+    <input class="w-full" max="100" min="0" oninput="document.getElementById('sens-val').innerText = this.value &gt; 66 ? 'High' : (this.value &gt; 33 ? 'Normal' : 'Low')" type="range" value="50">
+  </div>
+  <div class="flex justify-between mt-1 px-2 font-label-sm text-on-surface-variant opacity-70">
+    <span class="">Low</span>
+    <span class="">High</span>
+  </div>
+</div>
+</div>
+</main>
+<!-- Bottom Indicator Bar -->
+<footer class="absolute bottom-0 w-full bg-background pb-4 pt-3 flex justify-between items-center px-12 z-50">
+<div class="w-32"></div> <!-- Spacer for centering -->
+<!-- Pager Dots -->
+<div class="flex gap-3">
+<div class="w-2.5 h-2.5 rounded-full bg-surface-variant transition-all duration-300 hover:bg-surface-dim cursor-pointer"></div>
+<div class="w-2.5 h-2.5 rounded-full bg-surface-variant transition-all duration-300 hover:bg-surface-dim cursor-pointer"></div>
+<div class="w-2.5 h-2.5 rounded-full bg-primary transition-all duration-300"></div>
+</div>
+<!-- BLE Status -->
+<div class="w-32 flex justify-end items-center gap-2 text-secondary font-label-sm text-label-sm">
+<span class="relative flex h-2.5 w-2.5">
+<span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-secondary opacity-75"></span>
+<span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-secondary"></span>
+</span>
+            BLE Sync
+        </div>
+</footer>
+<script>
+        // Simple micro-interaction scripts
+        document.querySelectorAll('input[type="range"]').forEach(slider => {
+            slider.addEventListener('mousedown', () => {
+                slider.parentElement.parentElement.style.transform = 'scale(0.98)';
+            });
+            slider.addEventListener('mouseup', () => {
+                slider.parentElement.parentElement.style.transform = '';
+            });
+            slider.addEventListener('mouseleave', () => {
+                slider.parentElement.parentElement.style.transform = '';
+            });
+        });
+    </script>
+
+
+</body></html>

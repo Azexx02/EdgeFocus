@@ -1,0 +1,246 @@
+<!DOCTYPE html><html class="light" lang="en" style=""><head>
+<meta charset="utf-8">
+<meta content="width=device-width, initial-scale=1.0" name="viewport">
+<title>EdgeFocus - DashboardScreen</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@500;600;700&amp;display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet">
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "on-primary": "#ffffff",
+                        "surface": "#fbf9f7",
+                        "error": "#ba1a1a",
+                        "on-secondary-fixed-variant": "#005313",
+                        "primary": "#b51925",
+                        "tertiary-fixed-dim": "#ffb954",
+                        "on-error": "#ffffff",
+                        "on-background": "#1b1c1b",
+                        "background": "#fbf9f7",
+                        "inverse-on-surface": "#f2f0ee",
+                        "primary-fixed": "#ffdad7",
+                        "tertiary-fixed": "#ffddb4",
+                        "surface-dim": "#dbdad8",
+                        "on-secondary": "#ffffff",
+                        "on-secondary-fixed": "#002204",
+                        "on-tertiary-container": "#fffbff",
+                        "secondary": "#006e1c",
+                        "on-error-container": "#93000a",
+                        "surface-container-lowest": "#ffffff",
+                        "on-surface": "#1b1c1b",
+                        "surface-container-highest": "#e4e2e0",
+                        "surface-variant": "#e4e2e0",
+                        "tertiary": "#805200",
+                        "surface-tint": "#b81d27",
+                        "on-primary-container": "#fffbff",
+                        "surface-bright": "#fbf9f7",
+                        "secondary-fixed-dim": "#78dc77",
+                        "on-tertiary": "#ffffff",
+                        "primary-fixed-dim": "#ffb3ae",
+                        "tertiary-container": "#a06900",
+                        "surface-container-low": "#f5f3f1",
+                        "secondary-fixed": "#94f990",
+                        "surface-container": "#efedec",
+                        "surface-container-high": "#e9e8e6",
+                        "secondary-container": "#91f78e",
+                        "primary-container": "#d8363a",
+                        "on-primary-fixed": "#410004",
+                        "error-container": "#ffdad6",
+                        "inverse-surface": "#30302f",
+                        "on-secondary-container": "#00731e",
+                        "on-primary-fixed-variant": "#930015",
+                        "outline-variant": "#e3bebb",
+                        "outline": "#8f706d",
+                        "on-surface-variant": "#5b403e",
+                        "inverse-primary": "#ffb3ae",
+                        "on-tertiary-fixed-variant": "#633f00",
+                        "on-tertiary-fixed": "#291800"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "1rem",
+                        "lg": "2rem",
+                        "xl": "3rem",
+                        "full": "9999px"
+                    },
+                    "spacing": {
+                        "unit": "8px",
+                        "section-margin": "40px",
+                        "container-padding-desktop": "48px",
+                        "card-padding": "24px",
+                        "container-padding-mobile": "24px",
+                        "stack-gap": "16px"
+                    },
+                    "fontFamily": {
+                        "display-timer": ["Quicksand"],
+                        "body-md": ["Quicksand"],
+                        "headline-lg-mobile": ["Quicksand"],
+                        "headline-md": ["Quicksand"],
+                        "body-lg": ["Quicksand"],
+                        "label-sm": ["Quicksand"],
+                        "headline-lg": ["Quicksand"],
+                        "label-md": ["Quicksand"]
+                    },
+                    "fontSize": {
+                        "display-timer": ["80px", { "lineHeight": "90px", "letterSpacing": "-0.02em", "fontWeight": "700" }],
+                        "body-md": ["16px", { "lineHeight": "24px", "fontWeight": "500" }],
+                        "headline-lg-mobile": ["28px", { "lineHeight": "36px", "fontWeight": "700" }],
+                        "headline-md": ["24px", { "lineHeight": "32px", "fontWeight": "600" }],
+                        "body-lg": ["18px", { "lineHeight": "28px", "fontWeight": "500" }],
+                        "label-sm": ["12px", { "lineHeight": "16px", "fontWeight": "700" }],
+                        "headline-lg": ["32px", { "lineHeight": "40px", "fontWeight": "700" }],
+                        "label-md": ["14px", { "lineHeight": "20px", "letterSpacing": "0.01em", "fontWeight": "600" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        .spring-bounce {
+            transition: all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+        .soft-shadow-level-1 {
+            box-shadow: 0 10px 30px -10px rgba(181, 25, 37, 0.08);
+        }
+        .soft-shadow-level-2 {
+            box-shadow: 0 20px 40px -10px rgba(181, 25, 37, 0.12);
+        }
+        .hide-scrollbar::-webkit-scrollbar {
+            display: none;
+        }
+        .hide-scrollbar {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+    </style>
+</head>
+<body class="bg-background text-on-background min-h-screen pb-[100px] md:pb-0 font-body-md text-body-md overflow-x-hidden">
+<!-- TopAppBar -->
+<header class="w-full top-0 sticky z-40 bg-background dark:bg-background">
+<div class="flex justify-between items-center px-container-padding-mobile py-4 max-w-[600px] mx-auto">
+<button aria-label="Menu" class="text-on-surface-variant hover:opacity-80 transition-opacity spring-bounce active:scale-95">
+
+</button>
+<h1 class="font-headline-md text-headline-md text-on-background tracking-tight">Data Dashboard</h1>
+<button aria-label="Connected Devices" class="text-on-surface-variant hover:opacity-80 transition-opacity spring-bounce active:scale-95">
+<span class="material-symbols-outlined text-[28px]" data-icon="bluetooth_connected">bluetooth_connected</span>
+</button>
+</div>
+</header>
+<!-- Main Content Canvas -->
+<main class="max-w-[600px] mx-auto px-container-padding-mobile flex flex-col gap-stack-gap mt-4">
+<!-- Bento Grid for Summaries -->
+<div class="grid grid-cols-2 gap-stack-gap">
+<!-- Today Card -->
+<div class="bg-surface-container-lowest rounded-DEFAULT p-card-padding soft-shadow-level-1 flex flex-col justify-between aspect-square spring-bounce hover:-translate-y-1 hover:soft-shadow-level-2 cursor-pointer group">
+<div class="flex items-center gap-2 text-on-surface-variant font-label-md text-label-md">
+<span class="material-symbols-outlined text-primary text-[20px]" data-icon="today" style="font-variation-settings: &quot;FILL&quot; 1;">today</span>
+                    Today
+                </div>
+<div class="flex flex-col gap-1 mt-auto">
+<div class="font-headline-lg-mobile text-headline-lg-mobile md:font-headline-lg md:text-headline-lg text-primary tracking-tight">2.5<span class="font-headline-md text-headline-md">h</span></div>
+<div class="font-label-md text-label-md text-on-surface-variant">5 Sessions</div>
+</div>
+</div>
+<!-- This Week Card -->
+<div class="bg-surface-container-lowest rounded-DEFAULT p-card-padding soft-shadow-level-1 flex flex-col justify-between aspect-square spring-bounce hover:-translate-y-1 hover:soft-shadow-level-2 cursor-pointer group relative overflow-hidden">
+<div class="flex items-center gap-2 text-on-surface-variant font-label-md text-label-md z-10">
+<span class="material-symbols-outlined text-primary text-[20px]" data-icon="date_range" style="font-variation-settings: &quot;FILL&quot; 1;">date_range</span>
+                    This Week
+                </div>
+<div class="flex flex-col gap-1 mt-auto z-10">
+<div class="font-headline-lg-mobile text-headline-lg-mobile md:font-headline-lg md:text-headline-lg text-on-background tracking-tight">14<span class="font-headline-md text-headline-md text-on-surface-variant">h</span></div>
+</div>
+<!-- Decorative Mini Bar Chart -->
+<div class="absolute bottom-4 right-4 flex items-end gap-1.5 h-12 opacity-80">
+<div class="w-2 h-[40%] bg-surface-variant rounded-full group-hover:bg-primary/40 transition-colors"></div>
+<div class="w-2 h-[60%] bg-surface-variant rounded-full group-hover:bg-primary/40 transition-colors"></div>
+<div class="w-2 h-[30%] bg-surface-variant rounded-full group-hover:bg-primary/40 transition-colors"></div>
+<div class="w-2 h-[80%] bg-primary rounded-full"></div>
+<div class="w-2 h-[50%] bg-surface-variant rounded-full group-hover:bg-primary/40 transition-colors"></div>
+</div>
+</div>
+</div>
+<!-- Recent Sessions Header -->
+<div class="flex items-center justify-between mt-section-margin mb-2">
+<h2 class="font-headline-md text-headline-md text-on-background">Recent Sessions</h2>
+<button class="text-primary font-label-md text-label-md flex items-center gap-1 hover:opacity-80 transition-opacity">
+                View All <span class="material-symbols-outlined text-[18px]">arrow_forward</span>
+</button>
+</div>
+<!-- Recent Sessions List -->
+<div class="flex flex-col gap-unit">
+<!-- Session Item 1 -->
+<div class="bg-surface-container-lowest rounded-lg p-4 flex items-center justify-between soft-shadow-level-1 spring-bounce hover:scale-[1.02] cursor-pointer active:scale-95 active:shadow-none">
+<div class="flex items-center gap-4">
+<div class="w-12 h-12 rounded-full bg-primary-container flex items-center justify-center text-primary">
+<span class="material-symbols-outlined" data-icon="focus_meter" style="font-variation-settings: &quot;FILL&quot; 1;">gas_meter</span>
+</div>
+<div>
+<div class="font-label-md text-label-md text-on-surface-variant mb-0.5">Oct 24, 10:00 AM</div>
+<div class="font-headline-md text-headline-md text-on-background leading-none">25m</div>
+</div>
+</div>
+<div class="flex flex-col items-end gap-1">
+<span class="bg-error-container text-on-error-container px-3 py-1 rounded-full font-label-sm text-label-sm flex items-center gap-1">
+<span class="material-symbols-outlined text-[14px]">warning</span> 2 distractions
+                    </span>
+</div>
+</div>
+<!-- Session Item 2 -->
+<div class="bg-surface-container-lowest rounded-lg p-4 flex items-center justify-between soft-shadow-level-1 spring-bounce hover:scale-[1.02] cursor-pointer active:scale-95 active:shadow-none">
+<div class="flex items-center gap-4">
+<div class="w-12 h-12 rounded-full bg-secondary-container flex items-center justify-center text-secondary">
+<span class="material-symbols-outlined" data-icon="done_all" style="font-variation-settings: &quot;FILL&quot; 1;">done_all</span>
+</div>
+<div>
+<div class="font-label-md text-label-md text-on-surface-variant mb-0.5">Oct 23, 2:30 PM</div>
+<div class="font-headline-md text-headline-md text-on-background leading-none">50m</div>
+</div>
+</div>
+<div class="flex flex-col items-end gap-1">
+<span class="bg-secondary-container text-on-secondary-container px-3 py-1 rounded-full font-label-sm text-label-sm flex items-center gap-1">
+<span class="material-symbols-outlined text-[14px]">check_circle</span> Perfect Focus
+                    </span>
+</div>
+</div>
+<!-- Session Item 3 -->
+<div class="bg-surface-container-lowest rounded-lg p-4 flex items-center justify-between soft-shadow-level-1 spring-bounce hover:scale-[1.02] cursor-pointer active:scale-95 active:shadow-none">
+<div class="flex items-center gap-4">
+<div class="w-12 h-12 rounded-full bg-primary-container flex items-center justify-center text-primary">
+<span class="material-symbols-outlined" data-icon="focus_meter" style="font-variation-settings: &quot;FILL&quot; 1;">gas_meter</span>
+</div>
+<div>
+<div class="font-label-md text-label-md text-on-surface-variant mb-0.5">Oct 22, 9:15 AM</div>
+<div class="font-headline-md text-headline-md text-on-background leading-none">25m</div>
+</div>
+</div>
+<div class="flex flex-col items-end gap-1">
+<span class="bg-surface-variant text-on-surface-variant px-3 py-1 rounded-full font-label-sm text-label-sm flex items-center gap-1">
+<span class="material-symbols-outlined text-[14px]">info</span> 1 distraction
+                    </span>
+</div>
+</div>
+</div>
+</main>
+<!-- BottomNavBar -->
+<nav class="fixed bottom-0 left-0 w-full z-50 md:hidden flex justify-around items-center px-4 pb-8 pt-4 bg-surface dark:bg-surface-container rounded-t-xl shadow-[0_-8px_30px_rgb(186,26,26,0.08)]">
+<a class="flex flex-col items-center justify-center text-on-surface-variant dark:text-on-surface-variant px-4 py-2 hover:bg-surface-container-highest dark:hover:bg-surface-variant rounded-full spring-bounce active:scale-90" href="#">
+<span class="material-symbols-outlined text-[24px]" data-icon="home">home</span>
+<span class="font-label-sm text-label-sm mt-1">Home</span>
+</a>
+<a class="flex flex-col items-center justify-center bg-primary-container dark:bg-primary-container text-on-primary-container rounded-full px-6 py-2 transition-all duration-300 ease-[cubic-bezier(0.34,1.56,0.64,1)] scale-110 shadow-md" href="#">
+<span class="material-symbols-outlined text-[24px]" data-icon="bar_chart" style="font-variation-settings: &quot;FILL&quot; 1;">bar_chart</span>
+<span class="font-label-sm text-label-sm mt-1 font-bold">Data</span>
+</a>
+<a class="flex flex-col items-center justify-center text-on-surface-variant dark:text-on-surface-variant px-4 py-2 hover:bg-surface-container-highest dark:hover:bg-surface-variant rounded-full spring-bounce active:scale-90" href="#">
+<span class="material-symbols-outlined text-[24px]" data-icon="settings">settings</span>
+<span class="font-label-sm text-label-sm mt-1">Settings</span>
+</a>
+</nav>
+
+
+</body></html>

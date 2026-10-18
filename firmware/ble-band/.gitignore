@@ -1,0 +1,49 @@
+# Build
+build/
+managed_components/
+dependencies.lock
+cmake-build-*/
+
+# ESP-IDF
+sdkconfig.old
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.launch
+.cproject
+.project
+.settings/
+.clangd
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Compiled
+*.o
+*.d
+*.elf
+*.bin
+*.map
+*.hex
+*.axf
+*.dep
+*.list
+*.out
+
+# STM32CubeIDE / CubeMX
+*.ioc.bak
+*.xml
+Debug/
+Release/
+STM32CubeIDE/
+stm32/picture/

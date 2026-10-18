@@ -1,0 +1,12 @@
+build*/
+Testing/
+*.db
+
+# Project workspace: keep docs, ignore generated/local material
+_workspace/builds/
+_workspace/db/
+_workspace/local/
+_workspace/notes/
+_workspace/scratch/
+_workspace/backups/
+_workspace/review_packages/

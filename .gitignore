@@ -1,0 +1,56 @@
+# 构建产物
+build/
+build-*/
+cmake-build-*/
+out/
+bin/
+obj/
+*.o
+*.obj
+*.a
+*.so
+*.dll
+*.exe
+*.elf
+*.bin
+*.hex
+*.map
+
+# Android / Gradle
+.gradle/
+.idea/
+local.properties
+*.apk
+*.aab
+*.jks
+*.keystore
+captures/
+.externalNativeBuild/
+.cxx/
+
+# ESP-IDF
+sdkconfig.old
+build/
+managed_components/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 本地运行时数据
+*.db
+*.sqlite
+*.sqlite3
+board_backups/
+_workspace/
+.playwright-cli/
+.playwright-mcp/
+.mimocode/
+
+# 系统与编辑器
+.DS_Store
+Thumbs.db
+.vscode/
+*.swp

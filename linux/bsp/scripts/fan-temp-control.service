@@ -1,0 +1,12 @@
+[Unit]
+Description=Self-developed board temperature based fan control example
+After=multi-user.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/fan_temp_control.py --interval 5 --tach-sample 1
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

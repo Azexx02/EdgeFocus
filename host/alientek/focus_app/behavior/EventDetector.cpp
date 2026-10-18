@@ -1,0 +1,131 @@
+#include "behavior/EventDetector.h"
+#include <cmath>
+#include <functional>
+
+namespace edgefocus {
+
+namespace {
+void appendReason(std::string& reason, const std::string& token) {
+    if (!reason.empty()) reason += "|";
+    reason += token;
+}
+
+int clampPhoneLevel(int level) {
+    if (level < 0) return 0;
+    if (level > 3) return 3;
+    return level;
+}
+} // namespace
+
+void EventDetector::injectPhoneSignal(const PhoneUsageSignal& sig) {
+    if (!sig.active) {
+        resetPhoneSignal();
+        return;
+    }
+    last_phone_sig_ = sig;
+    last_phone_sig_.active = true;
+}
+
+void EventDetector::resetPhoneSignal() {
+    last_phone_sig_ = {};
+    last_phone_sig_.active = false;
+}
+
+static int64_t getContinuousDuration(const SlidingWindow& win, std::function<bool(const VisionResult&)> cond) {
+    auto items = win.getItems();
+    if (items.empty()) return 0;
+    
+    int64_t newest_ts = items.back().timestamp_ms;
+    int64_t oldest_match_ts = newest_ts;
+    
+    // Iterate from newest to oldest
+    for (auto it = items.rbegin(); it != items.rend(); ++it) {
+        if (!cond(*it)) break;
+        oldest_match_ts = it->timestamp_ms;
+    }
+    
+    if (oldest_match_ts == newest_ts && !cond(items.back())) return 0;
+    return newest_ts - oldest_match_ts;
+}
+
+FocusEvent EventDetector::detect(const SlidingWindow& win, const BehaviorConfig& config) {
+    FocusEvent event;
+    
+    auto items = win.getItems();
+    if (items.empty()) return event;
+    // Low confidence: ratio > low_confidence_ratio
+    event.is_low_confidence = win.getRatioCondition([](const VisionResult& r) { 
+        return r.isLowConfidence(); 
+    }) > config.low_confidence_ratio;
+
+    // Keep explicit phone_sync signal until it is explicitly cleared.
+    if (last_phone_sig_.active) {
+        event.is_phone_in_use = true;
+        event.phone_signal = true;
+        event.phone_distraction_level = clampPhoneLevel(last_phone_sig_.distraction_level);
+        event.phone_usage_state = last_phone_sig_.usage_state;
+        event.phone_usage_state_raw = static_cast<int>(last_phone_sig_.usage_state);
+        appendReason(event.reason, "phone_signal");
+    } else {
+        event.phone_signal = false;
+        event.phone_distraction_level = -1;
+        event.phone_usage_state_raw = -1;
+    }
+
+    if (event.is_low_confidence) {
+        appendReason(event.reason, "low_confidence");
+        return event;
+    }
+
+    // Away: continuous duration > away_confirm_ms
+    int64_t away_dur = getContinuousDuration(win, [](const VisionResult& r) {
+        return r.isAway();
+    });
+    if (away_dur >= config.away_confirm_ms) {
+        event.is_away = true;
+        event.vision_signal = true;
+        appendReason(event.reason, "away");
+    }
+
+    // Looking away: person present but head yaw > 30 degrees for confirming duration
+    int64_t looking_away_dur = getContinuousDuration(win, [](const VisionResult& r) {
+        return r.isPresent() && r.head_pose.valid 
+            && (std::abs(r.head_pose.value.yaw) > 30.0f);
+    });
+    if (looking_away_dur >= config.looking_away_confirm_ms) {
+        event.is_looking_away = true;
+        event.vision_signal = true;
+        appendReason(event.reason, "looking_away");
+    }
+
+    // Sleepy or slumped: Head DOWN (10s) or Eyes CLOSED (legacy fallback)
+    int64_t head_down_dur = getContinuousDuration(win, [](const VisionResult& r) {
+        return r.isHeadDown();
+    });
+    int64_t sleepy_dur = getContinuousDuration(win, [](const VisionResult& r) {
+        if (r.isEyesClosed()) return true;
+        if (r.posture.valid && r.posture.value == PostureType::SLUMPED) return true;
+        return false;
+    });
+    
+    if (head_down_dur >= config.slumped_confirm_ms) {
+        event.is_sleepy_or_slumped = true;
+        event.vision_signal = true;
+        appendReason(event.reason, "sleepy_or_slumped");
+    } else if (sleepy_dur >= config.sleepy_confirm_ms) {
+        event.is_sleepy_or_slumped = true; 
+        event.vision_signal = true;
+        appendReason(event.reason, "sleepy_or_slumped");
+    }
+    if (!event.is_away && !event.is_looking_away && !event.is_sleepy_or_slumped) {
+        event.vision_signal = false;
+    }
+
+    if (event.reason.empty()) {
+        appendReason(event.reason, "focused_like");
+    }
+
+    return event;
+}
+
+} // namespace edgefocus
